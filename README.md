@@ -1,1 +1,1 @@
-# UpscalingNetwork
+# UpscalingByNetwork
