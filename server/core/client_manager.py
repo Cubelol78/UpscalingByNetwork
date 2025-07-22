@@ -1,4 +1,18 @@
 # core/client_manager.py  
+import os
+import subprocess
+import asyncio
+import shutil
+from pathlib import Path
+from typing import List, Optional, Tuple
+import re
+
+from models.job import Job, JobStatus
+from models.batch import Batch
+from config.settings import config
+from utils.logger import get_logger
+from utils.file_utils import ensure_dir, get_video_info
+
 class ClientManager:
     """Gestionnaire des clients connectés"""
     
