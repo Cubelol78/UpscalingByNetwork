@@ -44,9 +44,7 @@ def main():
     main_window = MainWindow(server)
     main_window.show()
     
-    # Démarrage du serveur en arrière-plan
-    server_thread = threading.Thread(target=run_server, args=(server,), daemon=True)
-    server_thread.start()
+    # Le serveur ne démarre plus automatiquement au démarrage
     
     logger.info("Interface graphique démarrée")
     

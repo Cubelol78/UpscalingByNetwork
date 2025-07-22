@@ -1,4 +1,6 @@
 server/config/settings.py
+server/assets
+
 
 server/config/__pycache__
 server/core/__pycache__
@@ -7,3 +9,6 @@ server/models/__pycache__
 server/utils/__pycache__
 
 server/logs
+
+temp
+upscaled

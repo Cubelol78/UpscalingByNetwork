@@ -13,7 +13,6 @@ from models.job import Job, JobStatus
 from config.settings import config
 from utils.logger import get_logger
 
-# core/server.py
 class UpscalingServer:
     """Serveur principal d'upscaling distribué"""
     
@@ -24,8 +23,9 @@ class UpscalingServer:
         self.jobs: Dict[str, Job] = {}  # Job ID -> Job
         self.batches: Dict[str, Batch] = {}  # Batch ID -> Batch
         self.current_job: Optional[str] = None
-        self.running = False
+        self.running = False  # Le serveur démarre à l'arrêt
         self.server = None
+        self._start_time = time.time()
         
         # Managers
         from core.batch_manager import BatchManager
@@ -35,38 +35,81 @@ class UpscalingServer:
         self.batch_manager = BatchManager(self)
         self.client_manager = ClientManager(self)
         self.video_processor = VideoProcessor(self)
+        
+        self.logger.info("Serveur d'upscaling initialisé (arrêté)")
     
     async def start(self):
         """Démarre le serveur"""
+        if self.running:
+            self.logger.warning("Le serveur est déjà en cours d'exécution")
+            return
+            
         self.running = True
+        self._start_time = time.time()
         self.logger.info(f"Démarrage du serveur sur {config.HOST}:{config.PORT}")
         
-        # Démarrage des tâches de maintenance
-        asyncio.create_task(self._heartbeat_monitor())
-        
-        # Démarrage du serveur WebSocket
-        self.server = await websockets.serve(
-            self._handle_client,
-            config.HOST,
-            config.PORT,
-            max_size=10 * 1024 * 1024  # 10MB pour les images
-        )
-        
-        self.logger.info("Serveur démarré et en attente de connexions")
-        
-        # Boucle principale
         try:
-            await self.server.wait_closed()
-        except asyncio.CancelledError:
-            pass
+            # Démarrage des tâches de maintenance
+            asyncio.create_task(self._heartbeat_monitor())
+            asyncio.create_task(self._batch_assignment_loop())
+            
+            # Démarrage du serveur WebSocket
+            self.server = await websockets.serve(
+                self._handle_client,
+                config.HOST,
+                config.PORT,
+                max_size=10 * 1024 * 1024  # 10MB pour les images
+            )
+            
+            self.logger.info("Serveur démarré et en attente de connexions")
+            
+            # Boucle principale
+            try:
+                await self.server.wait_closed()
+            except asyncio.CancelledError:
+                pass
+                
+        except Exception as e:
+            self.logger.error(f"Erreur lors du démarrage du serveur: {e}")
+            self.running = False
+            raise
     
     async def stop(self):
         """Arrête le serveur"""
+        if not self.running:
+            self.logger.warning("Le serveur est déjà arrêté")
+            return
+            
         self.running = False
+        
+        # Fermeture de toutes les connexions clients
+        for websocket in list(self.websockets.values()):
+            try:
+                await websocket.close()
+            except:
+                pass
+        
+        # Arrêt du serveur WebSocket
         if self.server:
             self.server.close()
             await self.server.wait_closed()
+            
+        # Nettoyage des données
+        self.clients.clear()
+        self.websockets.clear()
+        
         self.logger.info("Serveur arrêté")
+    
+    async def _batch_assignment_loop(self):
+        """Boucle d'assignation des lots"""
+        while self.running:
+            try:
+                await self.batch_manager.assign_pending_batches()
+                await asyncio.sleep(1)  # Vérification chaque seconde
+                
+            except Exception as e:
+                self.logger.error(f"Erreur dans batch_assignment_loop: {e}")
+                await asyncio.sleep(5)
     
     async def _handle_client(self, websocket: WebSocketServerProtocol, path: str):
         """Gère une connexion client"""
@@ -243,7 +286,7 @@ class UpscalingServer:
                 await asyncio.sleep(config.HEARTBEAT_INTERVAL)
                 
             except Exception as e:
-                self.logger.error(f"Erreur dans batch_monitor: {e}")
+                self.logger.error(f"Erreur dans heartbeat_monitor: {e}")
                 await asyncio.sleep(5)
     
     async def _update_job_progress(self, job_id: str):
@@ -354,6 +397,6 @@ class UpscalingServer:
             "current_job": current_job_info,
             "server": {
                 "running": self.running,
-                "uptime": int(time.time() - getattr(self, '_start_time', time.time()))
+                "uptime": int(time.time() - self._start_time)
             }
         }
