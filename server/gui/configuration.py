@@ -111,6 +111,11 @@ class ConfigurationMixin:
             # La configuration est déjà chargée automatiquement au démarrage
             # Ici on met juste à jour l'interface avec les valeurs chargées
             
+            # Vérifier que les widgets sont créés avant de les utiliser
+            if not hasattr(self, 'tabs_manager'):
+                self.logger.warning("Interface pas encore initialisée, chargement de la config ignoré")
+                return
+                
             if hasattr(self.tabs_manager, 'config_tab'):
                 config_tab = self.tabs_manager.config_tab
                 
@@ -133,11 +138,15 @@ class ConfigurationMixin:
                 if hasattr(self, 'status_bar'):
                     self.status_bar.server_port_label.setText(f"Port: {config.PORT}")
                 
+                self.logger.info("Configuration chargée dans l'interface")
+            else:
+                self.logger.warning("Onglet configuration pas encore créé")
+                
         except Exception as e:
-            print(f"Erreur chargement interface config: {e}")
+            self.logger.error(f"Erreur chargement interface config: {e}")
             """
-            Mixin pour la gestion de la configuration
-            """
+Mixin pour la gestion de la configuration
+"""
 
 from PyQt5.QtWidgets import QMessageBox
 from pathlib import Path

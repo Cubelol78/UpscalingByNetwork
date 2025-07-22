@@ -50,6 +50,7 @@ class MainWindow(QMainWindow, ServerControlMixin, ConfigurationMixin):
         self.setup_connections()
         
         # Chargement de la configuration sauvegardée dans l'interface
+        # (après que tous les widgets soient créés)
         self.load_saved_configuration()
         
         # Démarrage du monitoring
