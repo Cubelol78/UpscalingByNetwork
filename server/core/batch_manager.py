@@ -8,7 +8,8 @@ from typing import List, Optional, Tuple
 import re
 
 from models.job import Job, JobStatus
-from models.batch import Batch
+from models.batch import Batch, BatchStatus
+from models.client import ClientStatus
 from config.settings import config
 from utils.logger import get_logger
 from utils.file_utils import ensure_dir, get_video_info
