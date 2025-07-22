@@ -6,8 +6,6 @@ from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 import websockets
 from websockets.server import WebSocketServerProtocol
-from websockets.server import serve
-from websockets.exceptions import ConnectionClosed
 
 from models.batch import Batch, BatchStatus
 from models.client import Client, ClientStatus
@@ -27,7 +25,6 @@ class UpscalingServer:
         self.current_job: Optional[str] = None
         self.running = False  # Le serveur démarre à l'arrêt
         self.server = None
-        self.loop = None
         self._start_time = time.time()
         
         # Managers
@@ -41,100 +38,67 @@ class UpscalingServer:
         
         self.logger.info("Serveur d'upscaling initialisé (arrêté)")
     
-    async def handle_client(self, websocket):
-        """Gère la connexion et la communication avec un client."""
-        client_id = None
-        try:
-            # Enregistrer le nouveau client
-            client_id = f"client_{int(time.time())}"
-            self.clients[websocket] = {
-                "id": client_id,
-                "status": "connected",
-                "join_time": time.time()
-            }
-            self.websockets[client_id] = websocket
-            self.logger.info(f"Client {client_id} connecté depuis {websocket.remote_address}")
-
-            # Boucle de communication
-            async for message in websocket:
-                data = json.loads(message)
-                self.logger.debug(f"Message reçu de {client_id}: {data}")
-                # Logique de traitement des messages (à implémenter)
-                # Ex: distribuer des tâches, recevoir des résultats, etc.
-
-        except ConnectionClosed:
-            self.logger.warning(f"Client {client_id} déconnecté.")
-        except Exception as e:
-            self.logger.error(f"Erreur avec le client {client_id}: {e}", exc_info=True)
-        finally:
-            # Nettoyer la connexion
-            if websocket in self.clients:
-                del self.clients[websocket]
-            if client_id and client_id in self.websockets:
-                del self.websockets[client_id]
-            self.logger.info(f"Connexion avec {client_id} terminée.")
-
     async def start(self):
-        """Démarre le serveur WebSocket."""
+        """Démarre le serveur"""
         if self.running:
-            self.logger.warning("Le serveur est déjà en cours d'exécution.")
+            self.logger.warning("Le serveur est déjà en cours d'exécution")
             return
-
+            
         self.running = True
-        self.loop = asyncio.get_running_loop()  # <-- AJOUT : Capture de la boucle active
         self._start_time = time.time()
-        
-        self.logger.info(f"Démarrage du serveur sur {self.host}:{self.port}")
+        self.logger.info(f"Démarrage du serveur sur {config.HOST}:{config.PORT}")
         
         try:
-            self.server = await serve(self.handle_client, self.host, self.port)
-            self.logger.info("Serveur démarré et en attente de connexions.")
-            await self.server.wait_closed()
-        except OSError as e:
-            self.logger.error(f"Erreur au démarrage du serveur : {e}. L'adresse est peut-être déjà utilisée.")
-            self.running = False # S'assurer que l'état est correct en cas d'échec
+            # Démarrage des tâches de maintenance
+            asyncio.create_task(self._heartbeat_monitor())
+            asyncio.create_task(self._batch_assignment_loop())
+            
+            # Démarrage du serveur WebSocket
+            self.server = await websockets.serve(
+                self._handle_client,
+                config.HOST,
+                config.PORT,
+                max_size=10 * 1024 * 1024  # 10MB pour les images
+            )
+            
+            self.logger.info("Serveur démarré et en attente de connexions")
+            
+            # Boucle principale
+            try:
+                await self.server.wait_closed()
+            except asyncio.CancelledError:
+                pass
+                
         except Exception as e:
-            self.logger.error(f"Erreur inattendue dans le serveur : {e}", exc_info=True)
+            self.logger.error(f"Erreur lors du démarrage du serveur: {e}")
             self.running = False
+            raise
     
     async def stop(self):
-        """Arrête le serveur WebSocket."""
-        if not self.running or not self.server:
-            self.logger.warning("Le serveur n'est pas en cours d'exécution.")
+        """Arrête le serveur"""
+        if not self.running:
+            self.logger.warning("Le serveur est déjà arrêté")
             return
-
-        self.logger.info("Arrêt du serveur en cours...")
+            
         self.running = False
-
-        # Fermer toutes les connexions client
-        for ws in list(self.clients.keys()):
-            try:
-                await ws.close(code=1001, reason="Server shutting down")
-            except Exception as e:
-                self.logger.warning(f"Erreur lors de la fermeture de la connexion client : {e}")
         
-        # Arrêter le serveur principal
+        # Fermeture de toutes les connexions clients
+        for websocket in list(self.websockets.values()):
+            try:
+                await websocket.close()
+            except:
+                pass
+        
+        # Arrêt du serveur WebSocket
         if self.server:
             self.server.close()
             await self.server.wait_closed()
-            self.server = None
-
-        # Nettoyage final
+            
+        # Nettoyage des données
         self.clients.clear()
         self.websockets.clear()
-        self.loop = None  # <-- AJOUT : Réinitialisation de la référence
         
-        self.logger.info("Serveur arrêté.")
-
-    def get_status(self):
-        """Retourne l'état actuel du serveur."""
-        return {
-            "running": self.running,
-            "host": self.host,
-            "port": self.port,
-            "uptime": time.time() - self._start_time if self.running else 0,
-            "client_count": len(self.clients)
-        }
+        self.logger.info("Serveur arrêté")
     
     async def _batch_assignment_loop(self):
         """Boucle d'assignation des lots"""
