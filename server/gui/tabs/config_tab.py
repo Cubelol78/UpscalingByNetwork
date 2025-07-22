@@ -251,15 +251,17 @@ class ConfigTab(QScrollArea):
             print(f"Erreur actualisation disques: {e}")
     
     def on_drive_changed(self):
-        """Gestionnaire de changement de disque"""
+        """Gestionnaire de changement de disque avec sauvegarde automatique"""
         try:
             if not hasattr(self, 'drive_combo') or not hasattr(self, 'drive_info_label'):
                 return
                 
             current_data = self.drive_combo.currentData()
-            if current_data:
+            if current_data and current_data != config.WORK_DRIVE:
+                # Utilisation de la méthode qui sauvegarde automatiquement
                 config.set_work_drive(current_data)
                 self.update_drive_info()
+                print(f"Disque de travail changé et sauvegardé: {current_data}")
                 
         except Exception as e:
             print(f"Erreur changement disque: {e}")

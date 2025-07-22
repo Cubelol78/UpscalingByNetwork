@@ -49,10 +49,13 @@ class MainWindow(QMainWindow, ServerControlMixin, ConfigurationMixin):
         self.setup_timers()
         self.setup_connections()
         
+        # Chargement de la configuration sauvegardée dans l'interface
+        self.load_saved_configuration()
+        
         # Démarrage du monitoring
         performance_monitor.start_monitoring()
         
-        self.logger.info("Interface graphique initialisée")
+        self.logger.info("Interface graphique initialisée avec configuration chargée")
     
     def setup_ui(self):
         """Configuration de l'interface utilisateur"""

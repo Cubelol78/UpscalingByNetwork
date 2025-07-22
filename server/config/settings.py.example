@@ -1,11 +1,12 @@
 """
-Configuration du serveur d'upscaling distribué
+Configuration du serveur d'upscaling distribué avec sauvegarde persistante
 """
 
 import os
 import shutil
+import json
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Dict, Any
 
 @dataclass
@@ -24,13 +25,13 @@ class ServerConfig:
     MAX_RETRIES: int = 3          # nombre de tentatives par lot
     DUPLICATE_THRESHOLD: int = 5   # seuil pour envoyer des doublons
     
-    # Configuration stockage - NOUVEAUX PARAMÈTRES
-    WORK_DRIVE: str = ""          # Disque de travail choisi (ex: "D:", "E:")
+    # Configuration stockage
+    WORK_DRIVE: str = ""          # Disque de travail choisi
     TEMP_DIR: str = "temp"        # Dossier temporaire
     OUTPUT_DIR: str = "output"    # Dossier de sortie
     FRAMES_DIR: str = "frames"    # Dossier frames extraites
     UPSCALED_DIR: str = "upscaled" # Dossier frames upscalées
-    AUTO_CLEANUP: bool = True     # Nettoyage automatique des fichiers temporaires
+    AUTO_CLEANUP: bool = True     # Nettoyage automatique
     MIN_FREE_SPACE_GB: int = 50   # Espace libre minimum requis (Go)
     
     # Configuration sécurité
@@ -55,9 +56,11 @@ class ServerConfig:
     
     def __post_init__(self):
         """Initialisation post-construction"""
-        # Détermination du disque de travail
+        # Chargement de la configuration sauvegardée
+        self.load_config()
+        
+        # Détermination du disque de travail si pas défini
         if not self.WORK_DRIVE:
-            # Par défaut, utiliser le disque avec le plus d'espace libre
             self.WORK_DRIVE = self.get_best_drive()
         
         # Mise à jour des chemins avec le disque de travail
@@ -65,6 +68,72 @@ class ServerConfig:
         
         # Création des dossiers nécessaires
         self.create_directories()
+    
+    def get_config_file_path(self) -> Path:
+        """Retourne le chemin du fichier de configuration"""
+        # Dossier utilisateur pour la configuration persistante
+        if os.name == 'nt':  # Windows
+            config_dir = Path(os.environ.get('APPDATA', '.')) / 'DistributedUpscaling'
+        else:  # Linux/Mac
+            config_dir = Path.home() / '.config' / 'distributed-upscaling'
+        
+        config_dir.mkdir(parents=True, exist_ok=True)
+        return config_dir / 'server_config.json'
+    
+    def save_config(self):
+        """Sauvegarde la configuration sur disque"""
+        try:
+            config_file = self.get_config_file_path()
+            
+            # Conversion en dictionnaire pour sérialisation JSON
+            config_dict = asdict(self)
+            
+            # Sauvegarde avec indentation pour lisibilité
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(config_dict, f, indent=2, ensure_ascii=False)
+            
+            print(f"Configuration sauvegardée dans: {config_file}")
+            return True
+            
+        except Exception as e:
+            print(f"Erreur sauvegarde configuration: {e}")
+            return False
+    
+    def load_config(self):
+        """Charge la configuration depuis le disque"""
+        try:
+            config_file = self.get_config_file_path()
+            
+            if not config_file.exists():
+                print("Aucune configuration sauvegardée trouvée, utilisation des valeurs par défaut")
+                return False
+            
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config_dict = json.load(f)
+            
+            # Application des valeurs chargées
+            for key, value in config_dict.items():
+                if hasattr(self, key):
+                    setattr(self, key, value)
+            
+            print(f"Configuration chargée depuis: {config_file}")
+            return True
+            
+        except Exception as e:
+            print(f"Erreur chargement configuration: {e}")
+            return False
+    
+    def reset_to_defaults(self):
+        """Remet la configuration aux valeurs par défaut"""
+        defaults = ServerConfig()
+        
+        # Copie des valeurs par défaut
+        for field_name in asdict(defaults).keys():
+            if field_name != 'WORK_DRIVE':  # Garde le disque actuel
+                setattr(self, field_name, getattr(defaults, field_name))
+        
+        # Sauvegarde immédiate
+        self.save_config()
     
     def get_best_drive(self) -> str:
         """Trouve le disque avec le plus d'espace libre"""
@@ -94,10 +163,11 @@ class ServerConfig:
             return str(Path.cwd().drive)
     
     def set_work_drive(self, drive_path: str):
-        """Change le disque de travail"""
+        """Change le disque de travail et sauvegarde"""
         self.WORK_DRIVE = drive_path
         self.update_paths()
         self.create_directories()
+        self.save_config()  # Sauvegarde automatique
     
     def update_paths(self):
         """Met à jour les chemins avec le disque de travail"""
@@ -163,17 +233,8 @@ class ServerConfig:
             # Taille du fichier vidéo
             video_size = Path(video_path).stat().st_size / (1024**3)  # GB
             
-            # Estimation basée sur la durée et résolution
-            # Formule approximative : 
-            # - Frames extraites (PNG) : ~2-5MB par frame
-            # - Frames upscalées (PNG x4) : ~20-50MB par frame
-            # - Audio : même taille que original
-            
-            # Estimation conservative : 30 FPS, 4 min de vidéo = 7200 frames
-            # Chaque frame : 3MB original + 30MB upscalée = 33MB
-            # Total : 7200 * 33MB = ~237GB
-            
-            estimated_frames = int(video_size * 1000)  # Estimation approximative
+            # Estimation conservative
+            estimated_frames = int(video_size * 1000)
             
             # Espace requis en GB
             frames_space = (estimated_frames * 3) / 1024  # Frames originales
@@ -231,11 +292,19 @@ class ServerConfig:
         except Exception as e:
             print(f"Erreur nettoyage: {e}")
             return False
+    
+    def apply_and_save(self, **kwargs):
+        """Applique les modifications et sauvegarde automatiquement"""
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+        
+        return self.save_config()
 
 # Configuration globale
 config = ServerConfig()
 
-# Variables d'environnement
+# Variables d'environnement (appliquées après chargement du fichier)
 ENV_MAPPINGS = {
     'UPSCALING_HOST': 'HOST',
     'UPSCALING_PORT': 'PORT',
@@ -246,7 +315,7 @@ ENV_MAPPINGS = {
     'UPSCALING_WORK_DRIVE': 'WORK_DRIVE',
 }
 
-# Application des variables d'environnement
+# Application des variables d'environnement (priorité sur fichier config)
 for env_var, config_attr in ENV_MAPPINGS.items():
     env_value = os.getenv(env_var)
     if env_value is not None:
@@ -263,7 +332,6 @@ for env_var, config_attr in ENV_MAPPINGS.items():
 BASE_DIR = Path(__file__).parent.parent
 ASSETS_DIR = BASE_DIR / "assets"
 LOGS_DIR = BASE_DIR / "logs"
-CONFIG_FILE = BASE_DIR / "server_config.json"
 
 # Création des dossiers
 LOGS_DIR.mkdir(exist_ok=True)

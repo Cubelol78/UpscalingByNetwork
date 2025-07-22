@@ -1,5 +1,5 @@
 """
-Barre d'état pour l'interface principale
+Barre d'état pour l'interface principale avec logique simplifiée des boutons
 """
 
 from PyQt5.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel, 
@@ -23,6 +23,7 @@ class StatusBarWidget(QFrame):
         self.setMaximumHeight(140)
         
         self.setup_ui()
+        self.update_button_states()  # État initial
     
     def setup_ui(self):
         """Configuration de l'interface de la barre d'état"""
@@ -91,30 +92,30 @@ class StatusBarWidget(QFrame):
         job_layout.addWidget(self.job_progress)
         job_layout.addStretch()
         
-        # Boutons de contrôle
-        controls_group = QGroupBox("Contrôles")
-        controls_group.setMinimumWidth(140)
+        # Contrôles serveur - LOGIQUE SIMPLIFIÉE
+        controls_group = QGroupBox("Contrôles Serveur")
+        controls_group.setMinimumWidth(160)
         controls_layout = QVBoxLayout(controls_group)
         controls_layout.setSpacing(8)
         
-        self.start_server_btn = QPushButton("Démarrer Serveur")
-        self.start_server_btn.clicked.connect(self.main_window.start_server)
-        self.start_server_btn.setStyleSheet("background-color: #4CAF50; color: white;")
-        self.start_server_btn.setMinimumHeight(25)
-        
-        self.stop_server_btn = QPushButton("Arrêter Serveur")
-        self.stop_server_btn.clicked.connect(self.main_window.stop_server)
-        self.stop_server_btn.setStyleSheet("background-color: #d32f2f; color: white;")
-        self.stop_server_btn.setMinimumHeight(25)
-        self.stop_server_btn.setEnabled(False)
+        # Un seul bouton qui change selon l'état
+        self.server_control_btn = QPushButton("Démarrer Serveur")
+        self.server_control_btn.clicked.connect(self.toggle_server)
+        self.server_control_btn.setMinimumHeight(35)
+        self.server_control_btn.setStyleSheet("""
+            QPushButton {
+                font-weight: bold;
+                border-radius: 5px;
+                padding: 8px;
+            }
+        """)
         
         self.start_job_btn = QPushButton("Nouveau Job")
         self.start_job_btn.clicked.connect(self.main_window.start_new_job)
-        self.start_job_btn.setMinimumHeight(25)
+        self.start_job_btn.setMinimumHeight(30)
         self.start_job_btn.setEnabled(False)
         
-        controls_layout.addWidget(self.start_server_btn)
-        controls_layout.addWidget(self.stop_server_btn)
+        controls_layout.addWidget(self.server_control_btn)
         controls_layout.addWidget(self.start_job_btn)
         controls_layout.addStretch()
         
@@ -126,16 +127,63 @@ class StatusBarWidget(QFrame):
         layout.addWidget(controls_group)
         layout.addStretch()
     
+    def toggle_server(self):
+        """Bascule l'état du serveur (démarrer/arrêter)"""
+        if self.server.running:
+            self.main_window.stop_server()
+        else:
+            self.main_window.start_server()
+    
+    def update_button_states(self):
+        """Met à jour l'état et l'apparence des boutons selon l'état du serveur"""
+        if self.server.running:
+            # Serveur en cours - Bouton d'arrêt
+            self.server_control_btn.setText("Arrêter Serveur")
+            self.server_control_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #f44336;
+                    color: white;
+                    font-weight: bold;
+                    border-radius: 5px;
+                    padding: 8px;
+                }
+                QPushButton:hover {
+                    background-color: #d32f2f;
+                }
+            """)
+            self.start_job_btn.setEnabled(True)
+            
+            # Statut serveur
+            self.server_status_label.setText("● En ligne")
+            self.server_status_label.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 12px;")
+            
+        else:
+            # Serveur arrêté - Bouton de démarrage
+            self.server_control_btn.setText("Démarrer Serveur")
+            self.server_control_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #4CAF50;
+                    color: white;
+                    font-weight: bold;
+                    border-radius: 5px;
+                    padding: 8px;
+                }
+                QPushButton:hover {
+                    background-color: #388E3C;
+                }
+            """)
+            self.start_job_btn.setEnabled(False)
+            
+            # Statut serveur
+            self.server_status_label.setText("● Arrêté")
+            self.server_status_label.setStyleSheet("color: #f44336; font-weight: bold; font-size: 12px;")
+    
     def update_status(self, stats):
         """Met à jour la barre de statut avec les statistiques"""
-        # Statut serveur
-        if self.server.running:
-            self.server_status_label.setText("● En ligne")
-            self.server_status_label.setStyleSheet("color: green; font-weight: bold; font-size: 12px;")
-        else:
-            self.server_status_label.setText("● Arrêté")
-            self.server_status_label.setStyleSheet("color: red; font-weight: bold; font-size: 12px;")
+        # Mise à jour des boutons
+        self.update_button_states()
         
+        # Mise à jour du port
         self.server_port_label.setText(f"Port: {config.PORT}")
         
         # Statistiques clients
@@ -157,18 +205,13 @@ class StatusBarWidget(QFrame):
     
     def update_status_stopped(self):
         """Met à jour la barre de statut quand le serveur est arrêté"""
-        self.server_status_label.setText("● Arrêté")
-        self.server_status_label.setStyleSheet("color: red; font-weight: bold; font-size: 12px;")
+        # Mise à jour des boutons
+        self.update_button_states()
         
+        # Remise à zéro des statistiques
         self.clients_count_label.setText("Connectés: 0")
         self.clients_processing_label.setText("En traitement: 0")
         self.batches_pending_label.setText("En attente: 0")
         self.batches_completed_label.setText("Terminés: 0")
         self.current_job_label.setText("Aucun")
         self.job_progress.setValue(0)
-    
-    def set_server_running(self, running):
-        """Met à jour l'état des boutons selon l'état du serveur"""
-        self.start_server_btn.setEnabled(not running)
-        self.stop_server_btn.setEnabled(running)
-        self.start_job_btn.setEnabled(running)
