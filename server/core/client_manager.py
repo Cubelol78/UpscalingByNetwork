@@ -71,3 +71,14 @@ class ClientManager:
         
         self.logger.info(f"Client {mac_address} déconnecté")
         return True
+
+    
+    async def _batch_monitor(self):
+        """Surveille et assigne les lots"""
+        while self.running:
+            try:
+                await self.batch_manager.assign_pending_batches()
+                await asyncio.sleep(1)  # Vérification chaque seconde
+                
+            except Exception as e:
+                self.logger.error

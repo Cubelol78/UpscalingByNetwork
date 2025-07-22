@@ -43,7 +43,6 @@ class UpscalingServer:
         
         # Démarrage des tâches de maintenance
         asyncio.create_task(self._heartbeat_monitor())
-        asyncio.create_task(self._batch_monitor())
         
         # Démarrage du serveur WebSocket
         self.server = await websockets.serve(

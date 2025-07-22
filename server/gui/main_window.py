@@ -499,28 +499,36 @@ class MainWindow(QMainWindow):
     def create_config_tab(self):
         """Crée l'onglet configuration"""
         widget = QScrollArea()
+        widget.setWidgetResizable(True)
         content_widget = QWidget()
         layout = QVBoxLayout(content_widget)
+        layout.setSpacing(15)
+        layout.setContentsMargins(15, 15, 15, 15)
         
         # Configuration stockage
         storage_group = QGroupBox("Configuration Stockage")
+        storage_group.setMinimumWidth(400)
         storage_layout = QGridLayout(storage_group)
+        storage_layout.setSpacing(10)
+        storage_layout.setContentsMargins(15, 20, 15, 15)
         
         # Sélection du disque de travail
         storage_layout.addWidget(QLabel("Disque de travail:"), 0, 0)
         self.drive_combo = QComboBox()
+        self.drive_combo.setMinimumWidth(200)
         self.drive_combo.currentTextChanged.connect(self.on_drive_changed)
-        self.refresh_drives()
         storage_layout.addWidget(self.drive_combo, 0, 1, 1, 2)
         
         # Bouton pour actualiser les disques
         refresh_drives_btn = QPushButton("Actualiser")
+        refresh_drives_btn.setMaximumWidth(100)
         refresh_drives_btn.clicked.connect(self.refresh_drives)
         storage_layout.addWidget(refresh_drives_btn, 0, 3)
         
-        # Informations sur l'espace disque
-        self.drive_info_label = QLabel("Sélectionnez un disque")
-        self.drive_info_label.setStyleSheet("font-size: 10px; color: #888;")
+        # Informations sur l'espace disque - INITIALISATION CORRECTE
+        self.drive_info_label = QLabel("Chargement des informations disque...")
+        self.drive_info_label.setStyleSheet("font-size: 10px; color: #888; padding: 5px;")
+        self.drive_info_label.setWordWrap(True)
         storage_layout.addWidget(self.drive_info_label, 1, 0, 1, 4)
         
         # Nettoyage automatique
@@ -533,53 +541,69 @@ class MainWindow(QMainWindow):
         self.min_free_space_spin = QSpinBox()
         self.min_free_space_spin.setRange(10, 1000)
         self.min_free_space_spin.setValue(config.MIN_FREE_SPACE_GB)
+        self.min_free_space_spin.setMaximumWidth(100)
         storage_layout.addWidget(self.min_free_space_spin, 3, 1)
         
         # Bouton de nettoyage manuel
         cleanup_btn = QPushButton("Nettoyer fichiers temporaires")
         cleanup_btn.clicked.connect(self.manual_cleanup)
-        cleanup_btn.setStyleSheet("background-color: #FF9800; color: white;")
+        cleanup_btn.setStyleSheet("background-color: #FF9800; color: white; padding: 8px;")
+        cleanup_btn.setMaximumWidth(250)
         storage_layout.addWidget(cleanup_btn, 4, 0, 1, 2)
         
         # Configuration serveur
         server_group = QGroupBox("Configuration Serveur")
+        server_group.setMinimumWidth(400)
         server_layout = QGridLayout(server_group)
+        server_layout.setSpacing(10)
+        server_layout.setContentsMargins(15, 20, 15, 15)
         
         server_layout.addWidget(QLabel("Host:"), 0, 0)
         self.host_input = QLabel(config.HOST)
+        self.host_input.setStyleSheet("font-weight: bold;")
         server_layout.addWidget(self.host_input, 0, 1)
         
         server_layout.addWidget(QLabel("Port:"), 1, 0)
         self.port_input = QLabel(str(config.PORT))
+        self.port_input.setStyleSheet("font-weight: bold;")
         server_layout.addWidget(self.port_input, 1, 1)
         
-        server_layout.addWidget(QLabel("Max Clients:"), 2, 0)
+        server_layout.addWidget(QLabel("Clients maximum:"), 2, 0)
         self.max_clients_spin = QSpinBox()
         self.max_clients_spin.setRange(1, 1000)
         self.max_clients_spin.setValue(config.MAX_CLIENTS)
+        self.max_clients_spin.setMaximumWidth(100)
         server_layout.addWidget(self.max_clients_spin, 2, 1)
         
         # Configuration lots
         batches_group = QGroupBox("Configuration Lots")
+        batches_group.setMinimumWidth(400)
         batches_layout = QGridLayout(batches_group)
+        batches_layout.setSpacing(10)
+        batches_layout.setContentsMargins(15, 20, 15, 15)
         
-        batches_layout.addWidget(QLabel("Taille des lots:"), 0, 0)
+        batches_layout.addWidget(QLabel("Taille des lots (images):"), 0, 0)
         self.batch_size_spin = QSpinBox()
         self.batch_size_spin.setRange(10, 200)
         self.batch_size_spin.setValue(config.BATCH_SIZE)
+        self.batch_size_spin.setMaximumWidth(100)
         batches_layout.addWidget(self.batch_size_spin, 0, 1)
         
-        batches_layout.addWidget(QLabel("Tentatives max:"), 1, 0)
+        batches_layout.addWidget(QLabel("Tentatives maximum:"), 1, 0)
         self.max_retries_spin = QSpinBox()
         self.max_retries_spin.setRange(1, 10)
         self.max_retries_spin.setValue(config.MAX_RETRIES)
+        self.max_retries_spin.setMaximumWidth(100)
         batches_layout.addWidget(self.max_retries_spin, 1, 1)
         
         # Configuration Real-ESRGAN
         esrgan_group = QGroupBox("Configuration Real-ESRGAN")
+        esrgan_group.setMinimumWidth(400)
         esrgan_layout = QGridLayout(esrgan_group)
+        esrgan_layout.setSpacing(10)
+        esrgan_layout.setContentsMargins(15, 20, 15, 15)
         
-        esrgan_layout.addWidget(QLabel("Modèle:"), 0, 0)
+        esrgan_layout.addWidget(QLabel("Modèle d'upscaling:"), 0, 0)
         self.model_combo = QComboBox()
         self.model_combo.addItems([
             "realesr-animevideov3",
@@ -587,46 +611,71 @@ class MainWindow(QMainWindow):
             "RealESRGAN_x4plus"
         ])
         self.model_combo.setCurrentText(config.REALESRGAN_MODEL)
+        self.model_combo.setMinimumWidth(200)
         esrgan_layout.addWidget(self.model_combo, 0, 1)
         
-        esrgan_layout.addWidget(QLabel("Taille tuiles:"), 1, 0)
+        esrgan_layout.addWidget(QLabel("Taille des tuiles (pixels):"), 1, 0)
         self.tile_size_spin = QSpinBox()
         self.tile_size_spin.setRange(128, 1024)
         self.tile_size_spin.setSingleStep(128)
         self.tile_size_spin.setValue(config.TILE_SIZE)
+        self.tile_size_spin.setMaximumWidth(100)
         esrgan_layout.addWidget(self.tile_size_spin, 1, 1)
         
         # Configuration sécurité
         security_group = QGroupBox("Configuration Sécurité")
+        security_group.setMinimumWidth(400)
         security_layout = QGridLayout(security_group)
+        security_layout.setSpacing(10)
+        security_layout.setContentsMargins(15, 20, 15, 15)
         
-        self.encryption_check = QCheckBox("Activer le chiffrement")
+        self.encryption_check = QCheckBox("Activer le chiffrement des communications")
         self.encryption_check.setChecked(config.USE_ENCRYPTION)
         security_layout.addWidget(self.encryption_check, 0, 0, 1, 2)
         
+        # Description du chiffrement
+        encryption_desc = QLabel("Chiffre toutes les communications entre le serveur et les clients (recommandé pour WAN)")
+        encryption_desc.setStyleSheet("font-size: 10px; color: #888; font-style: italic;")
+        encryption_desc.setWordWrap(True)
+        security_layout.addWidget(encryption_desc, 1, 0, 1, 2)
+        
         # Boutons
         buttons_layout = QHBoxLayout()
+        buttons_layout.setSpacing(10)
         
         save_config_btn = QPushButton("Sauvegarder Configuration")
         save_config_btn.clicked.connect(self.save_configuration)
+        save_config_btn.setStyleSheet("background-color: #4CAF50; color: white; padding: 10px; font-weight: bold;")
+        save_config_btn.setMinimumHeight(35)
         
         reset_config_btn = QPushButton("Réinitialiser")
         reset_config_btn.clicked.connect(self.reset_configuration)
+        reset_config_btn.setStyleSheet("background-color: #f44336; color: white; padding: 10px; font-weight: bold;")
+        reset_config_btn.setMinimumHeight(35)
         
         buttons_layout.addWidget(save_config_btn)
         buttons_layout.addWidget(reset_config_btn)
         buttons_layout.addStretch()
         
-        # Ajout au layout
+        # Ajout au layout avec espacements appropriés
         layout.addWidget(storage_group)
+        layout.addSpacing(10)
         layout.addWidget(server_group)
+        layout.addSpacing(10)
         layout.addWidget(batches_group)
+        layout.addSpacing(10)
         layout.addWidget(esrgan_group)
+        layout.addSpacing(10)
         layout.addWidget(security_group)
+        layout.addSpacing(15)
         layout.addLayout(buttons_layout)
         layout.addStretch()
         
         widget.setWidget(content_widget)
+        
+        # IMPORTANT: Initialiser les disques après création de tous les widgets
+        self.refresh_drives()
+        
         return widget
     
     # =============================================================================
@@ -786,6 +835,10 @@ class MainWindow(QMainWindow):
     def refresh_drives(self):
         """Actualise la liste des disques disponibles"""
         try:
+            # Vérifier que le widget existe avant de continuer
+            if not hasattr(self, 'drive_combo') or not hasattr(self, 'drive_info_label'):
+                return
+                
             self.drive_combo.clear()
             drives = config.get_available_drives()
             
@@ -809,6 +862,10 @@ class MainWindow(QMainWindow):
     def on_drive_changed(self):
         """Gestionnaire de changement de disque"""
         try:
+            # Vérifier que les widgets existent
+            if not hasattr(self, 'drive_combo') or not hasattr(self, 'drive_info_label'):
+                return
+                
             current_data = self.drive_combo.currentData()
             if current_data:
                 config.set_work_drive(current_data)
@@ -821,6 +878,10 @@ class MainWindow(QMainWindow):
     def update_drive_info(self):
         """Met à jour les informations du disque sélectionné"""
         try:
+            # Vérifier que le widget existe
+            if not hasattr(self, 'drive_info_label'):
+                return
+                
             drives = config.get_available_drives()
             current_drive = config.WORK_DRIVE
             
@@ -828,32 +889,52 @@ class MainWindow(QMainWindow):
                 info = drives[current_drive]
                 
                 info_text = (
-                    f"Disque: {info['device']} ({info['fstype']}) | "
-                    f"Total: {info['total_gb']:.1f}GB | "
-                    f"Utilisé: {info['used_gb']:.1f}GB ({info['percent_used']:.1f}%) | "
-                    f"Libre: {info['free_gb']:.1f}GB"
+                    f"📁 Disque: {info['device']} ({info['fstype']}) | "
+                    f"💾 Total: {info['total_gb']:.1f}GB | "
+                    f"📊 Utilisé: {info['used_gb']:.1f}GB ({info['percent_used']:.1f}%) | "
+                    f"✅ Libre: {info['free_gb']:.1f}GB"
                 )
                 
                 if info['free_gb'] < config.MIN_FREE_SPACE_GB:
-                    color = "#d32f2f"
+                    color = "#f44336"  # Rouge - insuffisant
+                    status = "⚠️ ESPACE INSUFFISANT"
                 elif info['free_gb'] < config.MIN_FREE_SPACE_GB * 2:
-                    color = "#FF9800"
+                    color = "#FF9800"  # Orange - limite
+                    status = "⚠️ Espace limité"
                 else:
-                    color = "#4CAF50"
+                    color = "#4CAF50"  # Vert - OK
+                    status = "✅ Espace suffisant"
                 
-                self.drive_info_label.setText(info_text)
-                self.drive_info_label.setStyleSheet(f"font-size: 10px; color: {color}; font-weight: bold;")
+                self.drive_info_label.setText(f"{status}\n{info_text}")
+                self.drive_info_label.setStyleSheet(f"""
+                    font-size: 11px; 
+                    color: {color}; 
+                    font-weight: bold; 
+                    padding: 8px; 
+                    border: 1px solid {color}; 
+                    border-radius: 4px; 
+                    background-color: rgba({color[1:3]}, {color[3:5]}, {color[5:7]}, 0.1);
+                """.replace("#", ""))
                 
+                # Tooltip avec plus de détails
                 work_dir = Path(config.TEMP_DIR).parent
-                self.drive_info_label.setToolTip(f"Dossier de travail: {work_dir}")
+                tooltip_text = f"""
+Dossier de travail: {work_dir}
+Dossier temporaire: {config.TEMP_DIR}
+Dossier de sortie: {config.OUTPUT_DIR}
+Espace libre minimum configuré: {config.MIN_FREE_SPACE_GB} GB
+                """.strip()
+                self.drive_info_label.setToolTip(tooltip_text)
                 
             else:
-                self.drive_info_label.setText("Informations disque non disponibles")
-                self.drive_info_label.setStyleSheet("font-size: 10px; color: #d32f2f;")
+                self.drive_info_label.setText("❌ Informations disque non disponibles")
+                self.drive_info_label.setStyleSheet("font-size: 11px; color: #f44336; font-weight: bold; padding: 8px;")
                 
         except Exception as e:
             self.logger.error(f"Erreur mise à jour info disque: {e}")
-            self.drive_info_label.setText("Erreur lecture disque")
+            if hasattr(self, 'drive_info_label'):
+                self.drive_info_label.setText("❌ Erreur lecture disque")
+                self.drive_info_label.setStyleSheet("font-size: 11px; color: #f44336; font-weight: bold; padding: 8px;")
     
     def manual_cleanup(self):
         """Nettoyage manuel des fichiers temporaires"""
