@@ -1,8 +1,11 @@
 # utils/performance_monitor.py
 import time
 import threading
+import psutil
 from collections import deque
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
+
+from utils.logger import get_logger
 
 class PerformanceMonitor:
     """Moniteur de performance pour le serveur"""
