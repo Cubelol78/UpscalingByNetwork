@@ -53,77 +53,107 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         
         layout = QVBoxLayout(central_widget)
-        layout.setSpacing(10)
+        layout.setSpacing(15)  # Plus d'espace entre les éléments
+        layout.setContentsMargins(10, 10, 10, 10)  # Marges de la fenêtre
         
         # Barre d'état en haut
         self.create_status_bar()
         layout.addWidget(self.status_frame)
         
-        # Onglets principaux
-        layout.addWidget(self.create_main_layout())
+        # Onglets principaux - avec plus d'espace
+        main_tabs = self.create_main_layout()
+        layout.addWidget(main_tabs, 1)  # Le 1 permet l'expansion
     
     def create_status_bar(self):
         """Crée la barre d'état principale"""
         self.status_frame = QFrame()
         self.status_frame.setFrameStyle(QFrame.Box)
-        self.status_frame.setMaximumHeight(80)
+        self.status_frame.setMinimumHeight(120)  # Augmenté de 80 à 120
+        self.status_frame.setMaximumHeight(140)  # Ajout d'une hauteur max pour éviter l'expansion
         
         layout = QHBoxLayout(self.status_frame)
+        layout.setSpacing(15)  # Plus d'espace entre les groupes
+        layout.setContentsMargins(10, 10, 10, 10)  # Marges internes
         
         # Statut du serveur
         server_group = QGroupBox("Serveur")
+        server_group.setMinimumWidth(120)
         server_layout = QVBoxLayout(server_group)
+        server_layout.setSpacing(5)
         
         self.server_status_label = QLabel("● Démarré")
-        self.server_status_label.setStyleSheet("color: green; font-weight: bold;")
+        self.server_status_label.setStyleSheet("color: green; font-weight: bold; font-size: 12px;")
         self.server_port_label = QLabel(f"Port: {config.PORT}")
+        self.server_port_label.setStyleSheet("font-size: 11px;")
         
         server_layout.addWidget(self.server_status_label)
         server_layout.addWidget(self.server_port_label)
+        server_layout.addStretch()
         
         # Statistiques clients
         clients_group = QGroupBox("Clients")
+        clients_group.setMinimumWidth(140)
         clients_layout = QVBoxLayout(clients_group)
+        clients_layout.setSpacing(5)
         
         self.clients_count_label = QLabel("Connectés: 0")
+        self.clients_count_label.setStyleSheet("font-size: 11px;")
         self.clients_processing_label = QLabel("En traitement: 0")
+        self.clients_processing_label.setStyleSheet("font-size: 11px;")
         
         clients_layout.addWidget(self.clients_count_label)
         clients_layout.addWidget(self.clients_processing_label)
+        clients_layout.addStretch()
         
         # Statistiques lots
         batches_group = QGroupBox("Lots")
+        batches_group.setMinimumWidth(140)
         batches_layout = QVBoxLayout(batches_group)
+        batches_layout.setSpacing(5)
         
         self.batches_pending_label = QLabel("En attente: 0")
+        self.batches_pending_label.setStyleSheet("font-size: 11px;")
         self.batches_completed_label = QLabel("Terminés: 0")
+        self.batches_completed_label.setStyleSheet("font-size: 11px;")
         
         batches_layout.addWidget(self.batches_pending_label)
         batches_layout.addWidget(self.batches_completed_label)
+        batches_layout.addStretch()
         
         # Job actuel
         job_group = QGroupBox("Job Actuel")
+        job_group.setMinimumWidth(250)  # Plus large pour le nom de fichier
         job_layout = QVBoxLayout(job_group)
+        job_layout.setSpacing(5)
         
         self.current_job_label = QLabel("Aucun")
+        self.current_job_label.setStyleSheet("font-size: 11px;")
+        self.current_job_label.setWordWrap(True)  # Permettre le retour à la ligne
         self.job_progress = QProgressBar()
+        self.job_progress.setMinimumHeight(20)
         
         job_layout.addWidget(self.current_job_label)
         job_layout.addWidget(self.job_progress)
+        job_layout.addStretch()
         
         # Boutons de contrôle
         controls_group = QGroupBox("Contrôles")
+        controls_group.setMinimumWidth(140)
         controls_layout = QVBoxLayout(controls_group)
+        controls_layout.setSpacing(8)
         
         self.start_job_btn = QPushButton("Nouveau Job")
         self.start_job_btn.clicked.connect(self.start_new_job)
+        self.start_job_btn.setMinimumHeight(25)
         
         self.stop_server_btn = QPushButton("Arrêter Serveur")
         self.stop_server_btn.clicked.connect(self.stop_server)
         self.stop_server_btn.setStyleSheet("background-color: #d32f2f; color: white;")
+        self.stop_server_btn.setMinimumHeight(25)
         
         controls_layout.addWidget(self.start_job_btn)
         controls_layout.addWidget(self.stop_server_btn)
+        controls_layout.addStretch()
         
         # Ajout des groupes au layout
         layout.addWidget(server_group)
@@ -178,15 +208,27 @@ class MainWindow(QMainWindow):
         
         # Graphique temps réel des clients
         self.clients_chart = pg.PlotWidget(title="Clients connectés")
-        self.clients_chart.setLabel('left', 'Nombre')
-        self.clients_chart.setLabel('bottom', 'Temps')
-        self.clients_chart.showGrid(x=True, y=True)
+        self.clients_chart.setLabel('left', 'Nombre', size='10pt')
+        self.clients_chart.setLabel('bottom', 'Temps', size='10pt')
+        self.clients_chart.showGrid(x=True, y=True, alpha=0.3)
+        self.clients_chart.setMinimumHeight(220)
+        
+        # Style du graphique
+        self.clients_chart.setBackground('black')
+        self.clients_chart.getAxis('left').setTextPen('white')
+        self.clients_chart.getAxis('bottom').setTextPen('white')
         
         # Graphique des lots
         self.batches_chart = pg.PlotWidget(title="Progression des lots")
-        self.batches_chart.setLabel('left', 'Lots')
-        self.batches_chart.setLabel('bottom', 'Temps')
-        self.batches_chart.showGrid(x=True, y=True)
+        self.batches_chart.setLabel('left', 'Lots', size='10pt')
+        self.batches_chart.setLabel('bottom', 'Temps', size='10pt')
+        self.batches_chart.showGrid(x=True, y=True, alpha=0.3)
+        self.batches_chart.setMinimumHeight(220)
+        
+        # Style du graphique
+        self.batches_chart.setBackground('black')
+        self.batches_chart.getAxis('left').setTextPen('white')
+        self.batches_chart.getAxis('bottom').setTextPen('white')
         
         left_layout.addWidget(self.clients_chart)
         left_layout.addWidget(self.batches_chart)
@@ -198,37 +240,72 @@ class MainWindow(QMainWindow):
         # Informations système
         system_group = QGroupBox("Système")
         system_layout = QGridLayout(system_group)
+        system_layout.setSpacing(8)
+        system_layout.setContentsMargins(10, 15, 10, 10)
+        
+        # Étiquettes avec un style amélioré
+        system_layout.addWidget(QLabel("Utilisation:"), 0, 0)
         
         self.cpu_usage_label = QLabel("CPU: 0%")
-        self.memory_usage_label = QLabel("RAM: 0%")
-        self.disk_usage_label = QLabel("Disque: 0%")
-        self.uptime_label = QLabel("Uptime: 0s")
+        self.cpu_usage_label.setStyleSheet("font-weight: bold; color: #4CAF50;")
         
-        system_layout.addWidget(QLabel("Utilisation:"), 0, 0)
-        system_layout.addWidget(self.cpu_usage_label, 0, 1)
-        system_layout.addWidget(self.memory_usage_label, 1, 1)
-        system_layout.addWidget(self.disk_usage_label, 2, 1)
-        system_layout.addWidget(self.uptime_label, 3, 1)
+        self.memory_usage_label = QLabel("RAM: 0%")
+        self.memory_usage_label.setStyleSheet("font-weight: bold; color: #2196F3;")
+        
+        self.disk_usage_label = QLabel("Disque: 0%")
+        self.disk_usage_label.setStyleSheet("font-weight: bold; color: #FF9800;")
+        
+        self.uptime_label = QLabel("Uptime: 0s")
+        self.uptime_label.setStyleSheet("font-weight: bold; color: #9C27B0;")
+        
+        system_layout.addWidget(self.cpu_usage_label, 1, 0)
+        system_layout.addWidget(self.memory_usage_label, 2, 0)
+        system_layout.addWidget(self.disk_usage_label, 3, 0)
+        system_layout.addWidget(self.uptime_label, 4, 0)
         
         # Statistiques de performance
         perf_group = QGroupBox("Performance")
         perf_layout = QGridLayout(perf_group)
+        perf_layout.setSpacing(8)
+        perf_layout.setContentsMargins(10, 15, 10, 10)
         
         self.avg_batch_time_label = QLabel("Temps moyen/lot: N/A")
-        self.processing_rate_label = QLabel("Taux de traitement: N/A")
-        self.total_processed_label = QLabel("Total traité: 0")
+        self.avg_batch_time_label.setStyleSheet("font-size: 11px;")
         
-        perf_layout.addWidget(self.avg_batch_time_label, 0, 0, 1, 2)
-        perf_layout.addWidget(self.processing_rate_label, 1, 0, 1, 2)
-        perf_layout.addWidget(self.total_processed_label, 2, 0, 1, 2)
+        self.processing_rate_label = QLabel("Taux de traitement: N/A")
+        self.processing_rate_label.setStyleSheet("font-size: 11px;")
+        
+        self.total_processed_label = QLabel("Total traité: 0")
+        self.total_processed_label.setStyleSheet("font-size: 11px; font-weight: bold;")
+        
+        perf_layout.addWidget(self.avg_batch_time_label, 0, 0)
+        perf_layout.addWidget(self.processing_rate_label, 1, 0)
+        perf_layout.addWidget(self.total_processed_label, 2, 0)
         
         # Top clients
         top_clients_group = QGroupBox("Top Clients")
         top_clients_layout = QVBoxLayout(top_clients_group)
+        top_clients_layout.setContentsMargins(10, 15, 10, 10)
         
         self.top_clients_table = QTableWidget(5, 3)
         self.top_clients_table.setHorizontalHeaderLabels(["Client", "Lots", "Taux"])
         self.top_clients_table.horizontalHeader().setStretchLastSection(True)
+        self.top_clients_table.setAlternatingRowColors(True)
+        self.top_clients_table.setMinimumHeight(180)
+        
+        # Style du tableau
+        self.top_clients_table.setStyleSheet("""
+            QTableWidget {
+                gridline-color: #444;
+                font-size: 10px;
+            }
+            QHeaderView::section {
+                background-color: #555;
+                padding: 5px;
+                border: 1px solid #666;
+                font-weight: bold;
+            }
+        """)
         
         top_clients_layout.addWidget(self.top_clients_table)
         
