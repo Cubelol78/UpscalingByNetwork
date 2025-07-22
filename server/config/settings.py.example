@@ -3,6 +3,7 @@ Configuration du serveur d'upscaling distribué
 """
 
 import os
+import shutil
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Dict, Any
@@ -23,11 +24,14 @@ class ServerConfig:
     MAX_RETRIES: int = 3          # nombre de tentatives par lot
     DUPLICATE_THRESHOLD: int = 5   # seuil pour envoyer des doublons
     
-    # Configuration vidéo
-    TEMP_DIR: str = "temp"
-    OUTPUT_DIR: str = "output"
-    FRAMES_DIR: str = "frames"
-    UPSCALED_DIR: str = "upscaled"
+    # Configuration stockage - NOUVEAUX PARAMÈTRES
+    WORK_DRIVE: str = ""          # Disque de travail choisi (ex: "D:", "E:")
+    TEMP_DIR: str = "temp"        # Dossier temporaire
+    OUTPUT_DIR: str = "output"    # Dossier de sortie
+    FRAMES_DIR: str = "frames"    # Dossier frames extraites
+    UPSCALED_DIR: str = "upscaled" # Dossier frames upscalées
+    AUTO_CLEANUP: bool = True     # Nettoyage automatique des fichiers temporaires
+    MIN_FREE_SPACE_GB: int = 50   # Espace libre minimum requis (Go)
     
     # Configuration sécurité
     ENCRYPTION_KEY_SIZE: int = 32
@@ -51,30 +55,182 @@ class ServerConfig:
     
     def __post_init__(self):
         """Initialisation post-construction"""
+        # Détermination du disque de travail
+        if not self.WORK_DRIVE:
+            # Par défaut, utiliser le disque avec le plus d'espace libre
+            self.WORK_DRIVE = self.get_best_drive()
+        
+        # Mise à jour des chemins avec le disque de travail
+        self.update_paths()
+        
         # Création des dossiers nécessaires
-        for dir_name in [self.TEMP_DIR, self.OUTPUT_DIR, 
+        self.create_directories()
+    
+    def get_best_drive(self) -> str:
+        """Trouve le disque avec le plus d'espace libre"""
+        try:
+            import psutil
+            
+            best_drive = ""
+            max_free_space = 0
+            
+            # Parcourir tous les disques
+            for disk in psutil.disk_partitions():
+                try:
+                    usage = psutil.disk_usage(disk.mountpoint)
+                    free_gb = usage.free / (1024**3)
+                    
+                    if free_gb > max_free_space:
+                        max_free_space = free_gb
+                        best_drive = disk.mountpoint
+                        
+                except (PermissionError, OSError):
+                    continue
+            
+            return best_drive if best_drive else str(Path.cwd().drive)
+            
+        except ImportError:
+            # Fallback si psutil n'est pas disponible
+            return str(Path.cwd().drive)
+    
+    def set_work_drive(self, drive_path: str):
+        """Change le disque de travail"""
+        self.WORK_DRIVE = drive_path
+        self.update_paths()
+        self.create_directories()
+    
+    def update_paths(self):
+        """Met à jour les chemins avec le disque de travail"""
+        if self.WORK_DRIVE:
+            base_path = Path(self.WORK_DRIVE) / "UpscalingWork"
+            self.TEMP_DIR = str(base_path / "temp")
+            self.OUTPUT_DIR = str(base_path / "output")
+            self.FRAMES_DIR = str(base_path / "frames")
+            self.UPSCALED_DIR = str(base_path / "upscaled")
+    
+    def create_directories(self):
+        """Crée les dossiers nécessaires"""
+        for dir_path in [self.TEMP_DIR, self.OUTPUT_DIR, 
                         self.FRAMES_DIR, self.UPSCALED_DIR]:
-            Path(dir_name).mkdir(exist_ok=True)
+            Path(dir_path).mkdir(parents=True, exist_ok=True)
     
-    @classmethod
-    def from_file(cls, config_file: str) -> 'ServerConfig':
-        """Charge la configuration depuis un fichier"""
-        import json
+    def get_available_drives(self) -> Dict[str, Dict[str, Any]]:
+        """Retourne la liste des disques disponibles avec leurs informations"""
+        drives = {}
         
-        if not os.path.exists(config_file):
-            return cls()
+        try:
+            import psutil
+            
+            for disk in psutil.disk_partitions():
+                try:
+                    usage = psutil.disk_usage(disk.mountpoint)
+                    
+                    drives[disk.mountpoint] = {
+                        'device': disk.device,
+                        'mountpoint': disk.mountpoint,
+                        'fstype': disk.fstype,
+                        'total_gb': usage.total / (1024**3),
+                        'free_gb': usage.free / (1024**3),
+                        'used_gb': usage.used / (1024**3),
+                        'percent_used': (usage.used / usage.total) * 100
+                    }
+                    
+                except (PermissionError, OSError):
+                    continue
+                    
+        except ImportError:
+            # Fallback basique si psutil n'est pas disponible
+            current_drive = str(Path.cwd().drive)
+            try:
+                total, used, free = shutil.disk_usage(current_drive)
+                drives[current_drive] = {
+                    'device': current_drive,
+                    'mountpoint': current_drive,
+                    'fstype': 'unknown',
+                    'total_gb': total / (1024**3),
+                    'free_gb': free / (1024**3),
+                    'used_gb': used / (1024**3),
+                    'percent_used': (used / total) * 100
+                }
+            except:
+                pass
         
-        with open(config_file, 'r', encoding='utf-8') as f:
-            config_data = json.load(f)
-        
-        return cls(**config_data)
+        return drives
     
-    def save_to_file(self, config_file: str):
-        """Sauvegarde la configuration dans un fichier"""
-        import json
-        
-        with open(config_file, 'w', encoding='utf-8') as f:
-            json.dump(self.__dict__, f, indent=4, ensure_ascii=False)
+    def check_space_requirements(self, video_path: str) -> Dict[str, Any]:
+        """Estime l'espace disque requis pour un fichier vidéo"""
+        try:
+            # Taille du fichier vidéo
+            video_size = Path(video_path).stat().st_size / (1024**3)  # GB
+            
+            # Estimation basée sur la durée et résolution
+            # Formule approximative : 
+            # - Frames extraites (PNG) : ~2-5MB par frame
+            # - Frames upscalées (PNG x4) : ~20-50MB par frame
+            # - Audio : même taille que original
+            
+            # Estimation conservative : 30 FPS, 4 min de vidéo = 7200 frames
+            # Chaque frame : 3MB original + 30MB upscalée = 33MB
+            # Total : 7200 * 33MB = ~237GB
+            
+            estimated_frames = int(video_size * 1000)  # Estimation approximative
+            
+            # Espace requis en GB
+            frames_space = (estimated_frames * 3) / 1024  # Frames originales
+            upscaled_space = (estimated_frames * 30) / 1024  # Frames upscalées
+            temp_space = video_size * 2  # Fichiers temporaires
+            output_space = video_size * 1.5  # Vidéo de sortie
+            
+            total_required = frames_space + upscaled_space + temp_space + output_space
+            
+            # Vérification de l'espace disponible
+            drives_info = self.get_available_drives()
+            current_drive_info = drives_info.get(self.WORK_DRIVE, {})
+            available_space = current_drive_info.get('free_gb', 0)
+            
+            return {
+                'video_size_gb': video_size,
+                'estimated_frames': estimated_frames,
+                'frames_space_gb': frames_space,
+                'upscaled_space_gb': upscaled_space,
+                'temp_space_gb': temp_space,
+                'output_space_gb': output_space,
+                'total_required_gb': total_required,
+                'available_space_gb': available_space,
+                'sufficient_space': available_space >= (total_required + self.MIN_FREE_SPACE_GB),
+                'work_drive': self.WORK_DRIVE
+            }
+            
+        except Exception as e:
+            return {
+                'error': str(e),
+                'sufficient_space': False
+            }
+    
+    def cleanup_temp_files(self, job_id: str = None):
+        """Nettoie les fichiers temporaires"""
+        try:
+            temp_path = Path(self.TEMP_DIR)
+            
+            if job_id:
+                # Nettoyage spécifique à un job
+                patterns = [f"job_{job_id}_*"]
+            else:
+                # Nettoyage général
+                patterns = ["job_*_frames", "job_*_upscaled", "job_*_audio.*"]
+            
+            for pattern in patterns:
+                for item in temp_path.glob(pattern):
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
+                        
+            return True
+            
+        except Exception as e:
+            print(f"Erreur nettoyage: {e}")
+            return False
 
 # Configuration globale
 config = ServerConfig()
@@ -87,6 +243,7 @@ ENV_MAPPINGS = {
     'UPSCALING_BATCH_SIZE': 'BATCH_SIZE',
     'UPSCALING_USE_ENCRYPTION': 'USE_ENCRYPTION',
     'UPSCALING_GPU_ID': 'GPU_ID',
+    'UPSCALING_WORK_DRIVE': 'WORK_DRIVE',
 }
 
 # Application des variables d'environnement
