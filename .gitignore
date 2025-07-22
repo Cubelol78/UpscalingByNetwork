@@ -1,1 +1,9 @@
 server/config/settings.py
+
+server/config/__pycache__
+server/core/__pycache__
+server/gui/__pycache__
+server/models/__pycache__
+server/utils/__pycache__
+
+server/logs
