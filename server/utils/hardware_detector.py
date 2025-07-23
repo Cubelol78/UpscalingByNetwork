@@ -1,5 +1,6 @@
 """
 Détecteur de matériel pour optimiser automatiquement Real-ESRGAN
+Version corrigée pour les erreurs NVIDIA
 """
 
 import subprocess
@@ -167,7 +168,7 @@ class HardwareDetector:
         return gpus
     
     def _detect_nvidia_gpus(self) -> List[GPUInfo]:
-        """Détecte les GPUs NVIDIA via NVML"""
+        """Détecte les GPUs NVIDIA via NVML - VERSION CORRIGÉE"""
         gpus = []
         
         try:
@@ -177,28 +178,50 @@ class HardwareDetector:
             for i in range(device_count):
                 handle = pynvml.nvmlDeviceGetHandleByIndex(i)
                 
-                # Informations de base
-                name = pynvml.nvmlDeviceGetName(handle).decode('utf-8')
-                memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-                memory_total_mb = memory_info.total // (1024 * 1024)
-                memory_free_mb = memory_info.free // (1024 * 1024)
-                
-                # Informations avancées
+                # Informations de base - CORRECTION DU BUG DECODE
                 try:
-                    driver_version = pynvml.nvmlSystemGetDriverVersion().decode('utf-8')
-                except:
+                    name_bytes = pynvml.nvmlDeviceGetName(handle)
+                    # Correction : vérifier si c'est déjà une string ou des bytes
+                    if isinstance(name_bytes, bytes):
+                        name = name_bytes.decode('utf-8')
+                    else:
+                        name = str(name_bytes)  # Déjà une string
+                except Exception as e:
+                    self.logger.warning(f"Erreur lecture nom GPU {i}: {e}")
+                    name = f"NVIDIA GPU {i}"
+                
+                try:
+                    memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                    memory_total_mb = memory_info.total // (1024 * 1024)
+                    memory_free_mb = memory_info.free // (1024 * 1024)
+                except Exception as e:
+                    self.logger.warning(f"Erreur lecture mémoire GPU {i}: {e}")
+                    memory_total_mb = 8192  # Fallback
+                    memory_free_mb = 6144
+                
+                # Informations avancées - avec gestion d'erreur
+                try:
+                    driver_version_bytes = pynvml.nvmlSystemGetDriverVersion()
+                    if isinstance(driver_version_bytes, bytes):
+                        driver_version = driver_version_bytes.decode('utf-8')
+                    else:
+                        driver_version = str(driver_version_bytes)
+                except Exception as e:
+                    self.logger.debug(f"Erreur lecture driver version: {e}")
                     driver_version = "Unknown"
                 
                 try:
                     major, minor = pynvml.nvmlDeviceGetCudaComputeCapability(handle)
                     compute_capability = f"{major}.{minor}"
-                except:
+                except Exception as e:
+                    self.logger.debug(f"Erreur lecture compute capability: {e}")
                     compute_capability = None
                 
                 try:
                     clock_info = pynvml.nvmlDeviceGetClockInfo(handle, pynvml.NVML_CLOCK_GRAPHICS)
                     boost_clock_mhz = clock_info
-                except:
+                except Exception as e:
+                    self.logger.debug(f"Erreur lecture clock: {e}")
                     boost_clock_mhz = None
                 
                 # Optimisations basées sur le nom
@@ -275,17 +298,36 @@ class HardwareDetector:
                 physical_cores = psutil.cpu_count(logical=False)
                 logical_cores = psutil.cpu_count(logical=True)
                 
-                # Nom du CPU
+                # Nom du CPU - VERSION CORRIGÉE
                 cpu_name = "Unknown CPU"
                 try:
-                    if hasattr(psutil, 'cpu_info'):
-                        cpu_name = psutil.cpu_info()['brand_raw']
-                    else:
-                        # Fallback pour Windows
-                        import platform
-                        cpu_name = platform.processor()
-                except:
-                    pass
+                    # Méthode 1: Via platform
+                    import platform
+                    cpu_name = platform.processor()
+                    
+                    # Si vide, essayer une autre méthode
+                    if not cpu_name or cpu_name.strip() == "":
+                        # Méthode 2: Via cpuinfo sur Windows
+                        import os
+                        if os.name == 'nt':
+                            cpu_name = os.environ.get('PROCESSOR_IDENTIFIER', 'Unknown CPU')
+                        
+                    # Méthode 3: Via wmic sur Windows (fallback)
+                    if not cpu_name or "Unknown" in cpu_name:
+                        try:
+                            result = subprocess.run(['wmic', 'cpu', 'get', 'name'], 
+                                                  capture_output=True, text=True, timeout=5)
+                            if result.returncode == 0:
+                                lines = result.stdout.strip().split('\n')
+                                for line in lines:
+                                    if line.strip() and 'Name' not in line:
+                                        cpu_name = line.strip()
+                                        break
+                        except:
+                            pass
+                            
+                except Exception as e:
+                    self.logger.debug(f"Erreur détection nom CPU: {e}")
                 
                 # Configuration basée sur le nom
                 cpu_config = self._get_cpu_config(cpu_name)

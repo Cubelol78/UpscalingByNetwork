@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Point d'entrée principal du serveur de calcul distribué pour upscaling vidéo
+Version corrigée pour les problèmes de coroutine
 """
 
 import sys
@@ -44,16 +45,24 @@ def main():
     main_window = MainWindow(server)
     main_window.show()
     
-    # Le serveur ne démarre plus automatiquement au démarrage
-    
     logger.info("Interface graphique démarrée")
     
     # Boucle principale
     exit_code = app.exec_()
     
-    # Nettoyage
+    # Nettoyage - CORRECTION DU PROBLÈME COROUTINE
     logger.info("Arrêt du serveur")
-    server.stop()
+    
+    # Arrêt synchrone du serveur si en cours
+    if server.running:
+        try:
+            # Créer une nouvelle boucle pour l'arrêt propre
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(server.stop())
+            loop.close()
+        except Exception as e:
+            logger.error(f"Erreur lors de l'arrêt du serveur: {e}")
     
     return exit_code
 

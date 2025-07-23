@@ -1,13 +1,13 @@
-# core/batch_manager.py (Updated)
+# core/batch_manager.py (Fixed)
 import os
 import subprocess
 import asyncio
 import shutil
+import time
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
-import re
 from datetime import datetime
-import time
+import re
 
 from models.job import Job, JobStatus
 from models.batch import Batch, BatchStatus
@@ -250,8 +250,6 @@ class BatchManager:
     
     def _create_duplicate_batch(self, original_batch: Batch) -> Batch:
         """Crée un lot dupliqué"""
-        from datetime import datetime
-        
         duplicate = Batch(
             job_id=original_batch.job_id,
             frame_start=original_batch.frame_start,
