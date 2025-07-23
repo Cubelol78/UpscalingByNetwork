@@ -115,8 +115,14 @@ class StatusBarWidget(QFrame):
         self.start_job_btn.setMinimumHeight(30)
         self.start_job_btn.setEnabled(False)
         
+        # Statut processeur natif
+        self.native_status_label = QLabel("Processeur: Vérification...")
+        self.native_status_label.setStyleSheet("font-size: 10px; color: #888;")
+        self.native_status_label.setWordWrap(True)
+        
         controls_layout.addWidget(self.server_control_btn)
         controls_layout.addWidget(self.start_job_btn)
+        controls_layout.addWidget(self.native_status_label)
         controls_layout.addStretch()
         
         # Ajout des groupes au layout
@@ -202,6 +208,21 @@ class StatusBarWidget(QFrame):
         else:
             self.current_job_label.setText("Aucun")
             self.job_progress.setValue(0)
+        
+        # Statut du processeur natif
+        if 'native_processor' in stats:
+            native = stats['native_processor']
+            if native['available']:
+                if native['processing']:
+                    batch_info = f" (lot: {native['current_batch'][:8]})" if native['current_batch'] else ""
+                    self.native_status_label.setText(f"🔄 Traitement natif actif{batch_info}")
+                    self.native_status_label.setStyleSheet("font-size: 10px; color: #4CAF50; font-weight: bold;")
+                else:
+                    self.native_status_label.setText("✅ Processeur natif prêt")
+                    self.native_status_label.setStyleSheet("font-size: 10px; color: #2196F3;")
+            else:
+                self.native_status_label.setText("❌ Real-ESRGAN non disponible")
+                self.native_status_label.setStyleSheet("font-size: 10px; color: #FF9800;")
     
     def update_status_stopped(self):
         """Met à jour la barre de statut quand le serveur est arrêté"""

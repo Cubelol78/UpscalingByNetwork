@@ -31,10 +31,12 @@ class UpscalingServer:
         from core.batch_manager import BatchManager
         from core.client_manager import ClientManager
         from core.video_processor import VideoProcessor
+        from core.native_processor import NativeProcessor
         
         self.batch_manager = BatchManager(self)
         self.client_manager = ClientManager(self)
         self.video_processor = VideoProcessor(self)
+        self.native_processor = NativeProcessor(self)
         
         self.logger.info("Serveur d'upscaling initialisé (arrêté)")
     
@@ -52,6 +54,9 @@ class UpscalingServer:
             # Démarrage des tâches de maintenance
             asyncio.create_task(self._heartbeat_monitor())
             asyncio.create_task(self._batch_assignment_loop())
+            
+            # Démarrage du processeur natif
+            asyncio.create_task(self.native_processor.start_native_processing())
             
             # Démarrage du serveur WebSocket
             self.server = await websockets.serve(
@@ -109,6 +114,9 @@ class UpscalingServer:
             return
             
         self.running = False
+        
+        # Arrêter le processeur natif
+        self.native_processor.stop_native_processing()
         
         # Fermer le serveur WebSocket si il existe
         if self.server:
@@ -402,6 +410,9 @@ class UpscalingServer:
                 "estimated_remaining": job.estimated_remaining_time
             }
         
+        # Statistiques du processeur natif
+        native_status = self.native_processor.get_status()
+        
         return {
             "clients": {
                 "total": total_clients,
@@ -415,6 +426,7 @@ class UpscalingServer:
                 "completed": completed_batches
             },
             "current_job": current_job_info,
+            "native_processor": native_status,
             "server": {
                 "running": self.running,
                 "uptime": int(time.time() - self._start_time)

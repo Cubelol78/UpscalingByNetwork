@@ -14,6 +14,7 @@ from models.job import Job, JobStatus
 from models.batch import Batch
 from config.settings import config
 from utils.logger import get_logger
+from utils.ffmpeg_utils import ffmpeg_utils
 from utils.file_utils import ensure_dir, get_video_info
 
 class VideoProcessor:
@@ -47,6 +48,10 @@ class VideoProcessor:
             job.frame_rate = video_info["frame_rate"]
             job.has_audio = video_info["has_audio"]
             
+            # Ajouter le job au serveur
+            self.server.jobs[job.id] = job
+            self.server.current_job = job.id
+            
             self.logger.info(f"Job créé: {job.id} pour {video_name}")
             return job
             
@@ -57,6 +62,10 @@ class VideoProcessor:
     async def extract_frames(self, job: Job) -> bool:
         """Extrait les frames d'une vidéo"""
         try:
+            if not ffmpeg_utils.available:
+                self.logger.error("FFmpeg non disponible pour l'extraction")
+                return False
+            
             job.status = JobStatus.EXTRACTING
             self.logger.info(f"Extraction des frames pour le job {job.id}")
             
@@ -67,24 +76,18 @@ class VideoProcessor:
             ensure_dir(frames_dir)
             ensure_dir(upscaled_dir)
             
-            # Extraction des frames avec FFmpeg
-            ffmpeg_cmd = [
-                "ffmpeg", "-i", job.input_video_path,
+            # Extraction des frames avec FFmpeg intégré
+            ffmpeg_args = [
+                "-i", job.input_video_path,
                 "-q:v", "1",
                 str(frames_dir / "frame_%06d.png"),
                 "-loglevel", "quiet", "-stats"
             ]
             
-            process = await asyncio.create_subprocess_exec(
-                *ffmpeg_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
+            result = await ffmpeg_utils.run_ffmpeg_async(ffmpeg_args)
             
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode != 0:
-                self.logger.error(f"Erreur FFmpeg extraction: {stderr.decode()}")
+            if result.returncode != 0:
+                self.logger.error(f"Erreur FFmpeg extraction: {result.stderr.decode()}")
                 return False
             
             # Comptage des frames extraites
@@ -118,43 +121,31 @@ class VideoProcessor:
         try:
             audio_path = Path(config.TEMP_DIR) / f"job_{job.id}_audio.aac"
             
-            # Tentative d'extraction en AAC
-            ffmpeg_cmd = [
-                "ffmpeg", "-i", job.input_video_path,
+            # Tentative d'extraction en AAC avec FFmpeg intégré
+            ffmpeg_args = [
+                "-i", job.input_video_path,
                 "-vn", "-acodec", "aac", "-b:a", "192k",
                 str(audio_path), "-loglevel", "error"
             ]
             
-            process = await asyncio.create_subprocess_exec(
-                *ffmpeg_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
+            result = await ffmpeg_utils.run_ffmpeg_async(ffmpeg_args)
             
-            await process.communicate()
-            
-            if process.returncode == 0 and audio_path.exists():
+            if result.returncode == 0 and audio_path.exists():
                 job.audio_path = str(audio_path)
                 self.logger.info("Audio extrait (AAC)")
                 return True
             
             # Tentative alternative en WAV
             audio_path_wav = Path(config.TEMP_DIR) / f"job_{job.id}_audio.wav"
-            ffmpeg_cmd_wav = [
-                "ffmpeg", "-i", job.input_video_path,
+            ffmpeg_args_wav = [
+                "-i", job.input_video_path,
                 "-vn", "-acodec", "pcm_s16le",
                 str(audio_path_wav), "-loglevel", "error"
             ]
             
-            process = await asyncio.create_subprocess_exec(
-                *ffmpeg_cmd_wav,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
+            result = await ffmpeg_utils.run_ffmpeg_async(ffmpeg_args_wav)
             
-            await process.communicate()
-            
-            if process.returncode == 0 and audio_path_wav.exists():
+            if result.returncode == 0 and audio_path_wav.exists():
                 job.audio_path = str(audio_path_wav)
                 self.logger.info("Audio extrait (WAV)")
                 return True
@@ -171,6 +162,10 @@ class VideoProcessor:
     async def assemble_video(self, job: Job) -> bool:
         """Assemble la vidéo finale à partir des frames upscalées"""
         try:
+            if not ffmpeg_utils.available:
+                self.logger.error("FFmpeg non disponible pour l'assemblage")
+                return False
+            
             self.logger.info(f"Assemblage de la vidéo pour le job {job.id}")
             
             upscaled_dir = Path(config.TEMP_DIR) / f"job_{job.id}_upscaled"
@@ -181,19 +176,13 @@ class VideoProcessor:
                 return False
             
             # Construction de la commande FFmpeg
-            ffmpeg_cmd = self._build_ffmpeg_command(job, upscaled_dir)
+            ffmpeg_args = self._build_ffmpeg_args(job, upscaled_dir)
             
             # Exécution de FFmpeg
-            process = await asyncio.create_subprocess_exec(
-                *ffmpeg_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
+            result = await ffmpeg_utils.run_ffmpeg_async(ffmpeg_args)
             
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode != 0:
-                self.logger.error(f"Erreur FFmpeg assemblage: {stderr.decode()}")
+            if result.returncode != 0:
+                self.logger.error(f"Erreur FFmpeg assemblage: {result.stderr.decode()}")
                 return False
             
             # Vérification du fichier de sortie
@@ -237,20 +226,19 @@ class VideoProcessor:
         
         return len(upscaled_frames) > 0
     
-    def _build_ffmpeg_command(self, job: Job, upscaled_dir: Path) -> List[str]:
-        """Construit la commande FFmpeg pour l'assemblage"""
-        cmd = [
-            "ffmpeg",
+    def _build_ffmpeg_args(self, job: Job, upscaled_dir: Path) -> List[str]:
+        """Construit les arguments FFmpeg pour l'assemblage"""
+        args = [
             "-framerate", str(job.frame_rate),
             "-i", str(upscaled_dir / "frame_%06d.png"),
         ]
         
         # Ajout de l'audio si présent
         if job.has_audio and job.audio_path:
-            cmd.extend(["-i", job.audio_path])
+            args.extend(["-i", job.audio_path])
         
         # Configuration vidéo
-        cmd.extend([
+        args.extend([
             "-c:v", "libx264",
             "-crf", str(config.FFMPEG_CRF),
             "-pix_fmt", "yuv420p",
@@ -261,42 +249,39 @@ class VideoProcessor:
         
         # Configuration audio
         if job.has_audio and job.audio_path:
-            cmd.extend([
+            args.extend([
                 "-c:a", "aac",
                 "-async", "1",
                 "-shortest"
             ])
         
         # Fichier de sortie
-        cmd.extend([
+        args.extend([
             job.output_video_path,
             "-loglevel", "quiet",
             "-stats"
         ])
         
-        return cmd
+        return args
     
     async def _verify_av_sync(self, job: Job):
         """Vérifie la synchronisation audio/vidéo"""
         try:
+            if not ffmpeg_utils.available:
+                return
+            
             # Obtention de la durée de la vidéo
-            ffprobe_cmd = [
-                "ffprobe", "-v", "quiet",
+            ffprobe_args = [
+                "-v", "quiet",
                 "-show_entries", "format=duration",
                 "-of", "csv=p=0",
                 job.output_video_path
             ]
             
-            process = await asyncio.create_subprocess_exec(
-                *ffprobe_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
+            result = await ffmpeg_utils.run_ffprobe_async(ffprobe_args)
             
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode == 0:
-                duration = float(stdout.decode().strip())
+            if result.returncode == 0:
+                duration = float(result.stdout.decode().strip())
                 self.logger.info(f"Durée vidéo finale: {duration:.2f}s")
             
         except Exception as e:
@@ -333,28 +318,26 @@ class VideoProcessor:
     async def get_video_info(self, video_path: str) -> Optional[dict]:
         """Obtient les informations d'une vidéo"""
         try:
-            # Détection du framerate
-            ffprobe_cmd = [
-                "ffprobe", "-v", "quiet",
+            if not ffmpeg_utils.available:
+                self.logger.error("FFprobe non disponible pour l'analyse vidéo")
+                return None
+            
+            # Détection du framerate avec FFprobe intégré
+            ffprobe_args = [
+                "-v", "quiet",
                 "-select_streams", "v:0",
                 "-show_entries", "stream=r_frame_rate,duration",
                 "-of", "csv=s=x:p=0",
                 video_path
             ]
             
-            process = await asyncio.create_subprocess_exec(
-                *ffprobe_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
+            result = await ffmpeg_utils.run_ffprobe_async(ffprobe_args)
             
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode != 0:
-                self.logger.error(f"Erreur ffprobe: {stderr.decode()}")
+            if result.returncode != 0:
+                self.logger.error(f"Erreur ffprobe: {result.stderr.decode()}")
                 return None
             
-            output = stdout.decode().strip()
+            output = result.stdout.decode().strip()
             parts = output.split('x')
             
             if len(parts) >= 1 and '/' in parts[0]:
@@ -369,22 +352,16 @@ class VideoProcessor:
                 frame_rate = 30.0
             
             # Détection de l'audio
-            ffprobe_audio_cmd = [
-                "ffprobe", "-v", "quiet",
+            ffprobe_audio_args = [
+                "-v", "quiet",
                 "-select_streams", "a:0",
                 "-show_entries", "stream=codec_type",
                 "-of", "csv=p=0",
                 video_path
             ]
             
-            process_audio = await asyncio.create_subprocess_exec(
-                *ffprobe_audio_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            stdout_audio, _ = await process_audio.communicate()
-            has_audio = process_audio.returncode == 0 and b"audio" in stdout_audio
+            result_audio = await ffmpeg_utils.run_ffprobe_async(ffprobe_audio_args)
+            has_audio = result_audio.returncode == 0 and b"audio" in result_audio.stdout
             
             return {
                 "frame_rate": frame_rate,
