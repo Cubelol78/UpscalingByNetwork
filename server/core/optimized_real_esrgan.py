@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 import logging
+import sys
 
 from utils.hardware_detector import hardware_detector, SystemInfo, GPUInfo
 from config.settings import config
@@ -47,14 +48,15 @@ class OptimizedRealESRGAN:
         possible_names = [
             "realesrgan-ncnn-vulkan.exe",
             "realesrgan-ncnn-vulkan",
-            "realesrgan.exe"
         ]
         
+        # Ajout du chemin local par rapport au projet
+        project_root = Path(__file__).parent.parent
+        local_realesrgan_path = project_root / "realesrgan-ncnn-vulkan" / "Windows"
+
         possible_paths = [
+            local_realesrgan_path, # Ajout du chemin local
             Path.cwd(),
-            Path.cwd() / "tools",
-            Path.cwd() / "bin",
-            Path(os.environ.get('PATH', '')).parent if 'PATH' in os.environ else Path(),
         ]
         
         for path in possible_paths:
@@ -63,10 +65,10 @@ class OptimizedRealESRGAN:
                 if full_path.exists() and full_path.is_file():
                     self.logger.info(f"Real-ESRGAN trouvé: {full_path}")
                     return str(full_path)
-        
-        self.logger.warning("Real-ESRGAN exécutable non trouvé dans les chemins standards")
-        return "realesrgan-ncnn-vulkan.exe"  # Fallback
     
+        self.logger.warning("Real-ESRGAN exécutable non trouvé dans les chemins standards")
+        return None # Retourne None si non trouvé
+
     def _initialize_system(self):
         """Initialise la détection système et optimisations"""
         try:
@@ -89,7 +91,7 @@ class OptimizedRealESRGAN:
         except Exception as e:
             self.logger.error(f"Erreur initialisation système: {e}")
             self._use_fallback_config()
-    
+
     def _validate_configuration(self):
         """Valide et ajuste la configuration si nécessaire"""
         if not self.system_info or not self.optimal_config:
@@ -120,7 +122,7 @@ class OptimizedRealESRGAN:
             
             self.optimal_config['threads'] = f"{min(load, max_threads)}:{min(proc, max_threads)}:{min(save, max_threads)}"
             self.logger.info(f"Threads ajustés pour CPU {self.system_info.cpu.cores_logical} cœurs")
-    
+
     def _use_fallback_config(self):
         """Configuration de fallback en cas de problème"""
         self.optimal_config = {
@@ -132,7 +134,7 @@ class OptimizedRealESRGAN:
             'tta_mode': False,
         }
         self.logger.warning("Utilisation de la configuration de fallback")
-    
+
     async def process_batch(self, input_frames: List[str], output_dir: str, batch_id: str) -> ProcessingResult:
         """Traite un lot d'images avec optimisation automatique"""
         start_time = time.time()
@@ -203,7 +205,7 @@ class OptimizedRealESRGAN:
                 frames_processed=0,
                 error_message=str(e)
             )
-    
+
     def _build_optimized_command(self, input_path: str, output_path: str) -> List[str]:
         """Construit la commande Real-ESRGAN optimisée"""
         cmd = [self.executable_path]
@@ -232,7 +234,7 @@ class OptimizedRealESRGAN:
         cmd.append("-v")
         
         return cmd
-    
+
     async def _monitor_performance(self):
         """Surveille les performances pendant le traitement"""
         try:
@@ -286,7 +288,7 @@ class OptimizedRealESRGAN:
             pass
         except Exception as e:
             self.logger.error(f"Erreur monitoring performance: {e}")
-    
+
     def _get_performance_metrics(self) -> Dict[str, Any]:
         """Récupère les métriques de performance actuelles"""
         if not self.performance_history:
@@ -308,7 +310,7 @@ class OptimizedRealESRGAN:
             'max_temperature': max_temp,
             'samples_count': len(recent_metrics)
         }
-    
+
     def _record_performance(self, result: ProcessingResult, frame_count: int):
         """Enregistre les performances pour optimisation future"""
         if not result.success:
@@ -333,7 +335,7 @@ class OptimizedRealESRGAN:
                 
         except Exception as e:
             self.logger.debug(f"Erreur sauvegarde performances: {e}")
-    
+
     def get_optimal_batch_size(self) -> int:
         """Calcule la taille de lot optimale selon le matériel"""
         if not self.system_info:
@@ -357,7 +359,7 @@ class OptimizedRealESRGAN:
             return max(base_batch_size - 20, 20)
         
         return base_batch_size
-    
+
     def get_recommended_concurrent_batches(self) -> int:
         """Recommande le nombre de lots simultanés selon le matériel"""
         if not self.system_info:
@@ -381,7 +383,7 @@ class OptimizedRealESRGAN:
             concurrent = min(concurrent, 2)
         
         return min(concurrent, 4)  # Maximum 4 lots simultanés
-    
+
     def adapt_to_system_load(self) -> Dict[str, Any]:
         """Adapte la configuration selon la charge système actuelle"""
         try:
@@ -422,7 +424,7 @@ class OptimizedRealESRGAN:
             self.logger.debug(f"Erreur adaptation charge système: {e}")
         
         return {}
-    
+
     def get_system_status(self) -> Dict[str, Any]:
         """Retourne le statut complet du système"""
         status = {
@@ -462,7 +464,7 @@ class OptimizedRealESRGAN:
             }
         
         return status
-    
+
     def benchmark_configuration(self, test_frames: List[str]) -> Dict[str, Any]:
         """Teste et benchmark différentes configurations"""
         self.logger.info("Démarrage du benchmark de configuration...")
