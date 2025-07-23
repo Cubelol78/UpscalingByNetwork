@@ -25,6 +25,34 @@ def get_file_hash(file_path: str, algorithm: str = 'sha256') -> str:
     
     return hash_func.hexdigest()
 
+def format_file_size(size_bytes: int) -> str:
+    """Formate une taille de fichier en format lisible"""
+    if size_bytes == 0:
+        return "0B"
+    
+    size_names = ["B", "KB", "MB", "GB", "TB"]
+    i = 0
+    size = float(size_bytes)
+    while size >= 1024 and i < len(size_names) - 1:
+        size /= 1024
+        i += 1
+    
+    return f"{size:.1f}{size_names[i]}"
+
+def format_duration(seconds: int) -> str:
+    """Formate une durée en format lisible"""
+    if seconds < 60:
+        return f"{seconds}s"
+    elif seconds < 3600:
+        minutes = seconds // 60
+        secs = seconds % 60
+        return f"{minutes}m {secs}s"
+    else:
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+        return f"{hours}h {minutes}m {secs}s"
+
 def get_video_info(video_path: str) -> Optional[Dict[str, Any]]:
     """Obtient les informations basiques d'une vidéo"""
     try:
@@ -76,20 +104,6 @@ def get_video_info(video_path: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logging.getLogger(__name__).error(f"Erreur analyse vidéo: {e}")
         return None
-
-def format_file_size(size_bytes: int) -> str:
-    """Formate une taille de fichier en format lisible"""
-    if size_bytes == 0:
-        return "0B"
-    
-    size_names = ["B", "KB", "MB", "GB", "TB"]
-    i = 0
-    size = float(size_bytes)
-    while size >= 1024 and i < len(size_names) - 1:
-        size /= 1024
-        i += 1
-    
-    return f"{size:.1f}{size_names[i]}"
 
 def format_file_size_gb(size_gb: float) -> str:
     """Formate une taille en GB de manière adaptative"""
@@ -200,17 +214,3 @@ def estimate_video_processing_space(video_path: str) -> dict:
             'error': f"Erreur analyse vidéo: {str(e)}",
             'space_breakdown': {'total_required_gb': 0}
         }
-
-def format_duration(seconds: int) -> str:
-    """Formate une durée en format lisible"""
-    if seconds < 60:
-        return f"{seconds}s"
-    elif seconds < 3600:
-        minutes = seconds // 60
-        secs = seconds % 60
-        return f"{minutes}m {secs}s"
-    else:
-        hours = seconds // 3600
-        minutes = (seconds % 3600) // 60
-        secs = seconds % 60
-        return f"{hours}h {minutes}m {secs}s"

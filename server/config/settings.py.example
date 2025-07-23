@@ -111,12 +111,21 @@ class ServerConfig:
             with open(config_file, 'r', encoding='utf-8') as f:
                 config_dict = json.load(f)
             
-            # Application des valeurs chargées
+            # Application des valeurs chargées avec validation
             for key, value in config_dict.items():
                 if hasattr(self, key):
-                    setattr(self, key, value)
+                    # Validation spéciale pour le disque de travail
+                    if key == 'WORK_DRIVE':
+                        if value and os.path.exists(value):
+                            setattr(self, key, value)
+                        else:
+                            print(f"Disque de travail {value} non trouvé, utilisation du meilleur disque disponible")
+                            setattr(self, key, self.get_best_drive())
+                    else:
+                        setattr(self, key, value)
             
             print(f"Configuration chargée depuis: {config_file}")
+            print(f"Disque de travail configuré: {self.WORK_DRIVE}")
             return True
             
         except Exception as e:

@@ -33,28 +33,18 @@ class NativeProcessor:
             # Chemin vers Real-ESRGAN intégré
             realesrgan_path = Path(__file__).parent.parent / "realesrgan-ncnn-vulkan" / "Windows" / "realesrgan-ncnn-vulkan.exe"
             
-            if not realesrgan_path.exists():
-                self.logger.warning(f"Real-ESRGAN non trouvé: {realesrgan_path}")
+            self.logger.info(f"Vérification de Real-ESRGAN dans: {realesrgan_path}")
+            
+            if realesrgan_path.exists():
+                self.realesrgan_path = str(realesrgan_path)
+                self.logger.info(f"✅ Real-ESRGAN trouvé: {realesrgan_path}")
+                return True
+            else:
+                self.logger.warning(f"❌ Real-ESRGAN non trouvé: {realesrgan_path}")
                 return False
             
-            # Tenter d'exécuter avec --help
-            result = subprocess.run(
-                [str(realesrgan_path), "--help"],
-                capture_output=True,
-                timeout=10
-            )
-            available = result.returncode == 0
-            
-            if available:
-                self.logger.info(f"Real-ESRGAN détecté: {realesrgan_path}")
-                self.realesrgan_path = str(realesrgan_path)
-            else:
-                self.logger.warning("Real-ESRGAN non fonctionnel")
-            
-            return available
-            
-        except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
-            self.logger.warning(f"Real-ESRGAN non disponible: {e}")
+        except Exception as e:
+            self.logger.warning(f"Erreur vérification Real-ESRGAN: {e}")
             return False
     
     async def start_native_processing(self):
