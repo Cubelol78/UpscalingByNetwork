@@ -241,9 +241,16 @@ class ConfigTab(QScrollArea):
                 display_text = f"{mountpoint} - {free_gb:.1f}GB libre ({percent_free:.1f}% libre)"
                 self.drive_combo.addItem(display_text, mountpoint)
             
+            # Sélectionner le disque de travail actuel
             current_index = self.drive_combo.findData(config.WORK_DRIVE)
             if current_index >= 0:
                 self.drive_combo.setCurrentIndex(current_index)
+            else:
+                # Si le disque n'est pas trouvé, essayer de le trouver par le début du nom
+                for i in range(self.drive_combo.count()):
+                    if self.drive_combo.itemData(i) == config.WORK_DRIVE:
+                        self.drive_combo.setCurrentIndex(i)
+                        break
             
             self.update_drive_info()
             

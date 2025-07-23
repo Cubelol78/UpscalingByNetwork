@@ -132,32 +132,39 @@ class MainWindow(QMainWindow, ServerControlMixin, ConfigurationMixin):
     def start_job_async(self, file_path):
         """Démarre un job de manière asynchrone"""
         try:
-            from models.job import Job
-            from models.batch import Batch
-            import uuid
+            # Vérifier que le fichier vidéo existe
+            if not os.path.exists(file_path):
+                QMessageBox.critical(self, "Erreur", f"Le fichier vidéo n'existe pas:\n{file_path}")
+                return
             
-            job = Job(
-                input_video_path=file_path,
-                output_video_path=str(Path(file_path).with_suffix('_upscaled.mp4'))
-            )
+            # Créer le job via le processeur vidéo
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             
-            self.server.jobs[job.id] = job
-            self.server.current_job = job.id
-            
-            for i in range(5):
-                batch = Batch(
-                    job_id=job.id,
-                    frame_start=i*50,
-                    frame_end=(i+1)*50-1,
-                    frame_paths=[f"frame_{j:06d}.png" for j in range(i*50, (i+1)*50)]
-                )
-                self.server.batches[batch.id] = batch
-                job.batches.append(batch.id)
-            
-            job.total_frames = 250
-            job.start()
-            
-            QMessageBox.information(self, "Succès", f"Job créé avec succès!\n{job.total_frames} frames à traiter")
+            try:
+                job = loop.run_until_complete(self.server.video_processor.create_job_from_video(file_path))
+                
+                if job:
+                    # Démarrer l'extraction des frames
+                    success = loop.run_until_complete(self.server.video_processor.extract_frames(job))
+                    
+                    if success:
+                        QMessageBox.information(self, "Succès", 
+                            f"Job créé avec succès!\n"
+                            f"Fichier d'entrée: {Path(file_path).name}\n"
+                            f"Fichier de sortie: {Path(job.output_video_path).name}\n"
+                            f"{job.total_frames} frames extraites\n"
+                            f"{len(job.batches)} lots créés")
+                    else:
+                        QMessageBox.critical(self, "Erreur", 
+                            "Erreur lors de l'extraction des frames")
+                else:
+                    QMessageBox.critical(self, "Erreur", 
+                        "Impossible de créer le job à partir du fichier vidéo")
+                        
+            finally:
+                loop.close()
             
         except Exception as e:
             self.logger.error(f"Erreur création job: {e}")
