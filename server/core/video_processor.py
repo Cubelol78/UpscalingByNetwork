@@ -1,5 +1,5 @@
 """
-Processeur vidéo optimisé avec détection automatique du matériel
+Processeur vidéo optimisé avec détection automatique du matériel et gestion des sous-titres
 """
 
 import os
@@ -7,8 +7,9 @@ import subprocess
 import asyncio
 import shutil
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Any
 import re
+import json
 
 from models.job import Job, JobStatus
 from models.batch import Batch
@@ -19,7 +20,7 @@ from core.optimized_real_esrgan import optimized_realesrgan
 from utils.hardware_detector import hardware_detector
 
 class VideoProcessor:
-    """Gestionnaire du traitement vidéo optimisé"""
+    """Gestionnaire du traitement vidéo optimisé avec gestion des sous-titres"""
     
     def __init__(self, server):
         self.server = server
@@ -61,7 +62,7 @@ class VideoProcessor:
             self.logger.error(f"Erreur initialisation optimisations: {e}")
     
     async def create_job_from_video(self, input_video_path: str) -> Optional[Job]:
-        """Crée un job à partir d'un fichier vidéo avec analyse optimisée"""
+        """Crée un job à partir d'un fichier vidéo avec analyse optimisée et gestion sous-titres"""
         try:
             if not os.path.exists(input_video_path):
                 self.logger.error(f"Fichier vidéo introuvable: {input_video_path}")
@@ -86,24 +87,102 @@ class VideoProcessor:
                 output_video_path=output_path
             )
             
-            # Analyse vidéo détaillée
-            video_info = await self.get_video_info(input_video_path)
+            # Analyse vidéo détaillée avec sous-titres
+            video_info = await self.get_video_info_complete(input_video_path)
             if not video_info:
                 return None
             
             job.frame_rate = video_info["frame_rate"]
             job.has_audio = video_info["has_audio"]
             
+            # Ajout des informations sur les sous-titres
+            if not hasattr(job, 'subtitle_info'):
+                # Si le modèle Job n'a pas subtitle_info, on l'ajoute dynamiquement
+                job.subtitle_info = video_info.get("subtitles", {})
+                job.has_subtitles = len(job.subtitle_info.get("streams", [])) > 0
+            
             # Estimation du temps de traitement basée sur le matériel
             estimated_time = self._estimate_processing_time(video_info, space_analysis)
             self.logger.info(f"Temps de traitement estimé: {estimated_time // 60:.0f}min {estimated_time % 60:.0f}s")
             
+            subtitle_count = len(job.subtitle_info.get("streams", []))
             self.logger.info(f"Job créé: {job.id} pour {video_name} ({video_info['frame_rate']}fps, "
-                           f"audio: {'oui' if job.has_audio else 'non'})")
+                           f"audio: {'oui' if job.has_audio else 'non'}, "
+                           f"sous-titres: {subtitle_count})")
             return job
             
         except Exception as e:
             self.logger.error(f"Erreur création job: {e}")
+            return None
+    
+    async def get_video_info_complete(self, video_path: str) -> Optional[Dict[str, Any]]:
+        """Obtient les informations complètes d'une vidéo incluant les sous-titres"""
+        try:
+            # Commande ffprobe pour obtenir toutes les informations
+            cmd = [
+                'ffprobe', '-v', 'quiet', '-print_format', 'json',
+                '-show_format', '-show_streams', video_path
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                info = json.loads(result.stdout)
+                
+                video_stream = None
+                audio_streams = []
+                subtitle_streams = []
+                
+                # Analyse de tous les streams
+                for i, stream in enumerate(info.get('streams', [])):
+                    if stream['codec_type'] == 'video' and not video_stream:
+                        video_stream = stream
+                    elif stream['codec_type'] == 'audio':
+                        audio_streams.append({
+                            'index': i,
+                            'codec': stream.get('codec_name', 'unknown'),
+                            'language': stream.get('tags', {}).get('language', 'und'),
+                            'title': stream.get('tags', {}).get('title', ''),
+                            'channels': stream.get('channels', 0),
+                            'sample_rate': stream.get('sample_rate', 0)
+                        })
+                    elif stream['codec_type'] == 'subtitle':
+                        subtitle_streams.append({
+                            'index': i,
+                            'codec': stream.get('codec_name', 'unknown'),
+                            'language': stream.get('tags', {}).get('language', 'und'),
+                            'title': stream.get('tags', {}).get('title', ''),
+                            'forced': stream.get('disposition', {}).get('forced', 0) == 1,
+                            'default': stream.get('disposition', {}).get('default', 0) == 1
+                        })
+                
+                if video_stream:
+                    # Calcul du framerate
+                    r_frame_rate = video_stream.get('r_frame_rate', '30/1')
+                    if '/' in r_frame_rate:
+                        num, den = r_frame_rate.split('/')
+                        frame_rate = float(num) / float(den) if float(den) != 0 else 30.0
+                    else:
+                        frame_rate = float(r_frame_rate)
+                    
+                    return {
+                        'width': int(video_stream.get('width', 0)),
+                        'height': int(video_stream.get('height', 0)),
+                        'frame_rate': round(frame_rate, 3),
+                        'duration': float(info['format'].get('duration', 0)),
+                        'has_audio': len(audio_streams) > 0,
+                        'video_codec': video_stream.get('codec_name', ''),
+                        'audio_streams': audio_streams,
+                        'subtitles': {
+                            'count': len(subtitle_streams),
+                            'streams': subtitle_streams
+                        }
+                    }
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Erreur analyse vidéo complète: {e}")
             return None
     
     def _analyze_video_requirements(self, video_path: str) -> dict:
@@ -189,7 +268,7 @@ class VideoProcessor:
         return max(total_seconds, 60)  # Minimum 1 minute
     
     async def extract_frames(self, job: Job) -> bool:
-        """Extrait les frames d'une vidéo avec optimisations"""
+        """Extrait les frames d'une vidéo avec optimisations et extraction des sous-titres"""
         try:
             job.status = JobStatus.EXTRACTING
             self.logger.info(f"Extraction des frames pour le job {job.id}")
@@ -233,6 +312,10 @@ class VideoProcessor:
             if job.has_audio:
                 await self._extract_audio_optimized(job)
             
+            # Extraction des sous-titres si présents
+            if hasattr(job, 'subtitle_info') and job.subtitle_info.get('count', 0) > 0:
+                await self._extract_subtitles(job)
+            
             # Création des lots avec taille optimisée
             frame_paths = [str(f) for f in sorted(frame_files)]
             optimal_batch_size = optimized_realesrgan.get_optimal_batch_size()
@@ -244,8 +327,9 @@ class VideoProcessor:
             job.batches = [batch.id for batch in batches]
             
             job.start()
+            subtitle_count = job.subtitle_info.get('count', 0) if hasattr(job, 'subtitle_info') else 0
             self.logger.info(f"Extraction terminée: {job.total_frames} frames, {len(batches)} lots "
-                           f"(taille optimale: {optimal_batch_size})")
+                           f"(taille optimale: {optimal_batch_size}), {subtitle_count} sous-titres")
             return True
             
         except Exception as e:
@@ -334,8 +418,87 @@ class VideoProcessor:
             job.has_audio = False
             return False
     
+    async def _extract_subtitles(self, job: Job) -> bool:
+        """Extrait tous les sous-titres de la vidéo"""
+        try:
+            if not hasattr(job, 'subtitle_info') or job.subtitle_info.get('count', 0) == 0:
+                return True
+            
+            self.logger.info(f"Extraction de {job.subtitle_info['count']} pistes de sous-titres")
+            
+            job.subtitle_paths = []
+            
+            for subtitle_stream in job.subtitle_info['streams']:
+                stream_index = subtitle_stream['index']
+                language = subtitle_stream.get('language', 'und')
+                codec = subtitle_stream.get('codec', 'unknown')
+                
+                # Déterminer l'extension selon le codec
+                if codec in ['subrip', 'srt']:
+                    ext = 'srt'
+                elif codec in ['ass', 'ssa']:
+                    ext = 'ass'
+                elif codec in ['webvtt']:
+                    ext = 'vtt'
+                elif codec in ['dvd_subtitle', 'dvdsub']:
+                    ext = 'sub'
+                elif codec in ['hdmv_pgs_subtitle']:
+                    ext = 'sup'
+                else:
+                    ext = 'srt'  # Fallback vers SRT
+                
+                # Chemin de sortie pour ce sous-titre
+                subtitle_path = Path(config.TEMP_DIR) / f"job_{job.id}_subtitle_{stream_index}_{language}.{ext}"
+                
+                try:
+                    # Commande FFmpeg pour extraire ce sous-titre
+                    cmd = [
+                        "ffmpeg", "-i", job.input_video_path,
+                        "-map", f"0:s:{len([s for s in job.subtitle_info['streams'] if s['index'] < stream_index])}",
+                        "-c", "copy" if ext != 'srt' else 'srt',
+                        str(subtitle_path),
+                        "-loglevel", "error"
+                    ]
+                    
+                    # Si le codec n'est pas compatible, essayer de convertir en SRT
+                    if codec not in ['subrip', 'srt'] and ext == 'srt':
+                        cmd[cmd.index("-c")+1] = "srt"
+                    
+                    process = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE
+                    )
+                    
+                    stdout, stderr = await process.communicate()
+                    
+                    if process.returncode == 0 and subtitle_path.exists():
+                        job.subtitle_paths.append({
+                            'path': str(subtitle_path),
+                            'language': language,
+                            'codec': codec,
+                            'index': stream_index,
+                            'title': subtitle_stream.get('title', ''),
+                            'forced': subtitle_stream.get('forced', False),
+                            'default': subtitle_stream.get('default', False)
+                        })
+                        self.logger.info(f"Sous-titre extrait: {language} ({codec}) -> {subtitle_path.name}")
+                    else:
+                        self.logger.warning(f"Échec extraction sous-titre {stream_index} ({language})")
+                        
+                except Exception as e:
+                    self.logger.warning(f"Erreur extraction sous-titre {stream_index}: {e}")
+                    continue
+            
+            self.logger.info(f"Extraction sous-titres terminée: {len(job.subtitle_paths)} / {job.subtitle_info['count']}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Erreur extraction sous-titres: {e}")
+            return False
+    
     async def assemble_video(self, job: Job) -> bool:
-        """Assemble la vidéo finale à partir des frames upscalées avec optimisations"""
+        """Assemble la vidéo finale à partir des frames upscalées avec audio et sous-titres"""
         try:
             self.logger.info(f"Assemblage de la vidéo pour le job {job.id}")
             
@@ -346,8 +509,8 @@ class VideoProcessor:
                 self.logger.error("Frames upscalés manquants")
                 return False
             
-            # Construction de la commande FFmpeg optimisée
-            ffmpeg_cmd = self._build_optimized_ffmpeg_assemble_command(job, upscaled_dir)
+            # Construction de la commande FFmpeg optimisée avec sous-titres
+            ffmpeg_cmd = self._build_optimized_ffmpeg_assemble_command_with_subtitles(job, upscaled_dir)
             
             self.logger.debug(f"Commande assemblage: {' '.join(ffmpeg_cmd)}")
             
@@ -376,24 +539,38 @@ class VideoProcessor:
             # Nettoyage des fichiers temporaires
             await self._cleanup_job_files(job)
             
-            self.logger.info(f"Assemblage terminé: {job.output_video_path}")
+            subtitle_count = len(getattr(job, 'subtitle_paths', []))
+            self.logger.info(f"Assemblage terminé: {job.output_video_path} "
+                           f"(audio: {'oui' if job.has_audio else 'non'}, "
+                           f"sous-titres: {subtitle_count})")
             return True
             
         except Exception as e:
             self.logger.error(f"Erreur assemblage vidéo: {e}")
             return False
     
-    def _build_optimized_ffmpeg_assemble_command(self, job: Job, upscaled_dir: Path) -> List[str]:
-        """Construit la commande FFmpeg optimisée pour l'assemblage"""
+    def _build_optimized_ffmpeg_assemble_command_with_subtitles(self, job: Job, upscaled_dir: Path) -> List[str]:
+        """Construit la commande FFmpeg optimisée pour l'assemblage avec sous-titres"""
         cmd = ["ffmpeg"]
         
-        # Entrée vidéo
+        # Entrée vidéo (frames upscalées)
         cmd.extend(["-framerate", str(job.frame_rate)])
         cmd.extend(["-i", str(upscaled_dir / "frame_%06d.png")])
         
+        input_count = 1
+        
         # Ajout de l'audio si présent
-        if job.has_audio and job.audio_path:
+        if job.has_audio and hasattr(job, 'audio_path') and job.audio_path:
             cmd.extend(["-i", job.audio_path])
+            input_count += 1
+        
+        # Ajout des sous-titres comme fichiers séparés
+        subtitle_inputs = []
+        if hasattr(job, 'subtitle_paths') and job.subtitle_paths:
+            for subtitle in job.subtitle_paths:
+                cmd.extend(["-i", subtitle['path']])
+                subtitle_inputs.append(subtitle)
+                input_count += 1
         
         # Configuration vidéo optimisée
         cmd.extend(["-c:v", "libx264"])
@@ -414,10 +591,32 @@ class VideoProcessor:
             cmd.extend(["-x264-params", "ref=4:bframes=3:subme=8:me=umh"])
         
         # Configuration audio
-        if job.has_audio and job.audio_path:
+        if job.has_audio and hasattr(job, 'audio_path') and job.audio_path:
             cmd.extend(["-c:a", "aac"])
             cmd.extend(["-async", "1"])
-            cmd.extend(["-shortest"])
+        
+        # Configuration des sous-titres
+        if subtitle_inputs:
+            # Mapper tous les sous-titres
+            for i, subtitle in enumerate(subtitle_inputs):
+                subtitle_index = 1 + (1 if job.has_audio else 0) + i  # Index dans les inputs FFmpeg
+                cmd.extend(["-map", f"{subtitle_index}"])
+            
+            # Codec pour les sous-titres (mov_text pour MP4)
+            cmd.extend(["-c:s", "mov_text"])
+            
+            # Métadonnées pour les sous-titres
+            for i, subtitle in enumerate(subtitle_inputs):
+                if subtitle.get('language') and subtitle['language'] != 'und':
+                    cmd.extend([f"-metadata:s:s:{i}", f"language={subtitle['language']}"])
+                if subtitle.get('title'):
+                    cmd.extend([f"-metadata:s:s:{i}", f"title={subtitle['title']}"])
+                
+                # Marquer comme défaut si c'était le défaut dans l'original
+                if subtitle.get('default', False):
+                    cmd.extend([f"-disposition:s:{i}", "default"])
+                elif subtitle.get('forced', False):
+                    cmd.extend([f"-disposition:s:{i}", "forced"])
         
         # Fichier de sortie
         cmd.extend([job.output_video_path])
@@ -490,6 +689,11 @@ class VideoProcessor:
                 Path(config.TEMP_DIR) / f"job_{job.id}_audio.wav"
             ]
             
+            # Ajout des fichiers de sous-titres à nettoyer
+            if hasattr(job, 'subtitle_paths') and job.subtitle_paths:
+                for subtitle in job.subtitle_paths:
+                    temp_files.append(Path(subtitle['path']))
+            
             # Suppression des dossiers
             for temp_dir in temp_dirs:
                 if temp_dir.exists():
@@ -506,7 +710,7 @@ class VideoProcessor:
             self.logger.warning(f"Erreur nettoyage fichiers temporaires: {e}")
     
     async def get_video_info(self, video_path: str) -> Optional[dict]:
-        """Obtient les informations d'une vidéo avec optimisations"""
+        """Obtient les informations d'une vidéo avec optimisations (version simple pour compatibilité)"""
         try:
             # Détection du framerate
             ffprobe_cmd = [
@@ -569,3 +773,125 @@ class VideoProcessor:
         except Exception as e:
             self.logger.error(f"Erreur analyse vidéo: {e}")
             return None
+    
+    def get_supported_subtitle_formats(self) -> List[str]:
+        """Retourne la liste des formats de sous-titres supportés"""
+        return [
+            'srt',     # SubRip Text
+            'ass',     # Advanced SubStation Alpha
+            'ssa',     # SubStation Alpha
+            'vtt',     # WebVTT
+            'sub',     # MicroDVD/DVD Subtitle
+            'sup',     # Blu-ray PGS
+            'idx',     # VobSub
+            'smi',     # SAMI
+            'ttml',    # Timed Text Markup Language
+            'dfxp'     # Distribution Format Exchange Profile
+        ]
+    
+    def analyze_subtitle_compatibility(self, job: Job) -> Dict[str, Any]:
+        """Analyse la compatibilité des sous-titres avec le format de sortie"""
+        if not hasattr(job, 'subtitle_info') or not job.subtitle_info.get('streams'):
+            return {'compatible': True, 'warnings': []}
+        
+        compatible_codecs = ['subrip', 'srt', 'ass', 'ssa', 'webvtt', 'mov_text']
+        warnings = []
+        compatible_streams = []
+        
+        for stream in job.subtitle_info['streams']:
+            codec = stream.get('codec', 'unknown')
+            
+            if codec in compatible_codecs:
+                compatible_streams.append(stream)
+            elif codec in ['dvd_subtitle', 'dvdsub', 'hdmv_pgs_subtitle']:
+                warnings.append(f"Sous-titre {stream['language']} ({codec}) sera converti en SRT")
+                compatible_streams.append(stream)
+            else:
+                warnings.append(f"Sous-titre {stream['language']} ({codec}) pourrait ne pas être compatible")
+        
+        return {
+            'compatible': len(compatible_streams) > 0,
+            'compatible_streams': compatible_streams,
+            'total_streams': len(job.subtitle_info['streams']),
+            'warnings': warnings
+        }
+    
+    async def create_subtitle_preview(self, job: Job) -> Optional[str]:
+        """Crée un aperçu des sous-titres disponibles dans la vidéo"""
+        if not hasattr(job, 'subtitle_info') or not job.subtitle_info.get('streams'):
+            return None
+        
+        try:
+            preview_lines = []
+            preview_lines.append(f"=== SOUS-TITRES DÉTECTÉS ({job.subtitle_info['count']}) ===")
+            
+            for i, stream in enumerate(job.subtitle_info['streams']):
+                language = stream.get('language', 'unknown')
+                codec = stream.get('codec', 'unknown')
+                title = stream.get('title', '')
+                forced = ' [FORCÉ]' if stream.get('forced') else ''
+                default = ' [DÉFAUT]' if stream.get('default') else ''
+                
+                preview_lines.append(f"{i+1}. {language.upper()} ({codec}){forced}{default}")
+                if title:
+                    preview_lines.append(f"   Titre: {title}")
+            
+            preview_lines.append("")
+            
+            # Analyse de compatibilité
+            compat = self.analyze_subtitle_compatibility(job)
+            if compat['warnings']:
+                preview_lines.append("⚠️  AVERTISSEMENTS:")
+                for warning in compat['warnings']:
+                    preview_lines.append(f"   - {warning}")
+                preview_lines.append("")
+            
+            preview_lines.append(f"✅ {len(compat['compatible_streams'])}/{compat['total_streams']} pistes compatibles")
+            
+            return "\n".join(preview_lines)
+            
+        except Exception as e:
+            self.logger.error(f"Erreur création aperçu sous-titres: {e}")
+            return None
+    
+    def get_processing_statistics(self, job: Job) -> Dict[str, Any]:
+        """Retourne les statistiques de traitement pour un job"""
+        stats = {
+            'job_id': job.id,
+            'input_file': Path(job.input_video_path).name if job.input_video_path else 'Unknown',
+            'total_frames': job.total_frames,
+            'frame_rate': job.frame_rate,
+            'has_audio': job.has_audio,
+            'audio_extracted': hasattr(job, 'audio_path') and job.audio_path is not None,
+            'subtitles': {
+                'detected': getattr(job, 'subtitle_info', {}).get('count', 0),
+                'extracted': len(getattr(job, 'subtitle_paths', [])),
+                'languages': []
+            },
+            'batches': {
+                'total': len(job.batches),
+                'completed': job.completed_batches,
+                'progress_percent': job.progress
+            },
+            'timing': {
+                'created_at': job.created_at.isoformat(),
+                'processing_time': job.processing_time,
+                'estimated_remaining': job.estimated_remaining_time
+            },
+            'status': job.status.value
+        }
+        
+        # Ajout des langues de sous-titres
+        if hasattr(job, 'subtitle_paths') and job.subtitle_paths:
+            stats['subtitles']['languages'] = [
+                {
+                    'language': sub.get('language', 'unknown'),
+                    'title': sub.get('title', ''),
+                    'codec': sub.get('codec', 'unknown'),
+                    'forced': sub.get('forced', False),
+                    'default': sub.get('default', False)
+                }
+                for sub in job.subtitle_paths
+            ]
+        
+        return stats

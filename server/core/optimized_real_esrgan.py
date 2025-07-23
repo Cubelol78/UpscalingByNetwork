@@ -70,25 +70,33 @@ class OptimizedRealESRGAN:
         return None # Retourne None si non trouvé
 
     def _initialize_system(self):
-        """Initialise la détection système et optimisations"""
+        """Initialise la détection système et optimisations avec debug renforcé"""
         try:
+            print("🔍 Détection du matériel système pour Real-ESRGAN...")
             self.logger.info("Détection du matériel système...")
             self.system_info = hardware_detector.detect_system_info()
             
-            # Configuration optimale
+            # Configuration optimale avec debug
+            print("⚙️ Génération de la configuration optimale...")
             self.optimal_config = hardware_detector.optimize_realesrgan_config(
                 self.system_info, 
                 config.REALESRGAN_MODEL
             )
             
+            print(f"✅ Configuration générée: {self.optimal_config}")
+            
             # Affichage du résumé
             summary = hardware_detector.get_system_performance_summary(self.system_info)
             self.logger.info(f"\n{summary}")
+            print(f"\n{summary}")
             
             # Validation de la configuration
             self._validate_configuration()
             
+            print(f"🎯 Configuration finale validée: {self.optimal_config}")
+            
         except Exception as e:
+            print(f"❌ Erreur initialisation système: {e}")
             self.logger.error(f"Erreur initialisation système: {e}")
             self._use_fallback_config()
 
@@ -207,7 +215,12 @@ class OptimizedRealESRGAN:
             )
 
     def _build_optimized_command(self, input_path: str, output_path: str) -> List[str]:
-        """Construit la commande Real-ESRGAN optimisée"""
+        """Construit la commande Real-ESRGAN optimisée avec debug"""
+        print(f"🔧 Construction commande Real-ESRGAN optimisée...")
+        
+        if not self.executable_path:
+            raise RuntimeError("Exécutable Real-ESRGAN non trouvé")
+        
         cmd = [self.executable_path]
         
         # Paramètres de base
@@ -216,23 +229,33 @@ class OptimizedRealESRGAN:
         cmd.extend(["-n", self.optimal_config['model']])
         cmd.extend(["-f", "png"])
         
-        # GPU selection
-        if self.optimal_config.get('gpu_id', -1) >= 0:
-            cmd.extend(["-g", str(self.optimal_config['gpu_id'])])
+        # GPU selection - CORRECTION CRITIQUE
+        gpu_id = self.optimal_config.get('gpu_id', 0)
+        if gpu_id >= 0:
+            cmd.extend(["-g", str(gpu_id)])
+            print(f"🎯 GPU sélectionné: {gpu_id}")
+        else:
+            print("🖥️ Mode CPU seulement")
         
         # Tile size optimisé
-        cmd.extend(["-t", str(self.optimal_config['tile_size'])])
+        tile_size = self.optimal_config['tile_size']
+        cmd.extend(["-t", str(tile_size)])
+        print(f"🔲 Tile size: {tile_size}")
         
         # Threads optimisés
-        cmd.extend(["-j", self.optimal_config['threads']])
+        threads = self.optimal_config['threads']
+        cmd.extend(["-j", threads])
+        print(f"🧵 Threads: {threads}")
         
         # Options avancées
         if self.optimal_config.get('tta_mode', False):
             cmd.append("-x")  # TTA mode pour qualité supérieure
+            print("✨ Mode TTA activé")
         
         # Mode verbose pour monitoring
         cmd.append("-v")
         
+        print(f"🚀 Commande finale: {' '.join(cmd)}")
         return cmd
 
     async def _monitor_performance(self):
@@ -337,27 +360,62 @@ class OptimizedRealESRGAN:
             self.logger.debug(f"Erreur sauvegarde performances: {e}")
 
     def get_optimal_batch_size(self) -> int:
-        """Calcule la taille de lot optimale selon le matériel"""
+        """Calcule la taille de lot optimale selon le matériel - VERSION CORRIGÉE POUR RTX 3050"""
         if not self.system_info:
+            print("⚠️ Pas d'info système, utilisation taille par défaut")
             return config.BATCH_SIZE
         
         base_batch_size = config.BATCH_SIZE
+        print(f"📏 Taille de base: {base_batch_size}")
         
-        # Ajustement selon la VRAM du GPU principal
+        # Ajustement selon la VRAM du GPU principal - CORRECTION POUR RTX 3050
         if self.system_info.gpus:
-            main_gpu = self.system_info.gpus[0]
+            # Chercher spécifiquement le RTX 3050
+            rtx_gpu = None
+            for gpu in self.system_info.gpus:
+                if "RTX" in gpu.name.upper() and "3050" in gpu.name.upper():
+                    rtx_gpu = gpu
+                    break
             
-            if main_gpu.memory_total_mb >= 16384:  # >= 16GB
-                return min(base_batch_size * 2, 100)
-            elif main_gpu.memory_total_mb <= 4096:  # <= 4GB
-                return max(base_batch_size // 2, 10)
+            # Si on a trouvé le RTX 3050, l'utiliser
+            if rtx_gpu:
+                main_gpu = rtx_gpu
+                print(f"🎯 RTX 3050 détecté: {main_gpu.name} ({main_gpu.memory_total_mb}MB)")
+            else:
+                main_gpu = max(self.system_info.gpus, key=lambda g: g.memory_total_mb if "NVIDIA" in g.name else 0)
+                print(f"🎯 GPU principal: {main_gpu.name} ({main_gpu.memory_total_mb}MB)")
+            
+            # Configuration spéciale pour RTX 3050
+            if "3050" in main_gpu.name.upper():
+                # RTX 3050 peut gérer des lots plus gros que prévu
+                optimal_size = max(base_batch_size * 2, 15)  # Au moins 15 images par lot
+                print(f"🚀 RTX 3050 optimisé: taille ajustée à {optimal_size}")
+                return min(optimal_size, 25)  # Maximum 25 pour éviter les timeouts
+            
+            elif main_gpu.memory_total_mb >= 16384:  # >= 16GB
+                optimal_size = min(base_batch_size * 3, 100)
+                print(f"🚀 GPU haute VRAM: taille ajustée à {optimal_size}")
+                return optimal_size
+            elif main_gpu.memory_total_mb >= 8192:  # >= 8GB
+                optimal_size = min(base_batch_size * 2, 60)
+                print(f"📈 GPU moyenne VRAM: taille ajustée à {optimal_size}")
+                return optimal_size
+            elif main_gpu.memory_total_mb <= 2048:  # <= 2GB
+                optimal_size = max(base_batch_size // 3, 5)
+                print(f"⚠️ GPU très faible VRAM: taille réduite à {optimal_size}")
+                return optimal_size
         
         # Ajustement selon la RAM système
         if self.system_info.ram_total_gb >= 32:
-            return min(base_batch_size + 20, 80)
+            optimal_size = min(base_batch_size + 10, 40)
+            print(f"💾 RAM élevée: taille ajustée à {optimal_size}")
+            return optimal_size
         elif self.system_info.ram_total_gb <= 8:
-            return max(base_batch_size - 20, 20)
+            optimal_size = max(base_batch_size // 2, 8)
+            print(f"💾 RAM faible: taille réduite à {optimal_size}")
+            return optimal_size
         
+        print(f"📏 Taille finale: {base_batch_size}")
         return base_batch_size
 
     def get_recommended_concurrent_batches(self) -> int:

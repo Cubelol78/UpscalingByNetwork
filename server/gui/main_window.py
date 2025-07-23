@@ -1,5 +1,7 @@
+# server/gui/main_window.py - Corrections pour mise à jour interface
+
 """
-Interface graphique pour le serveur d'upscaling distribué - Classe principale
+Interface graphique pour le serveur d'upscaling distribué - CORRIGÉE
 """
 
 import sys
@@ -50,7 +52,6 @@ class MainWindow(QMainWindow, ServerControlMixin, ConfigurationMixin):
         self.setup_connections()
         
         # Chargement de la configuration sauvegardée dans l'interface
-        # (après que tous les widgets soient créés)
         self.load_saved_configuration()
         
         # Démarrage du monitoring
@@ -77,13 +78,20 @@ class MainWindow(QMainWindow, ServerControlMixin, ConfigurationMixin):
     
     def setup_timers(self):
         """Configure les timers pour les mises à jour"""
+        # Timer principal - plus fréquent pour les mises à jour critiques
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self.update_interface)
-        self.update_timer.start(config.GUI_UPDATE_INTERVAL)
+        self.update_timer.start(500)  # 500ms au lieu de 1000ms pour plus de réactivité
         
+        # Timer pour les graphiques de performance
         self.performance_timer = QTimer()
         self.performance_timer.timeout.connect(self.update_performance_charts)
         self.performance_timer.start(5000)
+        
+        # Timer spécial pour les jobs/lots - mise à jour plus fréquente
+        self.jobs_timer = QTimer()
+        self.jobs_timer.timeout.connect(self.update_jobs_display)
+        self.jobs_timer.start(1000)  # Chaque seconde pour les jobs
     
     def setup_connections(self):
         """Configure les connexions de signaux"""
@@ -95,13 +103,38 @@ class MainWindow(QMainWindow, ServerControlMixin, ConfigurationMixin):
             if self.server.running:
                 stats = self.server.get_statistics()
                 self.status_bar.update_status(stats)
-                self.tabs_manager.update_current_tab(stats)
+                
+                # Mise à jour de l'onglet actuel seulement
+                current_tab_index = self.tabs_manager.currentIndex()
+                if current_tab_index == 0:  # Vue d'ensemble
+                    self.tabs_manager.overview_tab.update_tab(stats)
+                elif current_tab_index == 1:  # Clients
+                    self.tabs_manager.clients_tab.update_tab()
             else:
                 # Serveur arrêté - mise à jour basique
                 self.status_bar.update_status_stopped()
             
         except Exception as e:
             self.logger.error(f"Erreur mise à jour interface: {e}")
+    
+    def update_jobs_display(self):
+        """Met à jour spécifiquement l'affichage des jobs et lots"""
+        try:
+            if not self.server.running:
+                return
+            
+            # Mise à jour forcée de l'onglet Jobs & Lots s'il est visible
+            current_tab_index = self.tabs_manager.currentIndex()
+            if current_tab_index == 2:  # Jobs & Lots
+                self.tabs_manager.jobs_tab.update_tab()
+            
+            # Force la mise à jour de la barre de statut pour les jobs
+            if hasattr(self, 'status_bar'):
+                stats = self.server.get_statistics()
+                self.status_bar.update_status(stats)
+                
+        except Exception as e:
+            self.logger.debug(f"Erreur mise à jour jobs: {e}")
     
     def update_performance_charts(self):
         """Met à jour les graphiques de performance"""
@@ -130,45 +163,90 @@ class MainWindow(QMainWindow, ServerControlMixin, ConfigurationMixin):
             self.start_job_async(file_path)
     
     def start_job_async(self, file_path):
-        """Démarre un job de manière asynchrone"""
+        """Démarre un job de manière asynchrone - VERSION CORRIGÉE"""
         try:
             # Vérifier que le fichier vidéo existe
             if not os.path.exists(file_path):
                 QMessageBox.critical(self, "Erreur", f"Le fichier vidéo n'existe pas:\n{file_path}")
                 return
             
-            # Créer le job via le processeur vidéo
-            import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            try:
-                job = loop.run_until_complete(self.server.video_processor.create_job_from_video(file_path))
-                
-                if job:
-                    # Démarrer l'extraction des frames
-                    success = loop.run_until_complete(self.server.video_processor.extract_frames(job))
+            # Créer le job via le processeur vidéo dans un thread
+            def create_job_thread():
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
                     
-                    if success:
-                        QMessageBox.information(self, "Succès", 
-                            f"Job créé avec succès!\n"
-                            f"Fichier d'entrée: {Path(file_path).name}\n"
-                            f"Fichier de sortie: {Path(job.output_video_path).name}\n"
-                            f"{job.total_frames} frames extraites\n"
-                            f"{len(job.batches)} lots créés")
-                    else:
-                        QMessageBox.critical(self, "Erreur", 
-                            "Erreur lors de l'extraction des frames")
-                else:
-                    QMessageBox.critical(self, "Erreur", 
-                        "Impossible de créer le job à partir du fichier vidéo")
+                    try:
+                        job = loop.run_until_complete(self.server.video_processor.create_job_from_video(file_path))
                         
-            finally:
-                loop.close()
+                        if job:
+                            # Démarrer l'extraction des frames
+                            success = loop.run_until_complete(self.server.video_processor.extract_frames(job))
+                            
+                            if success:
+                                # Ajouter le job au serveur et le marquer comme actuel
+                                self.server.jobs[job.id] = job
+                                self.server.current_job = job.id
+                                
+                                # Notification de succès dans le thread principal - CORRECTION
+                                from PyQt5.QtCore import QMetaObject, Qt
+                                QMetaObject.invokeMethod(self, "show_job_success", Qt.QueuedConnection,
+                                                       Q_ARG(str, Path(file_path).name),
+                                                       Q_ARG(str, Path(job.output_video_path).name),
+                                                       Q_ARG(int, job.total_frames),
+                                                       Q_ARG(int, len(job.batches)))
+                            else:
+                                QMetaObject.invokeMethod(self, "show_job_error", Qt.QueuedConnection,
+                                                       Q_ARG(str, "Erreur lors de l'extraction des frames"))
+                        else:
+                            QMetaObject.invokeMethod(self, "show_job_error", Qt.QueuedConnection,
+                                                   Q_ARG(str, "Impossible de créer le job à partir du fichier vidéo"))
+                    finally:
+                        loop.close()
+                        
+                except Exception as e:
+                    self.logger.error(f"Erreur création job: {e}")
+                    from PyQt5.QtCore import QMetaObject, Qt, Q_ARG
+                    QMetaObject.invokeMethod(self, "show_job_error", Qt.QueuedConnection,
+                                           Q_ARG(str, f"Erreur lors de la création du job:\n{str(e)}"))
+            
+            # Lancer dans un thread séparé
+            thread = threading.Thread(target=create_job_thread, daemon=True)
+            thread.start()
             
         except Exception as e:
-            self.logger.error(f"Erreur création job: {e}")
+            self.logger.error(f"Erreur start_job_async: {e}")
             QMessageBox.critical(self, "Erreur", f"Erreur lors de la création du job:\n{str(e)}")
+    
+    @pyqtSlot(str, str, int, int)
+    def show_job_success(self, input_name, output_name, frames, batches):
+        """Affiche le message de succès pour un job"""
+        QMessageBox.information(self, "Succès", 
+            f"Job créé avec succès!\n"
+            f"Fichier d'entrée: {input_name}\n"
+            f"Fichier de sortie: {output_name}\n"
+            f"{frames} frames extraites\n"
+            f"{batches} lots créés")
+    
+    @pyqtSlot(str)
+    def show_job_error(self, error_message):
+        """Affiche le message d'erreur pour un job"""
+        QMessageBox.critical(self, "Erreur", error_message)
+    
+    @pyqtSlot(str, str, int, int)
+    def show_job_success(self, input_name, output_name, frames, batches):
+        """Affiche le message de succès pour un job"""
+        QMessageBox.information(self, "Succès", 
+            f"Job créé avec succès!\n"
+            f"Fichier d'entrée: {input_name}\n"
+            f"Fichier de sortie: {output_name}\n"
+            f"{frames} frames extraites\n"
+            f"{batches} lots créés")
+    
+    @pyqtSlot(str)
+    def show_job_error(self, error_message):
+        """Affiche le message d'erreur pour un job"""
+        QMessageBox.critical(self, "Erreur", error_message)
     
     def closeEvent(self, event):
         """Gestionnaire de fermeture de l'application"""
@@ -178,13 +256,21 @@ class MainWindow(QMainWindow, ServerControlMixin, ConfigurationMixin):
         )
         
         if reply == QMessageBox.Yes:
+            # Arrêter les timers
+            if hasattr(self, 'update_timer'):
+                self.update_timer.stop()
+            if hasattr(self, 'performance_timer'):
+                self.performance_timer.stop()
+            if hasattr(self, 'jobs_timer'):
+                self.jobs_timer.stop()
+            
             performance_monitor.stop_monitoring()
             
             if self.server.running:
                 try:
-                    asyncio.create_task(self.server.stop())
-                except:
-                    pass
+                    self.server.stop_sync()
+                except Exception as e:
+                    self.logger.error(f"Erreur arrêt serveur lors fermeture: {e}")
             
             event.accept()
         else:

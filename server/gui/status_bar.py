@@ -1,5 +1,5 @@
 """
-Barre d'état pour l'interface principale avec logique simplifiée des boutons
+Barre d'état pour l'interface principale avec logique simplifiée des boutons - VERSION CORRIGÉE
 """
 
 from PyQt5.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel, 
@@ -76,20 +76,33 @@ class StatusBarWidget(QFrame):
         batches_layout.addWidget(self.batches_completed_label)
         batches_layout.addStretch()
         
-        # Job actuel
+        # Job actuel - VERSION AMÉLIORÉE
         job_group = QGroupBox("Job Actuel")
-        job_group.setMinimumWidth(250)
+        job_group.setMinimumWidth(280)
         job_layout = QVBoxLayout(job_group)
         job_layout.setSpacing(5)
         
         self.current_job_label = QLabel("Aucun")
-        self.current_job_label.setStyleSheet("font-size: 11px;")
+        self.current_job_label.setStyleSheet("font-size: 11px; font-weight: bold;")
         self.current_job_label.setWordWrap(True)
+        
+        # Barre de progression avec pourcentage
+        progress_layout = QHBoxLayout()
         self.job_progress = QProgressBar()
         self.job_progress.setMinimumHeight(20)
+        self.job_progress.setRange(0, 100)
+        self.job_progress.setValue(0)
+        self.job_progress.setFormat("%p%")  # Affiche le pourcentage
+        
+        # Label avec détails de progression
+        self.progress_details_label = QLabel("0/0 lots")
+        self.progress_details_label.setStyleSheet("font-size: 10px; color: #888;")
+        
+        progress_layout.addWidget(self.job_progress, 1)
+        progress_layout.addWidget(self.progress_details_label)
         
         job_layout.addWidget(self.current_job_label)
-        job_layout.addWidget(self.job_progress)
+        job_layout.addLayout(progress_layout)
         job_layout.addStretch()
         
         # Contrôles serveur - LOGIQUE SIMPLIFIÉE
@@ -185,7 +198,7 @@ class StatusBarWidget(QFrame):
             self.server_status_label.setStyleSheet("color: #f44336; font-weight: bold; font-size: 12px;")
     
     def update_status(self, stats):
-        """Met à jour la barre de statut avec les statistiques"""
+        """Met à jour la barre de statut avec les statistiques - VERSION AMÉLIORÉE"""
         # Mise à jour des boutons
         self.update_button_states()
         
@@ -200,28 +213,71 @@ class StatusBarWidget(QFrame):
         self.batches_pending_label.setText(f"En attente: {stats['batches']['pending']}")
         self.batches_completed_label.setText(f"Terminés: {stats['batches']['completed']}")
         
-        # Job actuel
-        if stats['current_job']:
-            job_info = stats['current_job']
-            self.current_job_label.setText(job_info['input_file'])
-            self.job_progress.setValue(int(job_info['progress']))
+        # Job actuel - LOGIQUE AMÉLIORÉE
+        current_job_data = stats.get('current_job', {})
+        
+        if current_job_data and current_job_data.get('id'):
+            # Il y a un job actuel
+            job_name = current_job_data.get('input_file', 'Job en cours')
+            job_status = current_job_data.get('status', 'unknown')
+            progress = current_job_data.get('progress', 0)
+            
+            # Mise à jour du nom avec statut
+            status_emoji = {
+                'extracting': '📤',
+                'processing': '⚙️',
+                'assembling': '🎬',
+                'completed': '✅',
+                'failed': '❌'
+            }.get(job_status, '🔄')
+            
+            self.current_job_label.setText(f"{status_emoji} {job_name}")
+            
+            # Mise à jour de la barre de progression
+            self.job_progress.setValue(int(progress))
+            
+            # Détails de progression avec lots
+            if 'total_batches' in current_job_data and 'completed_batches' in current_job_data:
+                total_batches = current_job_data['total_batches']
+                completed_batches = current_job_data['completed_batches']
+                self.progress_details_label.setText(f"{completed_batches}/{total_batches} lots")
+            else:
+                self.progress_details_label.setText(f"{progress:.1f}%")
+            
+            # Couleur de la barre selon le statut
+            if job_status == 'completed':
+                self.job_progress.setStyleSheet("QProgressBar::chunk { background-color: #4CAF50; }")
+            elif job_status == 'failed':
+                self.job_progress.setStyleSheet("QProgressBar::chunk { background-color: #f44336; }")
+            elif job_status == 'processing':
+                self.job_progress.setStyleSheet("QProgressBar::chunk { background-color: #2196F3; }")
+            else:
+                self.job_progress.setStyleSheet("QProgressBar::chunk { background-color: #FF9800; }")
         else:
-            self.current_job_label.setText("Aucun")
+            # Aucun job actuel
+            self.current_job_label.setText("Aucun job actif")
             self.job_progress.setValue(0)
+            self.progress_details_label.setText("0/0 lots")
+            self.job_progress.setStyleSheet("")  # Style par défaut
         
         # Statut du processeur natif
-        if 'native_processor' in stats:
-            native = stats['native_processor']
-            if native['available']:
-                if native['processing']:
-                    batch_info = f" (lot: {native['current_batch'][:8]})" if native['current_batch'] else ""
+        native_stats = stats.get('native_processor', {})
+        if native_stats:
+            if native_stats.get('available', False):
+                if native_stats.get('processing', False):
+                    current_batch = native_stats.get('current_batch', '')
+                    batch_info = f" (lot: {current_batch[:8]})" if current_batch else ""
                     self.native_status_label.setText(f"🔄 Traitement natif actif{batch_info}")
                     self.native_status_label.setStyleSheet("font-size: 10px; color: #4CAF50; font-weight: bold;")
                 else:
                     self.native_status_label.setText("✅ Processeur natif prêt")
                     self.native_status_label.setStyleSheet("font-size: 10px; color: #2196F3;")
             else:
-                self.native_status_label.setText("❌ Real-ESRGAN non disponible")
+                executable_path = native_stats.get('executable_path', '')
+                if executable_path:
+                    self.native_status_label.setText(f"❌ Real-ESRGAN: {Path(executable_path).name}")
+                else:
+                    self.native_status_label.setText("❌ Real-ESRGAN non disponible")
                 self.native_status_label.setStyleSheet("font-size: 10px; color: #FF9800;")
     
     def update_status_stopped(self):
@@ -234,5 +290,7 @@ class StatusBarWidget(QFrame):
         self.clients_processing_label.setText("En traitement: 0")
         self.batches_pending_label.setText("En attente: 0")
         self.batches_completed_label.setText("Terminés: 0")
-        self.current_job_label.setText("Aucun")
+        self.current_job_label.setText("Aucun job actif")
         self.job_progress.setValue(0)
+        self.progress_details_label.setText("0/0 lots")
+        self.job_progress.setStyleSheet("")  # Style par défaut

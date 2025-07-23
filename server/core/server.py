@@ -30,6 +30,7 @@ class UpscalingServer:
         self.running = False  # Le serveur démarre à l'arrêt
         self.server = None
         self._start_time = time.time()
+        self._server_loop = None  # Stockage de la boucle du serveur
         
         # Métriques de performance en temps réel
         self.performance_metrics = {
@@ -55,10 +56,12 @@ class UpscalingServer:
         from core.batch_manager import BatchManager
         from core.client_manager import ClientManager
         from core.video_processor import VideoProcessor
+        from core.native_processor import NativeProcessor  # AJOUT DU PROCESSEUR NATIF
         
         self.batch_manager = BatchManager(self)
         self.client_manager = ClientManager(self)
         self.video_processor = VideoProcessor(self)
+        self.native_processor = NativeProcessor(self)  # INITIALISATION DU PROCESSEUR NATIF
         
         self.logger.info("Serveur d'upscaling initialisé (arrêté)")
     
@@ -70,12 +73,18 @@ class UpscalingServer:
             
         self.running = True
         self._start_time = time.time()
+        self._server_loop = asyncio.get_event_loop()  # STOCKAGE DE LA BOUCLE
         self.logger.info(f"Démarrage du serveur sur {config.HOST}:{config.PORT}")
         
         try:
             # Démarrage des tâches de maintenance
             asyncio.create_task(self._heartbeat_monitor())
             asyncio.create_task(self._batch_assignment_loop())
+            
+            # Démarrage du processeur natif si disponible
+            if self.native_processor.realesrgan_available:
+                asyncio.create_task(self.native_processor.start_native_processing())
+                self.logger.info("Processeur natif démarré")
             
             # Démarrage du serveur WebSocket
             self.server = await websockets.serve(
@@ -106,6 +115,10 @@ class UpscalingServer:
             
         self.running = False
         
+        # Arrêt du processeur natif
+        if hasattr(self, 'native_processor'):
+            self.native_processor.stop_native_processing()
+        
         # Fermeture de toutes les connexions clients
         for websocket in list(self.websockets.values()):
             try:
@@ -123,6 +136,32 @@ class UpscalingServer:
         self.websockets.clear()
         
         self.logger.info("Serveur arrêté")
+    
+    def stop_sync(self):
+        """NOUVELLE MÉTHODE : Arrêt synchrone du serveur"""
+        if not self.running:
+            self.logger.warning("Le serveur est déjà arrêté")
+            return
+        
+        try:
+            # Si on est dans la même boucle que le serveur
+            if self._server_loop and self._server_loop.is_running():
+                # Programmer l'arrêt dans la boucle du serveur
+                future = asyncio.run_coroutine_threadsafe(self.stop(), self._server_loop)
+                future.result(timeout=10)  # Attendre max 10 secondes
+            else:
+                # Créer une nouvelle boucle pour l'arrêt
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(self.stop())
+                loop.close()
+                
+        except Exception as e:
+            self.logger.error(f"Erreur arrêt synchrone: {e}")
+            # Forcer l'arrêt
+            self.running = False
+            if hasattr(self, 'native_processor'):
+                self.native_processor.stop_native_processing()
     
     async def _batch_assignment_loop(self):
         """Boucle d'assignation des lots"""
@@ -345,6 +384,10 @@ class UpscalingServer:
         
         job.completed_batches = completed_count
         
+        # Mettre à jour le job actuel si c'est le seul en cours
+        if not self.current_job or self.current_job not in self.jobs:
+            self.current_job = job_id
+        
         # Vérification si le job est terminé
         if completed_count == len(job.batches):
             self.logger.info(f"Job {job_id} - tous les lots terminés, assemblage de la vidéo")
@@ -362,6 +405,10 @@ class UpscalingServer:
             if success:
                 job.complete()
                 self.logger.info(f"Job {job_id} terminé avec succès")
+                
+                # Si c'était le job actuel, le réinitialiser
+                if self.current_job == job_id:
+                    self.current_job = None
             else:
                 job.fail("Erreur lors de l'assemblage de la vidéo")
                 self.logger.error(f"Job {job_id} échoué lors de l'assemblage")
@@ -681,7 +728,7 @@ class UpscalingServer:
             self.logger.error(f"Erreur envoi optimisations au client {mac}: {e}")
     
     def get_statistics(self) -> dict:
-        """Retourne les statistiques du serveur"""
+        """Retourne les statistiques du serveur avec progression détaillée"""
         total_clients = len(self.clients)
         online_clients = sum(1 for client in self.clients.values() if client.is_online)
         processing_clients = sum(1 for client in self.clients.values() 
@@ -695,17 +742,37 @@ class UpscalingServer:
         completed_batches = sum(1 for batch in self.batches.values() 
                               if batch.status == BatchStatus.COMPLETED)
         
+        # Informations détaillées sur le job actuel
         current_job_info = {}
         if self.current_job and self.current_job in self.jobs:
             job = self.jobs[self.current_job]
+            
+            # Calcul de la progression réelle
+            job_completed_batches = sum(1 for batch_id in job.batches 
+                                      if batch_id in self.batches and 
+                                      self.batches[batch_id].status == BatchStatus.COMPLETED)
+            
+            job_total_batches = len(job.batches)
+            job_progress = (job_completed_batches / job_total_batches * 100) if job_total_batches > 0 else 0
+            
             current_job_info = {
                 "id": job.id,
                 "status": job.status.value,
-                "progress": job.progress,
-                "input_file": Path(job.input_video_path).name,
+                "progress": job_progress,
+                "input_file": Path(job.input_video_path).name if job.input_video_path else "Unknown",
                 "total_frames": job.total_frames,
+                "total_batches": job_total_batches,
+                "completed_batches": job_completed_batches,
                 "estimated_remaining": job.estimated_remaining_time
             }
+            
+            # Mise à jour du job avec la progression calculée
+            job.completed_batches = job_completed_batches
+        
+        # Ajout des statistiques du processeur natif
+        native_processor_stats = {}
+        if hasattr(self, 'native_processor'):
+            native_processor_stats = self.native_processor.get_status()
         
         return {
             "clients": {
@@ -720,6 +787,7 @@ class UpscalingServer:
                 "completed": completed_batches
             },
             "current_job": current_job_info,
+            "native_processor": native_processor_stats,
             "server": {
                 "running": self.running,
                 "uptime": int(time.time() - self._start_time)

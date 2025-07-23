@@ -1,5 +1,5 @@
 """
-Mixin pour le contrôle du serveur avec logique simplifiée
+Mixin pour le contrôle du serveur avec logique simplifiée - VERSION CORRIGÉE
 """
 
 import threading
@@ -18,7 +18,7 @@ class ServerControlMixin:
         
         try:
             # Mise à jour de la configuration avant démarrage (depuis l'interface)
-            if hasattr(self.tabs_manager, 'config_tab'):
+            if hasattr(self, 'tabs_manager') and hasattr(self.tabs_manager, 'config_tab'):
                 config_tab = self.tabs_manager.config_tab
                 
                 # Mise à jour des paramètres réseau depuis l'interface
@@ -34,7 +34,8 @@ class ServerControlMixin:
             self.server_thread.start()
             
             # Mise à jour immédiate de l'interface
-            self.status_bar.update_button_states()
+            if hasattr(self, 'status_bar'):
+                self.status_bar.update_button_states()
             
             self.logger.info(f"Serveur démarré sur {config.HOST}:{config.PORT}")
             
@@ -49,8 +50,10 @@ class ServerControlMixin:
             return
         
         # Vérification des jobs en cours
-        active_jobs = len([job for job in self.server.jobs.values() 
-                          if job.status.value in ['processing', 'extracting', 'assembling']])
+        active_jobs = 0
+        if hasattr(self.server, 'jobs'):
+            active_jobs = len([job for job in self.server.jobs.values() 
+                              if job.status.value in ['processing', 'extracting', 'assembling']])
         
         # Message de confirmation adapté
         if active_jobs > 0:
@@ -69,13 +72,12 @@ class ServerControlMixin:
         
         if reply == QMessageBox.Yes:
             try:
-                # Arrêt du serveur de manière synchrone
-                if self.server.running:
-                    # Utiliser la méthode synchrone pour éviter les problèmes d'asyncio
-                    self.server.stop_sync()
+                # Arrêt du serveur - utilisation de la méthode synchrone
+                self.server.stop_sync()
                 
                 # Mise à jour immédiate de l'interface
-                self.status_bar.update_button_states()
+                if hasattr(self, 'status_bar'):
+                    self.status_bar.update_button_states()
                 
                 self.logger.info("Serveur arrêté")
                 
@@ -89,7 +91,8 @@ class ServerControlMixin:
                 QMessageBox.critical(self, "Erreur", f"Erreur lors de l'arrêt:\n{str(e)}")
                 
                 # Forcer la mise à jour de l'interface même en cas d'erreur
-                self.status_bar.update_button_states()
+                if hasattr(self, 'status_bar'):
+                    self.status_bar.update_button_states()
     
     def run_server(self):
         """Lance le serveur dans une nouvelle boucle d'événements"""
@@ -102,16 +105,30 @@ class ServerControlMixin:
         finally:
             # Mise à jour de l'interface en cas d'arrêt inattendu
             if hasattr(self, 'status_bar'):
-                self.status_bar.update_button_states()
+                try:
+                    # Utiliser un appel thread-safe pour mettre à jour l'interface
+                    import sys
+                    from PyQt5.QtCore import QMetaObject, Qt
+                    if hasattr(self.status_bar, 'update_button_states'):
+                        QMetaObject.invokeMethod(self.status_bar, "update_button_states", Qt.QueuedConnection)
+                except Exception as ui_error:
+                    self.logger.debug(f"Erreur mise à jour interface: {ui_error}")
     
     def get_server_status_info(self) -> dict:
         """Retourne les informations d'état du serveur"""
+        active_jobs = 0
+        if hasattr(self.server, 'jobs'):
+            active_jobs = len([job for job in self.server.jobs.values() 
+                               if job.status.value in ['processing', 'extracting', 'assembling']])
+        
+        clients_connected = 0
+        if hasattr(self.server, 'clients'):
+            clients_connected = len(self.server.clients)
+        
         return {
             'running': self.server.running,
             'host': config.HOST,
             'port': config.PORT,
-            'clients_connected': len(self.server.clients) if hasattr(self.server, 'clients') else 0,
-            'active_jobs': len([job for job in self.server.jobs.values() 
-                               if job.status.value in ['processing', 'extracting', 'assembling']]) 
-                          if hasattr(self.server, 'jobs') else 0
+            'clients_connected': clients_connected,
+            'active_jobs': active_jobs
         }
