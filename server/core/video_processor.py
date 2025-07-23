@@ -568,7 +568,7 @@ class VideoProcessor:
                 return False
             
             # Construction de la commande FFmpeg optimisée avec sous-titres
-            ffmpeg_cmd = self._build_advanced_ffmpeg_assemble_command(job, upscaled_dir)
+            ffmpeg_cmd = await self._build_advanced_ffmpeg_assemble_command(job, upscaled_dir)
             
             self.logger.debug(f"Commande assemblage: {' '.join(ffmpeg_cmd)}")
             
