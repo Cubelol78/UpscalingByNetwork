@@ -69,13 +69,10 @@ class ServerControlMixin:
         
         if reply == QMessageBox.Yes:
             try:
-                # Arrêt du serveur
+                # Arrêt du serveur de manière synchrone
                 if self.server.running:
-                    # Créer une nouvelle boucle d'événements pour l'arrêt
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(self.server.stop())
-                    loop.close()
+                    # Utiliser la méthode synchrone pour éviter les problèmes d'asyncio
+                    self.server.stop_sync()
                 
                 # Mise à jour immédiate de l'interface
                 self.status_bar.update_button_states()
@@ -90,6 +87,9 @@ class ServerControlMixin:
             except Exception as e:
                 self.logger.error(f"Erreur arrêt serveur: {e}")
                 QMessageBox.critical(self, "Erreur", f"Erreur lors de l'arrêt:\n{str(e)}")
+                
+                # Forcer la mise à jour de l'interface même en cas d'erreur
+                self.status_bar.update_button_states()
     
     def run_server(self):
         """Lance le serveur dans une nouvelle boucle d'événements"""

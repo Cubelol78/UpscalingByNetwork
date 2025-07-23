@@ -92,13 +92,33 @@ class UpscalingServer:
         # Arrêt du serveur WebSocket
         if self.server:
             self.server.close()
-            await self.server.wait_closed()
+            try:
+                await self.server.wait_closed()
+            except:
+                pass
             
         # Nettoyage des données
         self.clients.clear()
         self.websockets.clear()
         
         self.logger.info("Serveur arrêté")
+    
+    def stop_sync(self):
+        """Arrête le serveur de manière synchrone (pour l'interface)"""
+        if not self.running:
+            return
+            
+        self.running = False
+        
+        # Fermer le serveur WebSocket si il existe
+        if self.server:
+            self.server.close()
+        
+        # Nettoyer les données
+        self.clients.clear()
+        self.websockets.clear()
+        
+        self.logger.info("Serveur arrêté (mode synchrone)")
     
     async def _batch_assignment_loop(self):
         """Boucle d'assignation des lots"""
