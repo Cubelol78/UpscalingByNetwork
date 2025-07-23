@@ -1,0 +1,45 @@
+# Dépendances existantes du serveur
+websockets>=10.4
+asyncio
+pathlib
+json
+time
+logging
+subprocess
+shutil
+uuid
+dataclasses
+
+# Nouvelles dépendances pour l'optimisation GPU/matériel
+nvidia-ml-py>=12.535.133        # NVML pour monitoring NVIDIA GPU
+psutil>=5.9.0                   # Monitoring système (CPU, RAM, etc.)
+GPUtil>=1.4.0                   # Alternative pour monitoring GPU
+
+# Dépendances optionnelles pour détection matériel avancée
+py-cpuinfo>=9.0.0              # Informations détaillées CPU
+platform                       # Détection plateforme (inclus avec Python)
+ctypes                         # Interface C pour accès système (inclus)
+
+# Dépendances GUI existantes
+PyQt5>=5.15.0
+qdarkstyle>=3.0.0
+pyqtgraph>=0.13.0
+
+# Dépendances réseau et sécurité existantes
+cryptography>=38.0.0
+
+# Autres dépendances
+numpy>=1.21.0                  # Pour calculs de performance
+matplotlib>=3.5.0              # Pour graphiques de performance (optionnel)
+
+# Instructions d'installation :
+# pip install -r requirements.txt
+#
+# Pour NVIDIA GPU monitoring :
+# pip install nvidia-ml-py
+#
+# Pour monitoring système :
+# pip install psutil
+#
+# Note : nvidia-ml-py nécessite les drivers NVIDIA installés
+# Note : Certaines fonctionnalités de détection matériel peuvent nécessiter des privilèges administrateur
