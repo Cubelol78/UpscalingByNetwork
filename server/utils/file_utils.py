@@ -115,7 +115,7 @@ def format_file_size_gb(size_gb: float) -> str:
         return f"{size_gb / 1024:.1f}TB"
 
 def estimate_video_processing_space(video_path: str) -> dict:
-    """Estime l'espace requis pour traiter une vidéo (version améliorée)"""
+    """Estime l'espace requis pour traiter une vidéo - VERSION CORRIGÉE"""
     try:
         import subprocess
         import json
@@ -126,7 +126,7 @@ def estimate_video_processing_space(video_path: str) -> dict:
             '-show_format', '-show_streams', video_path
         ]
         
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         
         if result.returncode == 0:
             info = json.loads(result.stdout)
@@ -139,7 +139,7 @@ def estimate_video_processing_space(video_path: str) -> dict:
                     break
             
             if video_stream:
-                # Calculs détaillés
+                # Calculs corrigés et plus réalistes
                 width = int(video_stream.get('width', 1920))
                 height = int(video_stream.get('height', 1080))
                 duration = float(info['format'].get('duration', 0))
@@ -155,24 +155,41 @@ def estimate_video_processing_space(video_path: str) -> dict:
                 # Nombre total de frames
                 total_frames = int(duration * fps)
                 
-                # Estimation de l'espace par frame (PNG non compressé)
-                # Formule : largeur × hauteur × 3 octets (RGB) + overhead PNG
-                original_frame_size = width * height * 3 * 1.2  # +20% pour l'overhead PNG
-                upscaled_frame_size = (width * 4) * (height * 4) * 3 * 1.2  # x4 en résolution
+                # Estimation CORRIGÉE de l'espace par frame
+                # PNG compressé réaliste selon la résolution
+                if width <= 1920 and height <= 1080:
+                    # 1080p ou moins
+                    original_frame_size_mb = 2.0    # 2MB par frame PNG
+                    upscaled_frame_size_mb = 8.0    # 8MB par frame upscalée 4K
+                elif width <= 2560 and height <= 1440:
+                    # 1440p
+                    original_frame_size_mb = 3.5    # 3.5MB par frame PNG
+                    upscaled_frame_size_mb = 14.0   # 14MB par frame upscalée
+                else:
+                    # 4K ou plus
+                    original_frame_size_mb = 8.0    # 8MB par frame PNG
+                    upscaled_frame_size_mb = 32.0   # 32MB par frame upscalée
                 
-                # Calculs d'espace en GB
-                original_frames_gb = (total_frames * original_frame_size) / (1024**3)
-                upscaled_frames_gb = (total_frames * upscaled_frame_size) / (1024**3)
+                # Calculs d'espace en GB - CORRIGÉS
+                original_frames_gb = (total_frames * original_frame_size_mb) / 1024
+                upscaled_frames_gb = (total_frames * upscaled_frame_size_mb) / 1024
                 
                 # Fichier vidéo original
                 video_size_gb = Path(video_path).stat().st_size / (1024**3)
                 
-                # Estimations pour audio et sortie
-                audio_gb = video_size_gb * 0.1  # ~10% du fichier original
-                output_gb = video_size_gb * 2   # Estimation pour la sortie upscalée
-                temp_files_gb = video_size_gb * 0.5  # Fichiers temporaires divers
+                # Estimations plus réalistes pour audio et sortie
+                audio_gb = min(video_size_gb * 0.05, 0.5)  # Max 500MB pour l'audio
                 
-                total_required = original_frames_gb + upscaled_frames_gb + audio_gb + output_gb + temp_files_gb
+                # Estimation de sortie basée sur la qualité et durée
+                # Bitrate estimé pour de la qualité haute mais raisonnable
+                target_bitrate_mbps = 15  # 15 Mbps pour de la 4K de qualité
+                output_gb = (target_bitrate_mbps * duration) / (8 * 1024)  # Conversion en GB
+                
+                temp_files_gb = max(video_size_gb * 0.1, 0.1)  # Minimum 100MB
+                
+                # Total avec marge de sécurité réduite (20% au lieu de 50%)
+                total_required = (original_frames_gb + upscaled_frames_gb + 
+                                audio_gb + output_gb + temp_files_gb) * 1.2
                 
                 return {
                     'video_info': {
@@ -195,22 +212,40 @@ def estimate_video_processing_space(video_path: str) -> dict:
                         'original_frames': format_file_size_gb(original_frames_gb),
                         'upscaled_frames': format_file_size_gb(upscaled_frames_gb),
                         'total_required': format_file_size_gb(total_required)
+                    },
+                    'estimation_details': {
+                        'original_frame_size_mb': original_frame_size_mb,
+                        'upscaled_frame_size_mb': upscaled_frame_size_mb,
+                        'target_bitrate_mbps': target_bitrate_mbps
                     }
                 }
         
-        # Fallback si ffprobe échoue
+        # Fallback si ffprobe échoue - estimation très conservative
         video_size_gb = Path(video_path).stat().st_size / (1024**3)
-        estimated_total = video_size_gb * 100  # Estimation conservative
+        
+        # Estimation basée uniquement sur la taille du fichier
+        # Règle empirique : 20x la taille du fichier original max
+        estimated_total = min(video_size_gb * 20, 100)  # Maximum 100GB
         
         return {
             'space_breakdown': {
                 'total_required_gb': estimated_total
             },
-            'error': 'Analyse détaillée impossible, estimation conservative utilisée'
+            'error': 'Analyse détaillée impossible, estimation conservative utilisée',
+            'fallback_estimation': True
         }
         
     except Exception as e:
+        # Fallback d'urgence
+        try:
+            video_size_gb = Path(video_path).stat().st_size / (1024**3)
+            # Estimation très conservative : 15x la taille du fichier
+            safe_estimate = min(video_size_gb * 15, 80)  # Max 80GB
+        except:
+            safe_estimate = 10  # 10GB par défaut
+        
         return {
             'error': f"Erreur analyse vidéo: {str(e)}",
-            'space_breakdown': {'total_required_gb': 0}
+            'space_breakdown': {'total_required_gb': safe_estimate},
+            'emergency_fallback': True
         }

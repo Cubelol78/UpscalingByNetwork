@@ -161,7 +161,7 @@ class MainWindow(QMainWindow, ServerControlMixin, ConfigurationMixin):
         
         if file_path:
             self.start_job_async(file_path)
-    
+
     def start_job_async(self, file_path):
         """Démarre un job de manière asynchrone - VERSION CORRIGÉE"""
         try:
@@ -189,18 +189,20 @@ class MainWindow(QMainWindow, ServerControlMixin, ConfigurationMixin):
                                 self.server.current_job = job.id
                                 
                                 # Notification de succès dans le thread principal - CORRECTION
-                                from PyQt5.QtCore import QMetaObject, Qt
+                                from PyQt5.QtCore import QMetaObject, Qt, Q_ARG
                                 QMetaObject.invokeMethod(self, "show_job_success", Qt.QueuedConnection,
-                                                       Q_ARG(str, Path(file_path).name),
-                                                       Q_ARG(str, Path(job.output_video_path).name),
-                                                       Q_ARG(int, job.total_frames),
-                                                       Q_ARG(int, len(job.batches)))
+                                                    Q_ARG(str, Path(file_path).name),
+                                                    Q_ARG(str, Path(job.output_video_path).name),
+                                                    Q_ARG(int, job.total_frames),
+                                                    Q_ARG(int, len(job.batches)))
                             else:
+                                from PyQt5.QtCore import QMetaObject, Qt, Q_ARG
                                 QMetaObject.invokeMethod(self, "show_job_error", Qt.QueuedConnection,
-                                                       Q_ARG(str, "Erreur lors de l'extraction des frames"))
+                                                    Q_ARG(str, "Erreur lors de l'extraction des frames"))
                         else:
+                            from PyQt5.QtCore import QMetaObject, Qt, Q_ARG
                             QMetaObject.invokeMethod(self, "show_job_error", Qt.QueuedConnection,
-                                                   Q_ARG(str, "Impossible de créer le job à partir du fichier vidéo"))
+                                                Q_ARG(str, "Impossible de créer le job à partir du fichier vidéo"))
                     finally:
                         loop.close()
                         
@@ -208,7 +210,7 @@ class MainWindow(QMainWindow, ServerControlMixin, ConfigurationMixin):
                     self.logger.error(f"Erreur création job: {e}")
                     from PyQt5.QtCore import QMetaObject, Qt, Q_ARG
                     QMetaObject.invokeMethod(self, "show_job_error", Qt.QueuedConnection,
-                                           Q_ARG(str, f"Erreur lors de la création du job:\n{str(e)}"))
+                                        Q_ARG(str, f"Erreur lors de la création du job:\n{str(e)}"))
             
             # Lancer dans un thread séparé
             thread = threading.Thread(target=create_job_thread, daemon=True)
@@ -217,7 +219,7 @@ class MainWindow(QMainWindow, ServerControlMixin, ConfigurationMixin):
         except Exception as e:
             self.logger.error(f"Erreur start_job_async: {e}")
             QMessageBox.critical(self, "Erreur", f"Erreur lors de la création du job:\n{str(e)}")
-    
+
     @pyqtSlot(str, str, int, int)
     def show_job_success(self, input_name, output_name, frames, batches):
         """Affiche le message de succès pour un job"""

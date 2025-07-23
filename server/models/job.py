@@ -734,3 +734,219 @@ def estimate_job_requirements(job: Job) -> Dict[str, Any]:
             'output_video_mb': estimated_output_mb
         }
     }
+
+# Ajoutez ces méthodes à la classe Job dans server/models/job.py
+
+@property 
+def extracted_audio_tracks(self) -> List[Dict[str, Any]]:
+    """Raccourci pour accéder aux pistes audio extraites"""
+    return getattr(self.media_info, 'extracted_audio_files', [])
+
+@property
+def audio_languages(self) -> List[str]:
+    """Liste des langues audio disponibles"""
+    languages = []
+    for track in self.media_info.audio_tracks:
+        lang = track.get('language', 'und')
+        if lang != 'und' and lang not in languages:
+            languages.append(lang)
+    return languages
+
+def get_audio_track_by_language(self, language: str) -> Optional[Dict[str, Any]]:
+    """Récupère une piste audio par langue"""
+    for track in self.media_info.audio_tracks:
+        if track.get('language', '').lower() == language.lower():
+            return track
+    return None
+
+def get_default_audio_track(self) -> Optional[Dict[str, Any]]:
+    """Récupère la piste audio par défaut"""
+    # 1. Chercher une piste extraite avec succès
+    for track in self.media_info.audio_tracks:
+        if track.get('extraction_success', False):
+            return track
+    
+    # 2. Première piste disponible
+    if self.media_info.audio_tracks:
+        return self.media_info.audio_tracks[0]
+    
+    return None
+
+def get_extracted_audio_tracks(self) -> List[Dict[str, Any]]:
+    """Retourne la liste des pistes audio extraites avec succès"""
+    return [track for track in self.media_info.audio_tracks 
+            if track.get('extraction_success', False)]
+
+def add_audio_track_info(self, track_data: Dict[str, Any]):
+    """Ajoute les informations d'une piste audio"""
+    self.media_info.audio_tracks.append(track_data)
+    self.add_log_entry(f"Piste audio détectée: {self._get_audio_display_name(track_data)}")
+
+def update_audio_extraction(self, track_index: int, success: bool, 
+                          extraction_path: str = "", error: str = ""):
+    """Met à jour le statut d'extraction d'une piste audio"""
+    for track in self.media_info.audio_tracks:
+        if track['index'] == track_index:
+            track['extraction_success'] = success
+            track['extraction_path'] = extraction_path
+            track['extraction_error'] = error
+            
+            if success:
+                self.add_log_entry(f"✅ Audio extrait: {self._get_audio_display_name(track)}")
+            else:
+                self.add_log_entry(f"❌ Échec extraction audio: {self._get_audio_display_name(track)} - {error}")
+                self.add_warning(f"Impossible d'extraire l'audio {self._get_audio_display_name(track)}")
+            break
+
+def _get_audio_display_name(self, audio_track: Dict[str, Any]) -> str:
+    """Génère un nom d'affichage pour une piste audio"""
+    parts = []
+    
+    # Langue
+    language = audio_track.get('language', 'und')
+    if language != 'und':
+        # Mapping basique des langues
+        language_map = {
+            'fr': 'Français', 'en': 'English', 'es': 'Español', 
+            'de': 'Deutsch', 'it': 'Italiano', 'ja': '日本語'
+        }
+        language_name = language_map.get(language.lower(), language.upper())
+        parts.append(language_name)
+    else:
+        parts.append('Langue inconnue')
+    
+    # Codec et canaux
+    codec = audio_track.get('codec', 'unknown')
+    channels = audio_track.get('channels', 0)
+    if channels > 0:
+        channel_desc = f"{channels}ch"
+        if channels == 1:
+            channel_desc = "Mono"
+        elif channels == 2:
+            channel_desc = "Stéréo"
+        elif channels == 6:
+            channel_desc = "5.1"
+        elif channels == 8:
+            channel_desc = "7.1"
+        
+        parts.append(f"{codec} {channel_desc}")
+    else:
+        parts.append(codec)
+    
+    # Titre si présent
+    title = audio_track.get('title', '')
+    if title:
+        parts.append(f"({title})")
+    
+    return " ".join(parts)
+
+def get_audio_compatibility_report(self) -> Dict[str, Any]:
+    """Génère un rapport de compatibilité des pistes audio"""
+    if not self.has_audio:
+        return {
+            'has_audio': False,
+            'total_tracks': 0,
+            'compatible_tracks': 0,
+            'problematic_tracks': [],
+            'recommendations': []
+        }
+    
+    compatible_codecs = ['aac', 'mp3', 'ac3']
+    problematic_tracks = []
+    recommendations = []
+    compatible_count = 0
+    
+    for track in self.media_info.audio_tracks:
+        codec = track.get('codec', 'unknown').lower()
+        
+        if codec in compatible_codecs:
+            compatible_count += 1
+        else:
+            problematic_tracks.append({
+                'track': self._get_audio_display_name(track),
+                'codec': codec,
+                'recommendation': f"Sera converti de {codec} vers AAC pour compatibilité MP4"
+            })
+    
+    # Recommandations générales
+    if len(self.media_info.audio_tracks) > 3:
+        recommendations.append(f"Nombreuses pistes audio ({len(self.media_info.audio_tracks)}) - Impact sur la taille du fichier")
+    
+    # Vérification des langues
+    languages = set(track.get('language', 'und') for track in self.media_info.audio_tracks)
+    if len(languages) > 1:
+        lang_list = [lang for lang in languages if lang != 'und']
+        recommendations.append(f"Langues détectées: {', '.join(lang_list)}")
+    
+    return {
+        'has_audio': True,
+        'total_tracks': len(self.media_info.audio_tracks),
+        'compatible_tracks': compatible_count,
+        'extracted_tracks': len(self.get_extracted_audio_tracks()),
+        'problematic_tracks': problematic_tracks,
+        'recommendations': recommendations,
+        'languages': list(languages)
+    }
+
+def export_audio_info(self) -> Dict[str, Any]:
+    """Exporte les informations des pistes audio pour sauvegarde/transfert"""
+    return {
+        'has_audio': self.has_audio,
+        'tracks': [
+            {
+                'index': track.get('index', 0),
+                'codec': track.get('codec', 'unknown'),
+                'language': track.get('language', 'und'),
+                'title': track.get('title', ''),
+                'channels': track.get('channels', 0),
+                'sample_rate': track.get('sample_rate', 0),
+                'bitrate': track.get('bitrate', 0),
+                'duration': track.get('duration', 0),
+                'extraction_success': track.get('extraction_success', False),
+                'extraction_path': track.get('extraction_path', ''),
+                'extraction_format': track.get('extraction_format', ''),
+                'extraction_error': track.get('extraction_error', '')
+            }
+            for track in self.media_info.audio_tracks
+        ]
+    }
+
+def import_audio_info(self, audio_data: Dict[str, Any]):
+    """Importe les informations des pistes audio depuis une sauvegarde"""
+    self.media_info.has_audio = audio_data.get('has_audio', False)
+    self.media_info.audio_tracks = []
+    
+    for track_data in audio_data.get('tracks', []):
+        self.media_info.audio_tracks.append(track_data)
+
+def cleanup_audio_files(self):
+    """Nettoie les fichiers audio temporaires"""
+    from pathlib import Path
+    files_cleaned = []
+    
+    # Nettoyage des fichiers audio extraits
+    if hasattr(self.media_info, 'extracted_audio_files'):
+        for audio_file in self.media_info.extracted_audio_files:
+            audio_path = Path(audio_file['path'])
+            if audio_path.exists() and "temp" in str(audio_path):
+                try:
+                    audio_path.unlink()
+                    files_cleaned.append(str(audio_path))
+                except Exception as e:
+                    self.add_warning(f"Impossible de supprimer {audio_path}: {e}")
+    
+    # Nettoyage du fichier audio principal
+    if hasattr(self.media_info, 'audio_extraction_path') and self.media_info.audio_extraction_path:
+        audio_path = Path(self.media_info.audio_extraction_path)
+        if audio_path.exists() and "temp" in str(audio_path):
+            try:
+                audio_path.unlink()
+                files_cleaned.append(str(audio_path))
+                self.media_info.audio_extraction_path = ""
+            except Exception as e:
+                self.add_warning(f"Impossible de supprimer {audio_path}: {e}")
+    
+    if files_cleaned:
+        self.add_log_entry(f"🧹 Nettoyé {len(files_cleaned)} fichier(s) audio temporaire(s)")
+    
+    return files_cleaned
