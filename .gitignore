@@ -21,3 +21,6 @@ work
 input
 logs
 batches
+
+client/windows/core/__pycache__
+client/windows/security/__pycache__
