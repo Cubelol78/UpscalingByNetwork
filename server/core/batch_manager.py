@@ -1,478 +1,435 @@
-# core/batch_manager.py (Fixed)
-import os
-import subprocess
+# server/src/core/batch_manager.py
 import asyncio
+import logging
 import shutil
-import time
+import zipfile
+from typing import List, Dict, Optional, Tuple
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict, Any
-from datetime import datetime
-import re
 
-from models.job import Job, JobStatus
-from models.batch import Batch, BatchStatus
-from models.client import ClientStatus
-from config.settings import config
-from utils.logger import get_logger
-from utils.file_utils import ensure_dir, get_video_info
-from core.optimized_real_esrgan import optimized_realesrgan
+from ..models.batch import Batch, BatchStatus, BatchUtils
+from ..models.client import Client, ClientStatus
+from ..security.encryption import EncryptionManager
+from ..utils.config import Config
 
 class BatchManager:
-    """Gestionnaire des lots d'images avec optimisations"""
+    """
+    Gestionnaire de lots pour la distribution sécurisée avec dossiers
+    Gère la création, compression, chiffrement et distribution des lots
+    """
     
-    def __init__(self, server):
-        self.server = server
-        self.logger = get_logger(__name__)
+    def __init__(self, server_instance):
+        self.server = server_instance
+        self.logger = logging.getLogger(__name__)
+        self.config = Config()
+        self.encryption = EncryptionManager()
         
-        # Statistiques pour optimisation dynamique
-        self.batch_performance_history = []
+        # Statistiques et monitoring
+        self.stats = {
+            'total_batches_created': 0,
+            'total_batches_completed': 0,
+            'total_batches_failed': 0,
+            'average_batch_time': 0,
+            'total_data_transferred_mb': 0
+        }
         
-    async def assign_pending_batches(self):
-        """Assigne les lots en attente aux clients disponibles avec optimisations"""
-        # Récupération des clients disponibles triés par performance
-        available_clients = self._get_sorted_available_clients()
+        # Tâche de monitoring
+        self.monitoring_task = None
+        self.running = False
+    
+    async def start(self):
+        """Démarre le gestionnaire de lots"""
+        self.running = True
+        self.monitoring_task = asyncio.create_task(self._monitoring_loop())
+        self.logger.info("Gestionnaire de lots démarré")
+    
+    async def stop(self):
+        """Arrête le gestionnaire de lots"""
+        self.running = False
+        if self.monitoring_task:
+            self.monitoring_task.cancel()
+        self.logger.info("Gestionnaire de lots arrêté")
+    
+    async def create_batches_from_job(self, job_id: str, video_path: str) -> List[Batch]:
+        """
+        Crée des lots à partir d'une vidéo
         
-        if not available_clients:
-            return
+        Args:
+            job_id: Identifiant unique du job
+            video_path: Chemin vers la vidéo source
+            
+        Returns:
+            Liste des lots créés
+        """
+        try:
+            # 1. Extraction des frames de la vidéo
+            frames_dir = await self._extract_video_frames(job_id, video_path)
+            
+            # 2. Listage des images extraites
+            frame_files = sorted(list(frames_dir.glob("*.png")))
+            
+            if not frame_files:
+                raise Exception("Aucune image extraite de la vidéo")
+            
+            # 3. Création des dossiers de lots
+            batches = await self._create_batch_folders(job_id, frame_files)
+            
+            self.logger.info(f"Job {job_id}: {len(batches)} lots créés à partir de {len(frame_files)} images")
+            self.stats['total_batches_created'] += len(batches)
+            
+            return batches
+            
+        except Exception as e:
+            self.logger.error(f"Erreur création lots pour job {job_id}: {e}")
+            raise
+    
+    async def _extract_video_frames(self, job_id: str, video_path: str) -> Path:
+        """Extrait les frames d'une vidéo avec FFmpeg"""
+        job_dir = Path(self.config.TEMP_DIR) / f"job_{job_id}"
+        frames_dir = job_dir / "original_frames"
         
-        # Récupération des lots en attente
-        pending_batches = [
-            batch for batch in self.server.batches.values()
-            if batch.status == BatchStatus.PENDING
+        # Création des dossiers
+        frames_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Commande FFmpeg pour extraction
+        ffmpeg_cmd = [
+            "ffmpeg", "-i", str(video_path),
+            "-vf", "fps=fps=30",  # 30 FPS par défaut
+            "-q:v", "1",  # Qualité maximale
+            str(frames_dir / "frame_%06d.png")
         ]
         
-        if not pending_batches:
-            return
+        self.logger.info(f"Extraction frames de {video_path}")
         
-        # Tri des lots par priorité (avec logique de performance)
-        pending_batches = self._prioritize_batches(pending_batches)
+        process = await asyncio.create_subprocess_exec(
+            *ffmpeg_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
         
-        # Adaptation dynamique du nombre de lots simultanés
-        max_concurrent = optimized_realesrgan.get_recommended_concurrent_batches()
-        currently_processing = sum(1 for batch in self.server.batches.values() 
-                                 if batch.status == BatchStatus.PROCESSING)
+        stdout, stderr = await process.communicate()
         
-        available_slots = max_concurrent - currently_processing
-        if available_slots <= 0:
-            return
+        if process.returncode != 0:
+            raise Exception(f"Erreur FFmpeg: {stderr.decode()}")
         
-        # Gestion intelligente des doublons
-        should_duplicate = self._should_create_duplicates(pending_batches, available_clients)
+        self.logger.info(f"Frames extraites dans {frames_dir}")
+        return frames_dir
+    
+    async def _create_batch_folders(self, job_id: str, frame_files: List[Path]) -> List[Batch]:
+        """Crée les dossiers de lots avec les images"""
+        job_dir = Path(self.config.TEMP_DIR) / f"job_{job_id}"
+        batches_dir = job_dir / "batches"
+        batches_dir.mkdir(exist_ok=True)
+        
+        batches = []
+        batch_size = self.config.BATCH_SIZE  # 50 par défaut
+        
+        for i in range(0, len(frame_files), batch_size):
+            batch_number = (i // batch_size) + 1
+            batch_frames = frame_files[i:i + batch_size]
+            
+            # Création du lot
+            batch = Batch(
+                job_id=job_id,
+                frame_start=i,
+                frame_end=min(i + batch_size - 1, len(frame_files) - 1),
+                frame_paths=[str(f.name) for f in batch_frames]  # Noms relatifs
+            )
+            
+            # Création du dossier du lot
+            batch_dir = batches_dir / f"batch_{batch_number:03d}"
+            batch_dir.mkdir(exist_ok=True)
+            
+            # Copie des images dans le dossier du lot
+            for frame_file in batch_frames:
+                dst_path = batch_dir / frame_file.name
+                shutil.copy2(frame_file, dst_path)
+            
+            batch.batch_folder = str(batch_dir)
+            batches.append(batch)
+            
+            self.logger.debug(f"Lot {batch.id} créé: {len(batch_frames)} images dans {batch_dir}")
+        
+        return batches
+    
+    async def prepare_batch_for_client(self, batch: Batch, client_mac: str) -> bytes:
+        """
+        Prépare un lot pour envoi au client (zip + chiffrement)
+        
+        Args:
+            batch: Le lot à préparer
+            client_mac: Adresse MAC du client destinataire
+            
+        Returns:
+            Données chiffrées prêtes à envoyer
+        """
+        try:
+            # 1. Compression du dossier du lot
+            zip_data = await self._compress_batch_folder(batch)
+            
+            # 2. Chiffrement avec la clé de session du client
+            session_key = self.server.get_client_session_key(client_mac)
+            encrypted_data = self.encryption.encrypt_data(zip_data, session_key)
+            
+            self.logger.debug(f"Lot {batch.id} préparé pour client {client_mac}: {len(encrypted_data)} bytes")
+            
+            # Mise à jour des statistiques
+            self.stats['total_data_transferred_mb'] += len(encrypted_data) / (1024 * 1024)
+            
+            return encrypted_data
+            
+        except Exception as e:
+            self.logger.error(f"Erreur préparation lot {batch.id} pour {client_mac}: {e}")
+            raise
+    
+    async def _compress_batch_folder(self, batch: Batch) -> bytes:
+        """Compresse le dossier d'un lot en ZIP (compression 0)"""
+        batch_folder = Path(batch.batch_folder)
+        
+        if not batch_folder.exists():
+            raise Exception(f"Dossier du lot non trouvé: {batch_folder}")
+        
+        # Compression en mémoire
+        import io
+        zip_buffer = io.BytesIO()
+        
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_STORED) as zip_file:  # ZIP_STORED = pas de compression
+            for image_file in batch_folder.glob("*.png"):
+                zip_file.write(image_file, image_file.name)
+        
+        zip_data = zip_buffer.getvalue()
+        self.logger.debug(f"Lot {batch.id} compressé: {len(zip_data)} bytes")
+        
+        return zip_data
+    
+    async def process_batch_result(self, batch_id: str, client_mac: str, encrypted_data: bytes) -> bool:
+        """
+        Traite le résultat d'un lot reçu du client
+        
+        Args:
+            batch_id: ID du lot traité
+            client_mac: MAC du client qui a traité
+            encrypted_data: Données chiffrées reçues
+            
+        Returns:
+            True si le traitement a réussi, False sinon
+        """
+        try:
+            if batch_id not in self.server.batches:
+                self.logger.warning(f"Lot {batch_id} non trouvé pour traitement résultat")
+                return False
+            
+            batch = self.server.batches[batch_id]
+            
+            # 1. Déchiffrement des données
+            session_key = self.server.get_client_session_key(client_mac)
+            zip_data = self.encryption.decrypt_data(encrypted_data, session_key)
+            
+            # 2. Décompression et validation
+            upscaled_images = await self._extract_upscaled_images(zip_data, batch)
+            
+            # 3. Vérification de la complétude
+            expected_count = len(batch.frame_paths)
+            received_count = len(upscaled_images)
+            
+            if received_count != expected_count:
+                self.logger.warning(f"Lot {batch_id} incomplet: {received_count}/{expected_count} images")
+                batch.fail(f"Images incomplètes: {received_count}/{expected_count}")
+                return False
+            
+            # 4. Copie vers le dossier final
+            success = await self._copy_to_final_directory(batch, upscaled_images)
+            
+            if success:
+                batch.complete()
+                self.stats['total_batches_completed'] += 1
+                self.logger.info(f"Lot {batch_id} traité avec succès par {client_mac}")
+                
+                # Nettoyage du dossier temporaire du lot
+                await self._cleanup_batch_folder(batch)
+                
+                return True
+            else:
+                batch.fail("Erreur lors de la copie finale")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Erreur traitement résultat lot {batch_id}: {e}")
+            if batch_id in self.server.batches:
+                self.server.batches[batch_id].fail(str(e))
+            return False
+    
+    async def _extract_upscaled_images(self, zip_data: bytes, batch: Batch) -> List[Path]:
+        """Extrait les images upscalées du ZIP reçu"""
+        import io
+        import tempfile
+        
+        upscaled_images = []
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            
+            # Extraction du ZIP
+            with zipfile.ZipFile(io.BytesIO(zip_data), 'r') as zip_file:
+                zip_file.extractall(temp_path)
+            
+            # Validation des images extraites
+            for expected_frame in batch.frame_paths:
+                upscaled_name = expected_frame  # Même nom que l'original
+                upscaled_path = temp_path / upscaled_name
+                
+                if upscaled_path.exists():
+                    upscaled_images.append(upscaled_path)
+                else:
+                    self.logger.warning(f"Image upscalée manquante: {upscaled_name}")
+        
+        return upscaled_images
+    
+    async def _copy_to_final_directory(self, batch: Batch, upscaled_images: List[Path]) -> bool:
+        """Copie les images upscalées vers le dossier final"""
+        try:
+            job_dir = Path(self.config.TEMP_DIR) / f"job_{batch.job_id}"
+            final_dir = job_dir / "upscaled_final"
+            final_dir.mkdir(exist_ok=True)
+            
+            for image_path in upscaled_images:
+                dst_path = final_dir / image_path.name
+                shutil.copy2(image_path, dst_path)
+            
+            self.logger.debug(f"Lot {batch.id}: {len(upscaled_images)} images copiées vers {final_dir}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Erreur copie finale lot {batch.id}: {e}")
+            return False
+    
+    async def _cleanup_batch_folder(self, batch: Batch):
+        """Nettoie le dossier temporaire d'un lot terminé"""
+        try:
+            batch_folder = Path(batch.batch_folder)
+            if batch_folder.exists():
+                shutil.rmtree(batch_folder)
+                self.logger.debug(f"Dossier lot {batch.id} nettoyé: {batch_folder}")
+        except Exception as e:
+            self.logger.warning(f"Erreur nettoyage lot {batch.id}: {e}")
+    
+    async def assign_batches_to_clients(self) -> List[Tuple[str, Batch]]:
+        """Assigne les lots aux clients disponibles"""
+        pending_batches = self._get_pending_batches()
+        available_clients = self._get_available_clients()
+        
+        if not pending_batches or not available_clients:
+            return []
         
         assignments = []
         
-        # Attribution normale optimisée
-        for i, batch in enumerate(pending_batches):
-            if i < len(available_clients) and len(assignments) < available_slots:
-                client_mac = available_clients[i]
-                assignments.append((client_mac, batch))
+        # Assignation normale (1 lot par client disponible)
+        max_assignments = min(len(pending_batches), len(available_clients))
         
-        # Attribution des doublons si nécessaire et bénéfique
-        if should_duplicate and len(assignments) < available_slots:
-            duplicate_assignments = self._create_duplicate_assignments(
-                pending_batches, available_clients[len(assignments):], 
-                available_slots - len(assignments)
+        for i in range(max_assignments):
+            client_mac = available_clients[i]
+            batch = pending_batches[i]
+            
+            batch.assign_to_client(client_mac)
+            assignments.append((client_mac, batch))
+            
+            self.logger.debug(f"Lot {batch.id} assigné au client {client_mac}")
+        
+        # Gestion des doublons si nécessaire
+        remaining_clients = available_clients[max_assignments:]
+        if remaining_clients and len(pending_batches) < self.config.DUPLICATE_THRESHOLD:
+            duplicate_assignments = await self._create_duplicate_assignments(
+                pending_batches, remaining_clients
             )
             assignments.extend(duplicate_assignments)
         
-        # Envoi des assignations avec adaptation en temps réel
-        successful_assignments = 0
-        for client_mac, batch in assignments:
-            # Adaptation de la configuration selon la charge système
-            adaptations = optimized_realesrgan.adapt_to_system_load()
-            if adaptations:
-                self.logger.info(f"Adaptation configuration pour {client_mac}: {adaptations.get('reason', '')}")
-            
-            success = await self.server.send_batch_to_client(client_mac, batch, adaptations)
-            if success:
-                successful_assignments += 1
-                self.logger.debug(f"Lot {batch.id} assigné au client {client_mac}")
-        
-        if successful_assignments > 0:
-            self.logger.info(f"{successful_assignments} lots assignés avec optimisations")
+        return assignments
     
-    def _get_sorted_available_clients(self) -> List[str]:
-        """Récupère les clients disponibles triés par performance"""
-        available_clients = [
-            (mac, client) for mac, client in self.server.clients.items()
-            if client.is_online and client.status == ClientStatus.CONNECTED
-        ]
-        
-        # Tri par performance (vitesse moyenne de traitement)
-        def client_performance_score(client_data):
-            mac, client = client_data
-            
-            # Score basé sur plusieurs facteurs
-            score = 0
-            
-            # Temps moyen de traitement (plus bas = mieux)
-            if client.average_batch_time > 0:
-                score += 1000 / client.average_batch_time  # Inversé pour favoriser la rapidité
-            else:
-                score += 100  # Score par défaut pour nouveaux clients
-            
-            # Taux de succès
-            score *= (client.success_rate / 100) if client.success_rate > 0 else 0.5
-            
-            # Pénalité pour échecs récents
-            if client.batches_failed > 0:
-                failure_penalty = client.batches_failed / max(client.batches_completed + client.batches_failed, 1)
-                score *= (1 - failure_penalty * 0.5)  # Réduction max 50%
-            
-            # Bonus pour matériel performant
-            if hasattr(client, 'gpu_info') and client.gpu_info:
-                gpu_memory = client.gpu_info.get('memory_total', 0)
-                if gpu_memory > 12000:  # > 12GB
-                    score *= 1.3
-                elif gpu_memory > 8000:  # > 8GB
-                    score *= 1.1
-                elif gpu_memory < 4000:  # < 4GB
-                    score *= 0.8
-            
-            return score
-        
-        # Tri par score de performance (meilleur en premier)
-        available_clients.sort(key=client_performance_score, reverse=True)
-        
-        return [mac for mac, client in available_clients]
-    
-    def _prioritize_batches(self, batches: List[Batch]) -> List[Batch]:
-        """Priorise les lots selon différents critères"""
-        def batch_priority_score(batch):
-            score = 0
-            
-            # Priorité aux lots plus anciens
-            age_hours = (datetime.now() - batch.created_at).total_seconds() / 3600
-            score += age_hours * 10
-            
-            # Priorité aux lots avec moins de tentatives
-            score += (config.MAX_RETRIES - batch.retry_count) * 5
-            
-            # Priorité selon la taille (plus petit = plus facile à compléter)
-            score += (100 - len(batch.frame_paths)) * 0.1
-            
-            return score
-        
-        return sorted(batches, key=batch_priority_score, reverse=True)
-    
-    def _should_create_duplicates(self, pending_batches: List[Batch], available_clients: List[str]) -> bool:
-        """Détermine s'il faut créer des doublons de lots"""
-        # Conditions pour créer des doublons
-        conditions = [
-            len(pending_batches) < config.DUPLICATE_THRESHOLD,  # Peu de lots en attente
-            len(available_clients) > len(pending_batches),      # Plus de clients que de lots
-            len(pending_batches) > 0,                           # Il y a des lots à dupliquer
-            self._is_duplication_beneficial()                   # Duplication historiquement bénéfique
-        ]
-        
-        return all(conditions)
-    
-    def _is_duplication_beneficial(self) -> bool:
-        """Vérifie si la duplication a été bénéfique historiquement"""
-        if len(self.batch_performance_history) < 10:
-            return True  # Pas assez d'historique, on autorise
-        
-        # Analyse des performances avec/sans doublons
-        recent_history = self.batch_performance_history[-20:]
-        
-        duplicated_performance = [
-            perf for perf in recent_history 
-            if perf.get('was_duplicated', False)
-        ]
-        
-        single_performance = [
-            perf for perf in recent_history 
-            if not perf.get('was_duplicated', False)
-        ]
-        
-        if not duplicated_performance or not single_performance:
-            return True
-        
-        # Comparaison des temps moyens
-        avg_duplicated_time = sum(p['completion_time'] for p in duplicated_performance) / len(duplicated_performance)
-        avg_single_time = sum(p['completion_time'] for p in single_performance) / len(single_performance)
-        
-        # Duplication bénéfique si amélioration > 20%
-        return avg_duplicated_time < avg_single_time * 0.8
-    
-    def _create_duplicate_assignments(self, pending_batches: List[Batch], 
-                                    remaining_clients: List[str], 
-                                    max_assignments: int) -> List[Tuple[str, Batch]]:
-        """Crée des assignations de lots dupliqués"""
+    async def _create_duplicate_assignments(self, batches: List[Batch], clients: List[str]) -> List[Tuple[str, Batch]]:
+        """Crée des assignations dupliquées pour accélération"""
         assignments = []
         
-        for client_mac in remaining_clients[:max_assignments]:
-            if not pending_batches:
+        for client_mac in clients:
+            if not batches:
                 break
-                
-            # Sélection du lot le plus approprié pour duplication
-            best_batch = self._select_best_batch_for_duplication(pending_batches)
             
-            if best_batch:
-                # Vérification du nombre de doublons existants
-                duplicate_count = sum(1 for b in self.server.batches.values()
-                                    if (b.frame_start == best_batch.frame_start and 
-                                        b.job_id == best_batch.job_id and
-                                        b.status in [BatchStatus.ASSIGNED, BatchStatus.PROCESSING]))
-                
-                if duplicate_count < 3:  # Maximum 3 copies par lot
-                    # Création du lot dupliqué
-                    duplicate_batch = self._create_duplicate_batch(best_batch)
-                    self.server.batches[duplicate_batch.id] = duplicate_batch
-                    assignments.append((client_mac, duplicate_batch))
-                    
-                    self.logger.debug(f"Lot dupliqué créé: {duplicate_batch.id} pour client {client_mac}")
+            # Sélection du lot le plus ancien pour duplication
+            oldest_batch = min(batches, key=lambda b: b.created_at)
+            
+            # Création d'un lot dupliqué
+            duplicate_batch = oldest_batch.create_duplicate()
+            duplicate_batch.batch_folder = oldest_batch.batch_folder  # Même dossier source
+            
+            duplicate_batch.assign_to_client(client_mac)
+            self.server.batches[duplicate_batch.id] = duplicate_batch
+            
+            assignments.append((client_mac, duplicate_batch))
+            
+            self.logger.debug(f"Lot dupliqué {duplicate_batch.id} créé pour client {client_mac}")
         
         return assignments
     
-    def _select_best_batch_for_duplication(self, batches: List[Batch]) -> Optional[Batch]:
-        """Sélectionne le meilleur lot pour duplication"""
-        if not batches:
-            return None
+    def _get_pending_batches(self) -> List[Batch]:
+        """Récupère les lots en attente"""
+        pending = [batch for batch in self.server.batches.values() 
+                  if batch.status == BatchStatus.PENDING]
         
-        # Critères de sélection pour duplication
-        def duplication_score(batch):
-            score = 0
-            
-            # Priorité aux lots plus anciens
-            age_hours = (datetime.now() - batch.created_at).total_seconds() / 3600
-            score += age_hours * 5
-            
-            # Priorité aux lots avec plus de tentatives (plus susceptibles d'échouer)
-            score += batch.retry_count * 10
-            
-            # Priorité aux lots plus petits (duplication moins coûteuse)
-            score += (config.BATCH_SIZE - len(batch.frame_paths)) * 0.5
-            
-            return score
-        
-        return max(batches, key=duplication_score)
+        # Tri par âge (plus ancien en premier)
+        return sorted(pending, key=lambda b: b.created_at)
     
-    def _create_duplicate_batch(self, original_batch: Batch) -> Batch:
-        """Crée un lot dupliqué"""
-        duplicate = Batch(
-            job_id=original_batch.job_id,
-            frame_start=original_batch.frame_start,
-            frame_end=original_batch.frame_end,
-            frame_paths=original_batch.frame_paths.copy(),
-            status=BatchStatus.DUPLICATE
-        )
+    def _get_available_clients(self) -> List[str]:
+        """Récupère les clients disponibles"""
+        available = []
         
-        return duplicate
+        for mac, client in self.server.clients.items():
+            if (client.status == ClientStatus.CONNECTED and 
+                client.current_batch is None and
+                client.is_online):
+                available.append(mac)
+        
+        return available
     
-    def create_batches_from_frames(self, job: Job, frame_paths: List[str], 
-                                 batch_size: Optional[int] = None) -> List[Batch]:
-        """Crée des lots à partir d'une liste de frames avec optimisations"""
-        if batch_size is None:
-            batch_size = optimized_realesrgan.get_optimal_batch_size()
-        
-        batches = []
-        
-        # Création des lots avec taille optimisée
-        for i in range(0, len(frame_paths), batch_size):
-            batch_frames = frame_paths[i:i + batch_size]
-            
-            batch = Batch(
-                job_id=job.id,
-                frame_start=i,
-                frame_end=min(i + batch_size - 1, len(frame_paths) - 1),
-                frame_paths=batch_frames
-            )
-            
-            # Estimation du temps de traitement pour ce lot
-            batch.estimated_time = self._estimate_batch_processing_time(batch)
-            
-            batches.append(batch)
-            self.server.batches[batch.id] = batch
-        
-        self.logger.info(f"Créé {len(batches)} lots pour le job {job.id} "
-                        f"(taille optimisée: {batch_size})")
-        return batches
+    async def _monitoring_loop(self):
+        """Boucle de monitoring pour timeouts et reprises"""
+        while self.running:
+            try:
+                await self._check_batch_timeouts()
+                await self._retry_failed_batches()
+                await asyncio.sleep(30)  # Vérification toutes les 30 secondes
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.logger.error(f"Erreur monitoring: {e}")
+                await asyncio.sleep(5)
     
-    def _estimate_batch_processing_time(self, batch: Batch) -> int:
-        """Estime le temps de traitement d'un lot"""
-        frame_count = len(batch.frame_paths)
+    async def _check_batch_timeouts(self):
+        """Vérifie les timeouts des lots en traitement"""
+        timeout_duration = timedelta(minutes=self.config.BATCH_TIMEOUT_MINUTES)
+        now = datetime.now()
         
-        # Temps de base par frame selon le matériel
-        system_status = optimized_realesrgan.get_system_status()
-        base_time_per_frame = 2.0  # secondes par défaut
-        
-        if system_status.get('system_detected', False):
-            if system_status.get('gpu_count', 0) > 0:
-                gpu = system_status['gpus'][0]
-                tier = gpu.get('tier', 'medium')
+        for batch in self.server.batches.values():
+            if (batch.status == BatchStatus.PROCESSING and 
+                batch.started_at and 
+                now - batch.started_at > timeout_duration):
                 
-                if tier == 'extreme':
-                    base_time_per_frame = 0.5
-                elif tier == 'high':
-                    base_time_per_frame = 1.0
-                elif tier == 'medium':
-                    base_time_per_frame = 2.0
-                else:  # low
-                    base_time_per_frame = 4.0
-            else:
-                base_time_per_frame = 8.0  # CPU seulement
-        
-        return int(frame_count * base_time_per_frame)
-    
-    def record_batch_completion(self, batch: Batch, processing_time: float, was_duplicated: bool = False):
-        """Enregistre la completion d'un lot pour l'analyse de performance"""
-        performance_record = {
-            'batch_id': batch.id,
-            'frame_count': len(batch.frame_paths),
-            'processing_time': processing_time,
-            'completion_time': time.time(),
-            'retry_count': batch.retry_count,
-            'was_duplicated': was_duplicated,
-            'frames_per_second': len(batch.frame_paths) / processing_time if processing_time > 0 else 0
-        }
-        
-        self.batch_performance_history.append(performance_record)
-        
-        # Limitation de l'historique
-        if len(self.batch_performance_history) > 200:
-            self.batch_performance_history.pop(0)
-        
-        # Analyse de tendance pour optimisation future
-        self._analyze_performance_trends()
-    
-    def _analyze_performance_trends(self):
-        """Analyse les tendances de performance pour optimisation"""
-        if len(self.batch_performance_history) < 20:
-            return
-        
-        recent_performance = self.batch_performance_history[-20:]
-        
-        # Calcul des métriques
-        avg_fps = sum(p['frames_per_second'] for p in recent_performance) / len(recent_performance)
-        avg_retry_rate = sum(p['retry_count'] for p in recent_performance) / len(recent_performance)
-        
-        # Recommandations d'optimisation
-        recommendations = []
-        
-        if avg_fps < 0.5:  # Moins de 0.5 FPS
-            recommendations.append("Performance faible détectée - vérifier la configuration GPU")
-        
-        if avg_retry_rate > 0.2:  # Plus de 20% de retry
-            recommendations.append("Taux d'échec élevé - vérifier la stabilité des clients")
-        
-        # Log des recommandations
-        for rec in recommendations:
-            self.logger.warning(f"Recommandation d'optimisation: {rec}")
-    
-    def get_batch_statistics(self) -> Dict[str, Any]:
-        """Retourne les statistiques détaillées des lots"""
-        if not self.batch_performance_history:
-            return {}
-        
-        recent_performance = self.batch_performance_history[-50:]  # 50 derniers
-        
-        return {
-            'total_batches_processed': len(self.batch_performance_history),
-            'recent_avg_fps': sum(p['frames_per_second'] for p in recent_performance) / len(recent_performance),
-            'recent_avg_processing_time': sum(p['processing_time'] for p in recent_performance) / len(recent_performance),
-            'recent_retry_rate': sum(p['retry_count'] for p in recent_performance) / len(recent_performance),
-            'duplication_usage_rate': sum(1 for p in recent_performance if p['was_duplicated']) / len(recent_performance) * 100,
-            'optimal_batch_size': optimized_realesrgan.get_optimal_batch_size(),
-            'recommended_concurrent_batches': optimized_realesrgan.get_recommended_concurrent_batches()
-        }
-    
-    def optimize_batch_distribution(self) -> Dict[str, Any]:
-        """Optimise la distribution des lots en temps réel"""
-        stats = self.get_batch_statistics()
-        optimizations = {}
-        
-        # Ajustement de la taille des lots selon les performances
-        if stats.get('recent_avg_fps', 0) < 0.3:
-            # Performance faible, réduire la taille des lots
-            new_batch_size = max(20, optimized_realesrgan.get_optimal_batch_size() // 2)
-            optimizations['batch_size'] = new_batch_size
-            optimizations['reason'] = "Réduction taille lot pour performance faible"
-            
-        elif stats.get('recent_avg_fps', 0) > 2.0:
-            # Performance élevée, augmenter la taille des lots
-            new_batch_size = min(100, optimized_realesrgan.get_optimal_batch_size() * 1.5)
-            optimizations['batch_size'] = new_batch_size
-            optimizations['reason'] = "Augmentation taille lot pour performance élevée"
-        
-        # Ajustement de la stratégie de duplication
-        retry_rate = stats.get('recent_retry_rate', 0)
-        if retry_rate > 0.3:
-            optimizations['increase_duplication'] = True
-            optimizations['reason'] = optimizations.get('reason', '') + " Augmentation duplication pour échecs"
-        
-        return optimizations
-    
-    async def smart_batch_recovery(self):
-        """Récupération intelligente des lots échoués"""
-        failed_batches = [
-            batch for batch in self.server.batches.values()
-            if batch.status == BatchStatus.FAILED and batch.retry_count < config.MAX_RETRIES
-        ]
-        
-        if not failed_batches:
-            return
-        
-        self.logger.info(f"Récupération de {len(failed_batches)} lots échoués")
-        
-        for batch in failed_batches:
-            # Analyse de la cause d'échec
-            if self._should_retry_batch(batch):
-                # Adaptation de la configuration pour retry
-                self._adapt_batch_for_retry(batch)
+                batch.timeout()
+                self.logger.warning(f"Timeout lot {batch.id} (client: {batch.assigned_client})")
                 
-                # Remise en attente
-                batch.reset()
+                # Libérer le client
+                if batch.assigned_client in self.server.clients:
+                    self.server.clients[batch.assigned_client].current_batch = None
+    
+    async def _retry_failed_batches(self):
+        """Remet en attente les lots échoués qui peuvent être réessayés"""
+        for batch in self.server.batches.values():
+            if batch.status == BatchStatus.FAILED and batch.can_retry:
+                batch.reset_for_retry()
                 self.logger.info(f"Lot {batch.id} remis en attente (tentative {batch.retry_count + 1})")
-            else:
-                self.logger.warning(f"Lot {batch.id} abandonné après analyse")
     
-    def _should_retry_batch(self, batch: Batch) -> bool:
-        """Détermine si un lot doit être réessayé"""
-        # Facteurs de décision
-        factors = {
-            'retry_count_ok': batch.retry_count < config.MAX_RETRIES,
-            'not_too_old': (datetime.now() - batch.created_at).total_seconds() < 3600,  # < 1h
-            'error_not_fatal': 'CUDA out of memory' not in batch.error_message.lower(),
-            'client_available': len([c for c in self.server.clients.values() if c.is_online]) > 0
+    def get_stats(self) -> dict:
+        """Retourne les statistiques du gestionnaire"""
+        return {
+            **self.stats,
+            'pending_batches': len(self._get_pending_batches()),
+            'available_clients': len(self._get_available_clients())
         }
-        
-        # Décision basée sur la majorité des facteurs
-        positive_factors = sum(factors.values())
-        return positive_factors >= 3
-    
-    def _adapt_batch_for_retry(self, batch: Batch):
-        """Adapte un lot pour retry avec configuration réduite"""
-        # Réduction de la taille si échec répété
-        if batch.retry_count >= 2:
-            # Division du lot en plus petits lots
-            frame_count = len(batch.frame_paths)
-            if frame_count > 20:
-                # Créer des sous-lots plus petits
-                mid_point = frame_count // 2
-                
-                # Premier sous-lot
-                sub_batch1 = Batch(
-                    job_id=batch.job_id,
-                    frame_start=batch.frame_start,
-                    frame_end=batch.frame_start + mid_point - 1,
-                    frame_paths=batch.frame_paths[:mid_point]
-                )
-                
-                # Second sous-lot
-                sub_batch2 = Batch(
-                    job_id=batch.job_id,
-                    frame_start=batch.frame_start + mid_point,
-                    frame_end=batch.frame_end,
-                    frame_paths=batch.frame_paths[mid_point:]
-                )
-                
-                # Ajout des sous-lots
-                self.server.batches[sub_batch1.id] = sub_batch1
-                self.server.batches[sub_batch2.id] = sub_batch2
-                
-                # Suppression du lot original
-                if batch.id in self.server.batches:
-                    del self.server.batches[batch.id]
-                
-                self.logger.info(f"Lot {batch.id} divisé en 2 sous-lots pour retry")
