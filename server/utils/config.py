@@ -1,75 +1,83 @@
-# client/windows/utils/config.py
+# server/utils/config.py
 """
-Configuration du client d'upscaling distribué
+Configuration centralisée pour le serveur d'upscaling distribué
 """
 
 import os
 import json
 from pathlib import Path
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import logging
 
-class ClientConfig:
-    """Gestionnaire de configuration pour le client"""
+class ConfigManager:
+    """Gestionnaire de configuration centralisé"""
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         
         # Chemin vers le fichier de configuration
-        self.config_file = Path(__file__).parent.parent / "config" / "client_config.json"
+        self.config_file = Path(__file__).parent.parent / "config" / "server_config.json"
         self.config_file.parent.mkdir(exist_ok=True)
         
         # Configuration par défaut
         self.default_config = {
-            "client": {
-                "name": "Client-Windows",
-                "log_level": "INFO",
-                "auto_connect": False,
-                "retry_attempts": 3,
-                "retry_delay": 5,
-                "heartbeat_interval": 30
-            },
             "server": {
-                "host": "localhost",
+                "host": "0.0.0.0",
                 "port": 8765,
-                "timeout": 30,
-                "ssl_enabled": False,
-                "ssl_verify": True
+                "max_clients": 10,
+                "heartbeat_interval": 30,
+                "client_timeout": 120,
+                "enable_ssl": False,
+                "ssl_cert_path": "",
+                "ssl_key_path": ""
             },
             "processing": {
-                "enable_gpu": True,
-                "thread_count": 4,
-                "gpu_memory_limit": 4096,
+                "batch_size": 50,
+                "max_concurrent_batches": 5,
+                "upscale_factor": 4,
                 "realesrgan_model": "RealESRGAN_x4plus",
                 "output_format": "png",
-                "max_batch_size": 50,
-                "timeout_per_frame": 30
+                "compression_level": 0,
+                "enable_gpu": True,
+                "gpu_memory_limit": 8192
             },
             "storage": {
-                "work_directory": "./client_work",
+                "work_directory": "./work",
+                "input_directory": "./input",
+                "output_directory": "./output",
                 "temp_directory": "./temp",
+                "batches_directory": "./batches",
                 "logs_directory": "./logs",
-                "max_disk_usage_gb": 50
+                "max_disk_usage_gb": 100
             },
             "security": {
                 "enable_encryption": True,
-                "key_exchange_timeout": 30,
-                "session_timeout": 3600
+                "encryption_algorithm": "AES-256",
+                "key_exchange_method": "ECDH",
+                "session_timeout": 3600,
+                "max_failed_attempts": 5
             },
-            "hardware": {
-                "auto_detect": True,
-                "preferred_gpu": "",
-                "memory_limit_mb": 8192,
-                "cpu_threads": 0,  # 0 = auto-detect
-                "enable_monitoring": True
+            "monitoring": {
+                "log_level": "INFO",
+                "enable_metrics": True,
+                "metrics_interval": 60,
+                "performance_monitoring": True,
+                "resource_monitoring": True
             },
-            "gui": {
-                "theme": "default",
-                "minimize_to_tray": True,
-                "start_minimized": False,
-                "show_notifications": True,
-                "update_interval": 1000
+            "video": {
+                "supported_formats": ["mp4", "avi", "mkv", "mov", "webm"],
+                "ffmpeg_quality": "high",
+                "preserve_audio": True,
+                "frame_extraction_format": "png",
+                "fps_preservation": True
+            },
+            "optimization": {
+                "adaptive_batch_size": True,
+                "dynamic_quality_adjustment": True,
+                "smart_client_selection": True,
+                "load_balancing": True,
+                "failover_enabled": True
             }
         }
         
@@ -85,7 +93,7 @@ class ClientConfig:
                 
                 # Fusion avec la configuration par défaut
                 config = self._merge_config(self.default_config, loaded_config)
-                self.logger.info(f"Configuration client chargée depuis: {self.config_file}")
+                self.logger.info(f"Configuration chargée depuis: {self.config_file}")
                 return config
             else:
                 self.logger.info("Aucun fichier de configuration trouvé, utilisation des valeurs par défaut")
@@ -150,73 +158,82 @@ class ClientConfig:
         
         self.logger.info(f"Configuration mise à jour: {key} = {value}")
     
-    def get_work_directory(self) -> Path:
-        """Retourne le dossier de travail du client"""
-        work_dir = Path(self.get('storage.work_directory')).resolve()
-        work_dir.mkdir(parents=True, exist_ok=True)
-        return work_dir
+    def get_work_directories(self) -> Dict[str, Path]:
+        """Retourne les chemins de tous les dossiers de travail"""
+        storage_config = self.get('storage')
+        directories = {}
+        
+        for key, path_str in storage_config.items():
+            if key.endswith('_directory'):
+                name = key.replace('_directory', '')
+                directories[name] = Path(path_str).resolve()
+        
+        return directories
     
-    def get_server_config(self) -> Dict[str, Any]:
-        """Retourne la configuration serveur"""
-        return {
-            'host': self.get('server.host'),
-            'port': self.get('server.port'),
-            'timeout': self.get('server.timeout'),
-            'ssl_enabled': self.get('server.ssl_enabled'),
-            'ssl_verify': self.get('server.ssl_verify')
-        }
+    def ensure_directories(self):
+        """S'assure que tous les dossiers nécessaires existent"""
+        directories = self.get_work_directories()
+        
+        for name, path in directories.items():
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+                self.logger.debug(f"Dossier {name} vérifié: {path}")
+            except Exception as e:
+                self.logger.error(f"Impossible de créer le dossier {name} ({path}): {e}")
+                raise
     
-    def get_processing_config(self) -> Dict[str, Any]:
-        """Retourne la configuration de traitement"""
-        return {
-            'enable_gpu': self.get('processing.enable_gpu'),
-            'thread_count': self.get('processing.thread_count'),
-            'gpu_memory_limit': self.get('processing.gpu_memory_limit'),
-            'realesrgan_model': self.get('processing.realesrgan_model'),
-            'output_format': self.get('processing.output_format'),
-            'max_batch_size': self.get('processing.max_batch_size'),
-            'timeout_per_frame': self.get('processing.timeout_per_frame')
-        }
-    
-    def get_hardware_config(self) -> Dict[str, Any]:
-        """Retourne la configuration matérielle"""
-        return {
-            'auto_detect': self.get('hardware.auto_detect'),
-            'preferred_gpu': self.get('hardware.preferred_gpu'),
-            'memory_limit_mb': self.get('hardware.memory_limit_mb'),
-            'cpu_threads': self.get('hardware.cpu_threads'),
-            'enable_monitoring': self.get('hardware.enable_monitoring')
-        }
-    
-    def validate_config(self) -> bool:
+    def validate_config(self) -> Dict[str, Any]:
         """Valide la configuration actuelle"""
+        errors = []
+        warnings = []
+        
         try:
             # Vérification des ports
             port = self.get('server.port')
             if not isinstance(port, int) or not (1024 <= port <= 65535):
-                self.logger.error("Port serveur invalide")
-                return False
+                errors.append("Port serveur invalide (doit être entre 1024 et 65535)")
             
-            # Vérification des dossiers
-            work_dir = self.get_work_directory()
-            if not work_dir.exists():
-                work_dir.mkdir(parents=True, exist_ok=True)
+            # Vérification des chemins
+            directories = self.get_work_directories()
+            for name, path in directories.items():
+                try:
+                    path.mkdir(parents=True, exist_ok=True)
+                except Exception as e:
+                    errors.append(f"Impossible d'accéder au dossier {name}: {e}")
             
-            # Vérification des limites de ressources
-            gpu_memory = self.get('processing.gpu_memory_limit')
-            if gpu_memory < 512 or gpu_memory > 32768:
-                self.logger.warning("Limite mémoire GPU suspecte")
+            # Vérification de la sécurité
+            if self.get('security.enable_encryption') and not self.get('server.enable_ssl'):
+                warnings.append("Chiffrement activé mais SSL désactivé")
             
-            return True
+            # Vérification des ressources
+            max_clients = self.get('server.max_clients')
+            max_batches = self.get('processing.max_concurrent_batches')
+            if max_batches > max_clients * 2:
+                warnings.append("Nombre de lots concurrent élevé par rapport aux clients")
             
         except Exception as e:
-            self.logger.error(f"Erreur lors de la validation: {e}")
-            return False
+            errors.append(f"Erreur lors de la validation: {e}")
+        
+        return {
+            'valid': len(errors) == 0,
+            'errors': errors,
+            'warnings': warnings
+        }
+    
+    def get_realesrgan_config(self) -> Dict[str, Any]:
+        """Retourne la configuration spécifique à Real-ESRGAN"""
+        return {
+            'model': self.get('processing.realesrgan_model'),
+            'scale': self.get('processing.upscale_factor'),
+            'format': self.get('processing.output_format'),
+            'gpu_enabled': self.get('processing.enable_gpu'),
+            'gpu_memory': self.get('processing.gpu_memory_limit')
+        }
     
     def export_config(self, file_path: Optional[Path] = None) -> str:
         """Exporte la configuration vers un fichier"""
         if file_path is None:
-            file_path = Path(f"client_config_export_{int(time.time())}.json")
+            file_path = Path(f"config_export_{int(time.time())}.json")
         
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
@@ -248,12 +265,6 @@ class ClientConfig:
         except Exception as e:
             self.logger.error(f"Erreur lors de l'import: {e}")
             raise
-    
-    def reset_to_defaults(self):
-        """Remet la configuration aux valeurs par défaut"""
-        self.config = self.default_config.copy()
-        self._save_config(self.config)
-        self.logger.info("Configuration remise aux valeurs par défaut")
 
 # Instance globale de configuration
-config = ClientConfig()
+config = ConfigManager()

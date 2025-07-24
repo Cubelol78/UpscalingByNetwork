@@ -4,6 +4,7 @@ Gestionnaire de lots pour la distribution sécurisée avec dossiers - Version co
 Gère la création, compression, chiffrement et distribution des lots
 """
 
+import os
 import asyncio
 import logging
 import shutil

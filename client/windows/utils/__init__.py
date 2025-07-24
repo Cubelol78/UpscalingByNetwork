@@ -1,8 +1,8 @@
 # client/windows/utils/__init__.py
 """
-Utilitaires pour le client Windows
+Module utilitaires pour le client Windows d'upscaling distribué
 """
 
-from .config import config, ClientConfig
+from .config import config
 
-__all__ = ['config', 'ClientConfig']
+__all__ = ['config']
