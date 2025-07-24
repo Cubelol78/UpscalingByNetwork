@@ -1,449 +1,460 @@
-# client-windows/src/utils/system_info.py
+# client/windows/utils/system_info.py
+"""
+Collecte d'informations système pour le client
+"""
+
+import os
+import sys
 import platform
+import psutil
+import socket
+import uuid
 import subprocess
 import logging
-import uuid
-import sys
-from typing import Dict, Optional, List
-import json
-
-# Imports optionnels avec gestion d'erreur
-try:
-    import psutil
-    PSUTIL_AVAILABLE = True
-except ImportError:
-    PSUTIL_AVAILABLE = False
-
-try:
-    import pynvml
-    PYNVML_AVAILABLE = True
-except ImportError:
-    PYNVML_AVAILABLE = False
+from typing import Dict, Any, Optional, List
+from pathlib import Path
 
 class SystemInfo:
-    """Collecteur d'informations système pour le client"""
+    """
+    Collecteur d'informations système pour le client
+    """
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        self._gpu_info_cache = None
-        self._memory_info_cache = None
-        self._cpu_info_cache = None
+        self._system_info = None
+        self._gpu_info = None
+        self._refresh_interval = 300  # 5 minutes
+        self._last_refresh = 0
+    
+    def get_system_info(self, force_refresh: bool = False) -> Dict[str, Any]:
+        """
+        Collecte les informations système complètes
         
-        self.logger.debug("SystemInfo initialisé")
-    
-    def get_mac_address(self) -> str:
-        """Retourne l'adresse MAC de la machine"""
+        Args:
+            force_refresh: Force la collecte même si les données sont récentes
+            
+        Returns:
+            Dictionnaire avec toutes les informations système
+        """
+        import time
+        current_time = time.time()
+        
+        if (not force_refresh and 
+            self._system_info and 
+            current_time - self._last_refresh < self._refresh_interval):
+            return self._system_info
+        
         try:
-            # Récupération de l'adresse MAC de la première interface réseau
-            mac = uuid.UUID(int=uuid.getnode()).hex[-12:]
-            formatted_mac = ":".join([mac[i:i+2] for i in range(0, 12, 2)])
-            return formatted_mac.upper()
-        except Exception as e:
-            self.logger.error(f"Erreur récupération MAC: {e}")
-            return "00:00:00:00:00:00"
-    
-    def get_os_info(self) -> Dict[str, str]:
-        """Retourne les informations du système d'exploitation"""
-        try:
-            return {
-                'system': platform.system(),
-                'release': platform.release(),
-                'version': platform.version(),
-                'architecture': platform.architecture()[0],
-                'machine': platform.machine(),
-                'processor': platform.processor(),
-                'python_version': platform.python_version()
+            self._system_info = {
+                'basic': self._get_basic_info(),
+                'hardware': self._get_hardware_info(),
+                'network': self._get_network_info(),
+                'gpu': self._get_gpu_info(),
+                'performance': self._get_performance_info(),
+                'storage': self._get_storage_info(),
+                'vulkan': self._check_vulkan_support()
             }
+            
+            self._last_refresh = current_time
+            self.logger.info("Informations système collectées")
+            
         except Exception as e:
-            self.logger.error(f"Erreur info OS: {e}")
-            return {'system': 'Unknown', 'error': str(e)}
-    
-    def get_cpu_info(self) -> Dict:
-        """Retourne les informations du processeur"""
-        if self._cpu_info_cache:
-            return self._cpu_info_cache
+            self.logger.error(f"Erreur collecte informations système: {e}")
+            self._system_info = self._get_minimal_info()
         
+        return self._system_info
+    
+    def _get_basic_info(self) -> Dict[str, Any]:
+        """Informations système de base"""
+        return {
+            'platform': platform.system(),
+            'platform_version': platform.version(),
+            'platform_release': platform.release(),
+            'architecture': platform.architecture()[0],
+            'machine': platform.machine(),
+            'processor': platform.processor(),
+            'hostname': socket.gethostname(),
+            'python_version': sys.version,
+            'python_executable': sys.executable,
+            'current_user': os.getenv('USERNAME' if os.name == 'nt' else 'USER', 'unknown')
+        }
+    
+    def _get_hardware_info(self) -> Dict[str, Any]:
+        """Informations matérielles"""
         try:
+            # Informations CPU
             cpu_info = {
-                'model': platform.processor(),
-                'architecture': platform.machine(),
-                'cores_physical': 1,
-                'cores_logical': 1,
-                'frequency_mhz': 0
+                'physical_cores': psutil.cpu_count(logical=False),
+                'logical_cores': psutil.cpu_count(logical=True),
+                'max_frequency': psutil.cpu_freq().max if psutil.cpu_freq() else 0,
+                'current_frequency': psutil.cpu_freq().current if psutil.cpu_freq() else 0,
+                'cpu_usage_percent': psutil.cpu_percent(interval=1)
             }
             
-            if PSUTIL_AVAILABLE:
-                cpu_info.update({
-                    'cores_physical': psutil.cpu_count(logical=False) or 1,
-                    'cores_logical': psutil.cpu_count(logical=True) or 1,
-                    'frequency_mhz': psutil.cpu_freq().current if psutil.cpu_freq() else 0
-                })
-            
-            # Tentative d'amélioration avec des commandes système
-            self._enhance_cpu_info_with_system_commands(cpu_info)
-            
-            self._cpu_info_cache = cpu_info
-            return cpu_info
-            
-        except Exception as e:
-            self.logger.error(f"Erreur info CPU: {e}")
-            return {'model': 'Unknown', 'cores': 1, 'error': str(e)}
-    
-    def _enhance_cpu_info_with_system_commands(self, cpu_info: Dict):
-        """Améliore les infos CPU avec des commandes système"""
-        try:
-            if sys.platform == "win32":
-                # Windows: utilisation de wmic
-                result = subprocess.run([
-                    'wmic', 'cpu', 'get', 'Name,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed',
-                    '/format:csv'
-                ], capture_output=True, text=True, timeout=5)
-                
-                if result.returncode == 0:
-                    lines = result.stdout.strip().split('\n')
-                    if len(lines) > 1:
-                        # Parsing basique des résultats wmic
-                        for line in lines[1:]:
-                            if line.strip():
-                                parts = line.split(',')
-                                if len(parts) >= 4:
-                                    try:
-                                        cpu_info['model'] = parts[2] if parts[2] else cpu_info['model']
-                                        cpu_info['cores_physical'] = int(parts[3]) if parts[3] else cpu_info['cores_physical']
-                                        cpu_info['frequency_mhz'] = int(parts[1]) if parts[1] else cpu_info['frequency_mhz']
-                                    except (ValueError, IndexError):
-                                        pass
-            
-            elif sys.platform.startswith("linux"):
-                # Linux: utilisation de /proc/cpuinfo
-                with open('/proc/cpuinfo', 'r') as f:
-                    cpuinfo = f.read()
-                
-                # Extraction du nom du processeur
-                for line in cpuinfo.split('\n'):
-                    if 'model name' in line:
-                        cpu_info['model'] = line.split(':')[1].strip()
-                        break
-                
-        except Exception as e:
-            self.logger.debug(f"Impossible d'améliorer les infos CPU: {e}")
-    
-    def get_memory_info(self) -> Dict:
-        """Retourne les informations mémoire"""
-        if self._memory_info_cache:
-            return self._memory_info_cache
-        
-        try:
+            # Informations mémoire
+            memory = psutil.virtual_memory()
             memory_info = {
-                'total_gb': 4.0,  # Valeur par défaut
-                'available_gb': 2.0,
-                'used_gb': 2.0,
-                'usage_percent': 50.0
+                'total_ram_gb': round(memory.total / (1024**3), 2),
+                'available_ram_gb': round(memory.available / (1024**3), 2),
+                'used_ram_gb': round(memory.used / (1024**3), 2),
+                'ram_usage_percent': memory.percent
             }
             
-            if PSUTIL_AVAILABLE:
-                memory = psutil.virtual_memory()
-                memory_info.update({
-                    'total_gb': round(memory.total / (1024**3), 2),
-                    'available_gb': round(memory.available / (1024**3), 2),
-                    'used_gb': round(memory.used / (1024**3), 2),
-                    'usage_percent': memory.percent
-                })
-            else:
-                # Fallback avec commandes système
-                self._get_memory_info_fallback(memory_info)
-            
-            self._memory_info_cache = memory_info
-            return memory_info
+            return {
+                'cpu': cpu_info,
+                'memory': memory_info
+            }
             
         except Exception as e:
-            self.logger.error(f"Erreur info mémoire: {e}")
-            return {'total_gb': 4.0, 'error': str(e)}
+            self.logger.error(f"Erreur collecte informations matérielles: {e}")
+            return {'cpu': {}, 'memory': {}}
     
-    def _get_memory_info_fallback(self, memory_info: Dict):
-        """Récupère les infos mémoire sans psutil"""
+    def _get_network_info(self) -> Dict[str, Any]:
+        """Informations réseau"""
         try:
-            if sys.platform == "win32":
-                # Windows: utilisation de wmic
-                result = subprocess.run([
-                    'wmic', 'computersystem', 'get', 'TotalPhysicalMemory', '/value'
-                ], capture_output=True, text=True, timeout=5)
-                
-                if result.returncode == 0:
-                    for line in result.stdout.split('\n'):
-                        if 'TotalPhysicalMemory=' in line:
-                            total_bytes = int(line.split('=')[1])
-                            memory_info['total_gb'] = round(total_bytes / (1024**3), 2)
-                            memory_info['available_gb'] = round(memory_info['total_gb'] * 0.5, 2)
-                            break
+            # Adresse MAC
+            mac_address = ':'.join(['{:02x}'.format((uuid.getnode() >> elements) & 0xff) 
+                                   for elements in range(0, 2*6, 2)][::-1])
             
-            elif sys.platform.startswith("linux"):
-                # Linux: utilisation de /proc/meminfo
-                with open('/proc/meminfo', 'r') as f:
-                    meminfo = f.read()
-                
-                for line in meminfo.split('\n'):
-                    if 'MemTotal:' in line:
-                        total_kb = int(line.split()[1])
-                        memory_info['total_gb'] = round(total_kb / (1024**2), 2)
-                    elif 'MemAvailable:' in line:
-                        available_kb = int(line.split()[1])
-                        memory_info['available_gb'] = round(available_kb / (1024**2), 2)
-        
+            # Adresses IP
+            ip_addresses = []
+            for interface_name, interface_addresses in psutil.net_if_addrs().items():
+                for address in interface_addresses:
+                    if address.family == socket.AF_INET and not address.address.startswith('127.'):
+                        ip_addresses.append({
+                            'interface': interface_name,
+                            'ip': address.address,
+                            'netmask': address.netmask,
+                            'broadcast': address.broadcast
+                        })
+            
+            return {
+                'mac_address': mac_address,
+                'ip_addresses': ip_addresses,
+                'hostname': socket.gethostname(),
+                'fqdn': socket.getfqdn()
+            }
+            
         except Exception as e:
-            self.logger.debug(f"Fallback mémoire échoué: {e}")
+            self.logger.error(f"Erreur collecte informations réseau: {e}")
+            return {
+                'mac_address': 'unknown',
+                'ip_addresses': [],
+                'hostname': 'unknown',
+                'fqdn': 'unknown'
+            }
     
-    def get_gpu_info(self) -> Optional[Dict]:
-        """Retourne les informations GPU (NVIDIA prioritaire)"""
-        if self._gpu_info_cache:
-            return self._gpu_info_cache
+    def _get_gpu_info(self) -> Dict[str, Any]:
+        """Informations GPU (NVIDIA, AMD, Intel)"""
+        gpu_info = {
+            'nvidia_gpus': [],
+            'other_gpus': [],
+            'vulkan_devices': []
+        }
         
-        gpu_info = None
+        try:
+            # Tentative de collecte via nvidia-ml-py (NVIDIA)
+            try:
+                import pynvml
+                pynvml.nvmlInit()
+                device_count = pynvml.nvmlDeviceGetCount()
+                
+                for i in range(device_count):
+                    handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+                    name = pynvml.nvmlDeviceGetName(handle).decode('utf-8')
+                    memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                    
+                    gpu_info['nvidia_gpus'].append({
+                        'index': i,
+                        'name': name,
+                        'memory_total_mb': memory_info.total // (1024*1024),
+                        'memory_used_mb': memory_info.used // (1024*1024),
+                        'memory_free_mb': memory_info.free // (1024*1024),
+                        'driver_version': pynvml.nvmlSystemGetDriverVersion().decode('utf-8')
+                    })
+                    
+            except ImportError:
+                self.logger.info("pynvml non disponible - informations NVIDIA limitées")
+            except Exception as e:
+                self.logger.error(f"Erreur collecte GPU NVIDIA: {e}")
+            
+            # Collecte via wmi sur Windows
+            if sys.platform == "win32":
+                try:
+                    import wmi
+                    c = wmi.WMI()
+                    for gpu in c.Win32_VideoController():
+                        if gpu.Name:
+                            gpu_info['other_gpus'].append({
+                                'name': gpu.Name,
+                                'driver_version': gpu.DriverVersion,
+                                'memory_mb': gpu.AdapterRAM // (1024*1024) if gpu.AdapterRAM else 0,
+                                'status': gpu.Status
+                            })
+                except ImportError:
+                    self.logger.info("wmi non disponible")
+                except Exception as e:
+                    self.logger.error(f"Erreur collecte GPU Windows: {e}")
+            
+            # Collecte des dispositifs Vulkan
+            gpu_info['vulkan_devices'] = self._get_vulkan_devices()
+            
+        except Exception as e:
+            self.logger.error(f"Erreur générale collecte GPU: {e}")
         
-        # Tentative NVIDIA avec pynvml
-        if PYNVML_AVAILABLE:
-            gpu_info = self._get_nvidia_gpu_info()
-        
-        # Fallback avec nvidia-smi
-        if not gpu_info:
-            gpu_info = self._get_gpu_info_nvidia_smi()
-        
-        # Fallback avec commandes système génériques
-        if not gpu_info:
-            gpu_info = self._get_gpu_info_fallback()
-        
-        self._gpu_info_cache = gpu_info
         return gpu_info
     
-    def _get_nvidia_gpu_info(self) -> Optional[Dict]:
-        """Récupère les infos GPU NVIDIA avec pynvml"""
-        try:
-            pynvml.nvmlInit()
-            device_count = pynvml.nvmlDeviceGetCount()
-            
-            if device_count > 0:
-                handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # Premier GPU
-                
-                name = pynvml.nvmlDeviceGetName(handle).decode('utf-8')
-                memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-                
-                return {
-                    'name': name,
-                    'memory_mb': round(memory_info.total / (1024**2)),
-                    'memory_free_mb': round(memory_info.free / (1024**2)),
-                    'memory_used_mb': round(memory_info.used / (1024**2)),
-                    'driver_version': pynvml.nvmlSystemGetDriverVersion().decode('utf-8'),
-                    'vendor': 'NVIDIA',
-                    'index': 0
-                }
-                
-        except Exception as e:
-            self.logger.debug(f"Erreur pynvml GPU: {e}")
-            return None
-    
-    def _get_gpu_info_nvidia_smi(self) -> Optional[Dict]:
-        """Récupère les infos GPU avec nvidia-smi"""
-        try:
-            result = subprocess.run([
-                'nvidia-smi', '--query-gpu=name,memory.total,memory.free,memory.used,driver_version',
-                '--format=csv,noheader,nounits'
-            ], capture_output=True, text=True, timeout=10)
-            
-            if result.returncode == 0 and result.stdout.strip():
-                line = result.stdout.strip().split('\n')[0]
-                parts = [p.strip() for p in line.split(',')]
-                
-                if len(parts) >= 4:
-                    return {
-                        'name': parts[0],
-                        'memory_mb': int(parts[1]),
-                        'memory_free_mb': int(parts[2]),
-                        'memory_used_mb': int(parts[3]),
-                        'driver_version': parts[4] if len(parts) > 4 else 'Unknown',
-                        'vendor': 'NVIDIA',
-                        'index': 0
-                    }
+    def _get_vulkan_devices(self) -> List[Dict[str, Any]]:
+        """Collecte les dispositifs Vulkan disponibles"""
+        devices = []
         
-        except Exception as e:
-            self.logger.debug(f"Erreur nvidia-smi: {e}")
-            return None
-    
-    def _get_gpu_info_fallback(self) -> Optional[Dict]:
-        """Récupère les infos GPU avec méthodes génériques"""
         try:
+            # Tentative d'utilisation de vulkan via subprocess
             if sys.platform == "win32":
-                # Windows: utilisation de wmic
-                result = subprocess.run([
-                    'wmic', 'path', 'win32_VideoController', 'get', 
-                    'Name,AdapterRAM', '/format:csv'
-                ], capture_output=True, text=True, timeout=10)
-                
-                if result.returncode == 0:
-                    lines = result.stdout.strip().split('\n')
-                    for line in lines[1:]:
-                        if line.strip():
-                            parts = line.split(',')
-                            if len(parts) >= 3 and parts[1] and parts[2]:
-                                try:
-                                    memory_bytes = int(parts[1])
-                                    memory_mb = round(memory_bytes / (1024**2))
-                                    
-                                    return {
-                                        'name': parts[2],
-                                        'memory_mb': memory_mb,
-                                        'vendor': 'Unknown',
-                                        'index': 0
-                                    }
-                                except (ValueError, IndexError):
-                                    continue
-            
-            elif sys.platform.startswith("linux"):
-                # Linux: utilisation de lspci
-                result = subprocess.run([
-                    'lspci', '-mm'
-                ], capture_output=True, text=True, timeout=5)
-                
-                if result.returncode == 0:
-                    for line in result.stdout.split('\n'):
-                        if 'VGA' in line or 'Display' in line:
-                            # Parsing basique des résultats lspci
-                            if 'NVIDIA' in line or 'AMD' in line or 'Intel' in line:
-                                return {
-                                    'name': line.split('"')[5] if '"' in line else 'GPU détecté',
-                                    'memory_mb': 0,  # Non disponible via lspci
-                                    'vendor': 'Detected',
-                                    'index': 0
-                                }
-        
-        except Exception as e:
-            self.logger.debug(f"Fallback GPU échoué: {e}")
-        
-        return None
-    
-    def get_disk_info(self) -> Dict:
-        """Retourne les informations de stockage"""
-        try:
-            disk_info = {
-                'total_gb': 100.0,
-                'free_gb': 50.0,
-                'used_gb': 50.0,
-                'usage_percent': 50.0
-            }
-            
-            if PSUTIL_AVAILABLE:
-                disk_usage = psutil.disk_usage('/')
-                disk_info.update({
-                    'total_gb': round(disk_usage.total / (1024**3), 2),
-                    'free_gb': round(disk_usage.free / (1024**3), 2),
-                    'used_gb': round(disk_usage.used / (1024**3), 2),
-                    'usage_percent': round((disk_usage.used / disk_usage.total) * 100, 2)
-                })
-            
-            return disk_info
-            
-        except Exception as e:
-            self.logger.error(f"Erreur info disque: {e}")
-            return {'total_gb': 100.0, 'error': str(e)}
-    
-    def get_network_info(self) -> Dict:
-        """Retourne les informations réseau"""
-        try:
-            network_info = {
-                'hostname': platform.node(),
-                'mac_address': self.get_mac_address(),
-                'interfaces': []
-            }
-            
-            if PSUTIL_AVAILABLE:
-                # Récupération des interfaces réseau
-                net_if_addrs = psutil.net_if_addrs()
-                for interface, addresses in net_if_addrs.items():
-                    interface_info = {'name': interface, 'addresses': []}
-                    
-                    for addr in addresses:
-                        interface_info['addresses'].append({
-                            'family': str(addr.family),
-                            'address': addr.address,
-                            'netmask': addr.netmask
-                        })
-                    
-                    network_info['interfaces'].append(interface_info)
-            
-            return network_info
-            
-        except Exception as e:
-            self.logger.error(f"Erreur info réseau: {e}")
-            return {'hostname': 'Unknown', 'mac_address': self.get_mac_address()}
-    
-    def get_complete_system_info(self) -> Dict:
-        """Retourne toutes les informations système"""
-        return {
-            'os': self.get_os_info(),
-            'cpu': self.get_cpu_info(),
-            'memory': self.get_memory_info(),
-            'gpu': self.get_gpu_info(),
-            'disk': self.get_disk_info(),
-            'network': self.get_network_info(),
-            'capabilities': self.get_processing_capabilities()
-        }
-    
-    def get_processing_capabilities(self) -> Dict:
-        """Évalue les capacités de traitement de la machine"""
-        cpu_info = self.get_cpu_info()
-        memory_info = self.get_memory_info()
-        gpu_info = self.get_gpu_info()
-        
-        # Score de performance basé sur les composants
-        performance_score = 0
-        
-        # Score CPU (0-30 points)
-        cpu_cores = cpu_info.get('cores_logical', 1)
-        performance_score += min(cpu_cores * 3, 30)
-        
-        # Score mémoire (0-20 points)
-        memory_gb = memory_info.get('total_gb', 0)
-        performance_score += min(memory_gb * 2, 20)
-        
-        # Score GPU (0-50 points)
-        if gpu_info:
-            gpu_memory = gpu_info.get('memory_mb', 0)
-            if 'RTX' in gpu_info.get('name', '').upper():
-                performance_score += min(gpu_memory / 100, 50)  # RTX = bonus
+                vulkan_info_cmd = ["vulkaninfo", "--summary"]
             else:
-                performance_score += min(gpu_memory / 200, 25)  # Autres GPU
+                vulkan_info_cmd = ["vulkaninfo", "--summary"]
+            
+            result = subprocess.run(vulkan_info_cmd, 
+                                  capture_output=True, 
+                                  text=True, 
+                                  timeout=10)
+            
+            if result.returncode == 0:
+                # Parse simple du résultat vulkaninfo
+                lines = result.stdout.split('\n')
+                current_device = {}
+                
+                for line in lines:
+                    line = line.strip()
+                    if 'GPU' in line and 'Device Name' in line:
+                        if current_device:
+                            devices.append(current_device)
+                        current_device = {'name': line.split(':')[-1].strip()}
+                    elif 'Device Type' in line and current_device:
+                        current_device['type'] = line.split(':')[-1].strip()
+                    elif 'Driver Version' in line and current_device:
+                        current_device['driver_version'] = line.split(':')[-1].strip()
+                
+                if current_device:
+                    devices.append(current_device)
+                    
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
+            self.logger.info("vulkaninfo non disponible ou échec")
+        except Exception as e:
+            self.logger.error(f"Erreur collecte dispositifs Vulkan: {e}")
         
-        # Détermination du niveau de performance
-        if performance_score >= 80:
-            performance_tier = 'high'
-            recommended_batch_size = 50
-        elif performance_score >= 50:
-            performance_tier = 'medium'
-            recommended_batch_size = 35
-        else:
-            performance_tier = 'low'
-            recommended_batch_size = 20
+        return devices
+    
+    def _get_performance_info(self) -> Dict[str, Any]:
+        """Informations de performance actuelles"""
+        try:
+            # Utilisation CPU sur 1 seconde
+            cpu_percent = psutil.cpu_percent(interval=1, percpu=True)
+            
+            # Utilisation mémoire
+            memory = psutil.virtual_memory()
+            
+            # Utilisation disque
+            disk_usage = psutil.disk_usage('/')
+            
+            # Charge système
+            if hasattr(os, 'getloadavg'):
+                load_avg = os.getloadavg()
+            else:
+                load_avg = (0, 0, 0)  # Windows n'a pas getloadavg
+            
+            return {
+                'cpu_percent_per_core': cpu_percent,
+                'cpu_percent_total': sum(cpu_percent) / len(cpu_percent),
+                'memory_percent': memory.percent,
+                'disk_percent': (disk_usage.used / disk_usage.total) * 100,
+                'load_average': {
+                    '1min': load_avg[0],
+                    '5min': load_avg[1],
+                    '15min': load_avg[2]
+                },
+                'process_count': len(psutil.pids())
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Erreur collecte informations performance: {e}")
+            return {}
+    
+    def _get_storage_info(self) -> Dict[str, Any]:
+        """Informations de stockage"""
+        try:
+            storage_info = {
+                'drives': [],
+                'total_space_gb': 0,
+                'free_space_gb': 0
+            }
+            
+            # Collecte des disques
+            partitions = psutil.disk_partitions()
+            
+            for partition in partitions:
+                try:
+                    partition_usage = psutil.disk_usage(partition.mountpoint)
+                    
+                    drive_info = {
+                        'device': partition.device,
+                        'mountpoint': partition.mountpoint,
+                        'filesystem': partition.fstype,
+                        'total_gb': round(partition_usage.total / (1024**3), 2),
+                        'used_gb': round(partition_usage.used / (1024**3), 2),
+                        'free_gb': round(partition_usage.free / (1024**3), 2),
+                        'percent_used': round((partition_usage.used / partition_usage.total) * 100, 2)
+                    }
+                    
+                    storage_info['drives'].append(drive_info)
+                    storage_info['total_space_gb'] += drive_info['total_gb']
+                    storage_info['free_space_gb'] += drive_info['free_gb']
+                    
+                except PermissionError:
+                    # Ignorer les partitions non accessibles
+                    continue
+                    
+            return storage_info
+            
+        except Exception as e:
+            self.logger.error(f"Erreur collecte informations stockage: {e}")
+            return {'drives': [], 'total_space_gb': 0, 'free_space_gb': 0}
+    
+    def _check_vulkan_support(self) -> Dict[str, Any]:
+        """Vérifie le support Vulkan"""
+        vulkan_info = {
+            'supported': False,
+            'version': None,
+            'instance_extensions': [],
+            'device_extensions': []
+        }
         
+        try:
+            # Vérification simple via vulkaninfo
+            result = subprocess.run(['vulkaninfo', '--summary'], 
+                                  capture_output=True, 
+                                  text=True, 
+                                  timeout=5)
+            
+            if result.returncode == 0:
+                vulkan_info['supported'] = True
+                
+                # Parse des informations version
+                for line in result.stdout.split('\n'):
+                    if 'Vulkan Instance Version' in line:
+                        vulkan_info['version'] = line.split(':')[-1].strip()
+                        break
+                        
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
+            vulkan_info['supported'] = False
+        except Exception as e:
+            self.logger.error(f"Erreur vérification support Vulkan: {e}")
+            vulkan_info['supported'] = False
+        
+        return vulkan_info
+    
+    def _get_minimal_info(self) -> Dict[str, Any]:
+        """Informations minimales en cas d'erreur"""
         return {
-            'performance_score': round(performance_score, 2),
-            'performance_tier': performance_tier,
-            'recommended_batch_size': recommended_batch_size,
-            'has_gpu': gpu_info is not None,
-            'gpu_suitable_for_ai': gpu_info is not None and gpu_info.get('memory_mb', 0) >= 2048,
-            'estimated_time_per_frame': self._estimate_processing_time_per_frame(performance_score)
+            'basic': {
+                'platform': platform.system(),
+                'hostname': socket.gethostname(),
+                'python_version': sys.version
+            },
+            'hardware': {'cpu': {}, 'memory': {}},
+            'network': {'mac_address': 'unknown', 'ip_addresses': []},
+            'gpu': {'nvidia_gpus': [], 'other_gpus': [], 'vulkan_devices': []},
+            'performance': {},
+            'storage': {'drives': []},
+            'vulkan': {'supported': False}
         }
     
-    def _estimate_processing_time_per_frame(self, performance_score: float) -> float:
-        """Estime le temps de traitement par frame en secondes"""
-        if performance_score >= 80:
-            return 1.0  # Machine puissante
-        elif performance_score >= 50:
-            return 2.5  # Machine moyenne
-        else:
-            return 5.0  # Machine faible
+    def get_mac_address(self) -> str:
+        """Retourne l'adresse MAC formatée"""
+        try:
+            mac = uuid.getnode()
+            mac_str = ':'.join(['{:02x}'.format((mac >> elements) & 0xff) 
+                               for elements in range(0, 2*6, 2)][::-1])
+            return mac_str.upper()
+        except:
+            return "00:00:00:00:00:00"
     
-    def refresh_cache(self):
-        """Rafraîchit le cache des informations système"""
-        self._gpu_info_cache = None
-        self._memory_info_cache = None
-        self._cpu_info_cache = None
-        self.logger.debug("Cache informations système rafraîchi")
+    def get_primary_ip(self) -> str:
+        """Retourne l'IP principale (non-localhost)"""
+        try:
+            system_info = self.get_system_info()
+            ip_addresses = system_info.get('network', {}).get('ip_addresses', [])
+            
+            for ip_info in ip_addresses:
+                ip = ip_info.get('ip', '')
+                if ip and not ip.startswith('127.') and not ip.startswith('169.254.'):
+                    return ip
+            
+            return '127.0.0.1'
+            
+        except:
+            return '127.0.0.1'
+    
+    def get_cpu_count(self) -> int:
+        """Retourne le nombre de cœurs CPU logiques"""
+        try:
+            return psutil.cpu_count(logical=True) or 1
+        except:
+            return 1
+    
+    def get_memory_gb(self) -> float:
+        """Retourne la quantité de RAM en GB"""
+        try:
+            return round(psutil.virtual_memory().total / (1024**3), 2)
+        except:
+            return 0.0
+    
+    def is_gpu_available(self) -> bool:
+        """Vérifie si un GPU est disponible"""
+        try:
+            system_info = self.get_system_info()
+            gpu_info = system_info.get('gpu', {})
+            
+            has_nvidia = len(gpu_info.get('nvidia_gpus', [])) > 0
+            has_other = len(gpu_info.get('other_gpus', [])) > 0
+            has_vulkan = len(gpu_info.get('vulkan_devices', [])) > 0
+            
+            return has_nvidia or has_other or has_vulkan
+            
+        except:
+            return False
+    
+    def get_performance_score(self) -> float:
+        """
+        Calcule un score de performance approximatif basé sur le matériel
+        Score de 0 à 100
+        """
+        try:
+            system_info = self.get_system_info()
+            score = 0.0
+            
+            # Score CPU (40% du total)
+            cpu_cores = system_info.get('hardware', {}).get('cpu', {}).get('logical_cores', 1)
+            cpu_freq = system_info.get('hardware', {}).get('cpu', {}).get('max_frequency', 1000)
+            cpu_score = min(40, (cpu_cores * cpu_freq / 1000) / 10)
+            score += cpu_score
+            
+            # Score RAM (30% du total)
+            ram_gb = system_info.get('hardware', {}).get('memory', {}).get('total_ram_gb', 1)
+            ram_score = min(30, ram_gb * 2)
+            score += ram_score
+            
+            # Score GPU (30% du total)
+            gpu_info = system_info.get('gpu', {})
+            if gpu_info.get('nvidia_gpus'):
+                score += 30  # GPU NVIDIA = score maximum
+            elif gpu_info.get('vulkan_devices'):
+                score += 20  # Support Vulkan = bon score
+            elif gpu_info.get('other_gpus'):
+                score += 10  # Autre GPU = score moyen
+            
+            return min(100.0, score)
+            
+        except:
+            return 50.0  # Score par défaut

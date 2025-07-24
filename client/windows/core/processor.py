@@ -1,4 +1,9 @@
-# client-windows/src/core/processor.py
+# client/windows/core/processor.py
+"""
+Processeur client pour l'upscaling distribué - Version corrigée
+Gère la réception, traitement et renvoi des lots
+"""
+
 import os
 import sys
 import tempfile
@@ -7,14 +12,18 @@ import subprocess
 import asyncio
 import logging
 import shutil
+import hashlib
+import time
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 import io
-import time
 
-from ..security.client_security import ClientSecurity
-from ..utils.config import ClientConfig
-from ..utils.system_info import SystemInfo
+# Imports corrigés avec chemins absolus
+sys.path.append(str(Path(__file__).parent.parent))
+
+from security.client_security import ClientSecurity
+from utils.config import config, ClientConfig
+from utils.system_info import SystemInfo
 
 class ClientProcessor:
     """
@@ -25,7 +34,7 @@ class ClientProcessor:
     def __init__(self, client_instance):
         self.client = client_instance
         self.logger = logging.getLogger(__name__)
-        self.config = ClientConfig()
+        self.config = config
         self.security = ClientSecurity()
         self.system_info = SystemInfo()
         
@@ -35,11 +44,25 @@ class ClientProcessor:
         self.processing_start_time = None
         
         # Dossiers de travail
-        self.work_dir = Path(tempfile.gettempdir()) / "distributed_upscaler_client"
-        self.work_dir.mkdir(exist_ok=True)
+        self.work_dir = self.config.get_work_directory()
+        self.temp_dir = self.work_dir / "temp"
+        self.input_dir = self.work_dir / "input"
+        self.output_dir = self.work_dir / "output"
+        
+        # Création des dossiers
+        for directory in [self.temp_dir, self.input_dir, self.output_dir]:
+            directory.mkdir(parents=True, exist_ok=True)
         
         # Chemin vers Real-ESRGAN
         self.realesrgan_path = self._find_realesrgan_executable()
+        
+        # Configuration Real-ESRGAN
+        self.realesrgan_config = {
+            'model': self.config.get("processing.realesrgan_model", "RealESRGAN_x4plus"),
+            'scale': 4,
+            'tile_size': self.config.get("processing.tile_size", 256),
+            'use_gpu': self.config.get("processing.use_gpu", True)
+        }
         
         # Statistiques
         self.stats = {
@@ -48,10 +71,12 @@ class ClientProcessor:
             'total_processing_time': 0,
             'average_time_per_frame': 0,
             'errors_count': 0,
-            'last_error': None
+            'last_error': None,
+            'data_received_mb': 0,
+            'data_sent_mb': 0
         }
         
-        self.logger.info("Processeur client initialisé")
+        self.logger.info(f"Processeur client initialisé - Real-ESRGAN: {self.realesrgan_path}")
     
     def _find_realesrgan_executable(self) -> Optional[str]:
         """Trouve l'exécutable Real-ESRGAN selon la plateforme"""
@@ -60,7 +85,7 @@ class ClientProcessor:
         else:
             executable_name = "realesrgan-ncnn-vulkan"
         
-        # Recherche dans le dossier des dépendances
+        # 1. Recherche dans le dossier des dépendances
         client_dir = Path(__file__).parent.parent.parent
         dependencies_dir = client_dir / "dependencies"
         executable_path = dependencies_dir / executable_name
@@ -69,74 +94,130 @@ class ClientProcessor:
             self.logger.info(f"Real-ESRGAN trouvé: {executable_path}")
             return str(executable_path)
         
-        # Recherche dans le PATH système
-        if shutil.which(executable_name):
-            path = shutil.which(executable_name)
-            self.logger.info(f"Real-ESRGAN trouvé dans PATH: {path}")
-            return path
+        # 2. Recherche dans la configuration
+        config_path = self.config.get("paths.realesrgan_executable")
+        if config_path and Path(config_path).exists():
+            self.logger.info(f"Real-ESRGAN trouvé via config: {config_path}")
+            return config_path
         
-        self.logger.error(f"Real-ESRGAN non trouvé: {executable_name}")
+        # 3. Recherche dans le PATH système
+        system_path = shutil.which(executable_name)
+        if system_path:
+            self.logger.info(f"Real-ESRGAN trouvé dans PATH: {system_path}")
+            return system_path
+        
+        # 4. Recherche dans des emplacements standards
+        standard_locations = [
+            Path.cwd() / executable_name,
+            Path.cwd() / "bin" / executable_name,
+            Path.cwd() / "tools" / executable_name,
+            Path.home() / "tools" / executable_name
+        ]
+        
+        for location in standard_locations:
+            if location.exists():
+                self.logger.info(f"Real-ESRGAN trouvé: {location}")
+                return str(location)
+        
+        self.logger.warning("Real-ESRGAN non trouvé - fonctionnalité d'upscaling indisponible")
         return None
     
-    async def process_batch(self, batch_data: dict, encrypted_zip_data: bytes) -> Optional[bytes]:
+    async def process_batch(self, batch_data: bytes, batch_id: str, batch_config: Dict) -> Optional[bytes]:
         """
-        Traite un lot reçu du serveur
+        Traite un lot d'images
         
         Args:
-            batch_data: Métadonnées du lot
-            encrypted_zip_data: Données ZIP chiffrées
+            batch_data: Données du lot chiffrées
+            batch_id: Identifiant du lot
+            batch_config: Configuration de traitement
             
         Returns:
-            Données ZIP chiffrées du résultat ou None en cas d'erreur
+            Données du lot traité chiffrées ou None en cas d'erreur
         """
         if self.is_processing:
-            self.logger.warning("Traitement déjà en cours, lot refusé")
+            self.logger.warning(f"Tentative de traitement du lot {batch_id} alors qu'un traitement est en cours")
             return None
         
-        if not self.realesrgan_path:
-            self.logger.error("Real-ESRGAN non disponible")
-            return None
-        
-        batch_id = batch_data.get('id')
-        self.current_batch_id = batch_id
         self.is_processing = True
+        self.current_batch_id = batch_id
         self.processing_start_time = time.time()
         
         try:
             self.logger.info(f"Début traitement lot {batch_id}")
             
-            # 1. Déchiffrement des données
-            zip_data = await self._decrypt_batch_data(encrypted_zip_data)
-            if not zip_data:
-                raise Exception("Échec déchiffrement")
+            # 1. Déchiffrement et décompression des données
+            decrypted_data = self.security.decrypt_data(batch_data)
+            if decrypted_data is None:
+                raise Exception("Échec déchiffrement des données")
             
-            # 2. Extraction des images
-            input_dir = await self._extract_batch_images(batch_id, zip_data)
-            if not input_dir:
-                raise Exception("Échec extraction images")
+            self.stats['data_received_mb'] += len(batch_data) / (1024 * 1024)
             
-            # 3. Traitement Real-ESRGAN
-            output_dir = await self._process_with_realesrgan(
-                batch_data, input_dir
+            # 2. Extraction du lot dans le dossier de travail
+            batch_input_dir = self.input_dir / batch_id
+            batch_output_dir = self.output_dir / batch_id
+            
+            # Nettoyage des dossiers précédents
+            if batch_input_dir.exists():
+                shutil.rmtree(batch_input_dir)
+            if batch_output_dir.exists():
+                shutil.rmtree(batch_output_dir)
+            
+            batch_input_dir.mkdir(parents=True)
+            batch_output_dir.mkdir(parents=True)
+            
+            # 3. Décompression du ZIP
+            zip_path = self.temp_dir / f"{batch_id}.zip"
+            with open(zip_path, 'wb') as f:
+                f.write(decrypted_data)
+            
+            extracted_files = self._extract_batch_zip(zip_path, batch_input_dir)
+            if not extracted_files:
+                raise Exception("Aucun fichier extrait du lot")
+            
+            self.logger.info(f"Lot {batch_id}: {len(extracted_files)} images extraites")
+            
+            # 4. Traitement avec Real-ESRGAN
+            processed_files = await self._process_images_with_realesrgan(
+                batch_input_dir, batch_output_dir, batch_config
             )
-            if not output_dir:
-                raise Exception("Échec traitement Real-ESRGAN")
             
-            # 4. Validation du résultat
-            if not await self._validate_output(batch_data, output_dir):
-                raise Exception("Validation résultat échouée")
+            if not processed_files:
+                raise Exception("Aucune image traitée avec succès")
             
-            # 5. Compression et chiffrement du résultat
-            result_data = await self._prepare_result(batch_id, output_dir)
+            self.logger.info(f"Lot {batch_id}: {len(processed_files)} images traitées")
             
-            # 6. Nettoyage
-            await self._cleanup_batch_files(batch_id)
+            # 5. Vérification de l'intégrité (même nombre de fichiers)
+            if len(processed_files) != len(extracted_files):
+                self.logger.warning(f"Lot {batch_id}: {len(processed_files)} traitées sur {len(extracted_files)} extraites")
             
-            # 7. Mise à jour des statistiques
-            self._update_stats(batch_data, success=True)
+            # 6. Compression du résultat
+            result_zip_path = self.temp_dir / f"{batch_id}_result.zip"
+            self._create_result_zip(batch_output_dir, result_zip_path)
             
-            self.logger.info(f"Lot {batch_id} traité avec succès")
-            return result_data
+            # 7. Chiffrement des données de retour
+            with open(result_zip_path, 'rb') as f:
+                result_data = f.read()
+            
+            encrypted_result = self.security.encrypt_data(result_data)
+            if encrypted_result is None:
+                raise Exception("Échec chiffrement des données de retour")
+            
+            self.stats['data_sent_mb'] += len(encrypted_result) / (1024 * 1024)
+            
+            # 8. Nettoyage
+            self._cleanup_batch_files(batch_id, zip_path, result_zip_path, batch_input_dir, batch_output_dir)
+            
+            # 9. Mise à jour des statistiques
+            processing_time = time.time() - self.processing_start_time
+            self.stats['batches_processed'] += 1
+            self.stats['total_frames_processed'] += len(processed_files)
+            self.stats['total_processing_time'] += processing_time
+            self.stats['average_time_per_frame'] = (
+                self.stats['total_processing_time'] / max(1, self.stats['total_frames_processed'])
+            )
+            
+            self.logger.info(f"Lot {batch_id} traité avec succès en {processing_time:.1f}s")
+            return encrypted_result
             
         except Exception as e:
             self.logger.error(f"Erreur traitement lot {batch_id}: {e}")
@@ -144,7 +225,11 @@ class ClientProcessor:
             self.stats['last_error'] = str(e)
             
             # Nettoyage en cas d'erreur
-            await self._cleanup_batch_files(batch_id)
+            try:
+                self._cleanup_batch_files(batch_id)
+            except:
+                pass
+            
             return None
             
         finally:
@@ -152,297 +237,379 @@ class ClientProcessor:
             self.current_batch_id = None
             self.processing_start_time = None
     
-    async def _decrypt_batch_data(self, encrypted_data: bytes) -> Optional[bytes]:
-        """Déchiffre les données du lot"""
+    def _extract_batch_zip(self, zip_path: Path, extract_dir: Path) -> List[str]:
+        """Extrait un fichier ZIP de lot"""
+        extracted_files = []
+        
         try:
-            session_key = self.security.get_session_key()
-            if not session_key:
-                raise Exception("Aucune clé de session disponible")
-            
-            decrypted_data = self.security.decrypt_data(encrypted_data, session_key)
-            
-            self.logger.debug(f"Données déchiffrées: {len(decrypted_data)} bytes")
-            return decrypted_data
-            
-        except Exception as e:
-            self.logger.error(f"Erreur déchiffrement: {e}")
-            return None
-    
-    async def _extract_batch_images(self, batch_id: str, zip_data: bytes) -> Optional[Path]:
-        """Extrait les images du ZIP dans un dossier temporaire"""
-        try:
-            # Création dossier d'extraction
-            extract_dir = self.work_dir / f"batch_{batch_id}_input"
-            extract_dir.mkdir(exist_ok=True)
-            
-            # Extraction du ZIP
-            with zipfile.ZipFile(io.BytesIO(zip_data), 'r') as zip_file:
+            with zipfile.ZipFile(zip_path, 'r') as zip_file:
+                # Vérification de sécurité des noms de fichiers
+                for name in zip_file.namelist():
+                    if os.path.isabs(name) or ".." in name:
+                        raise Exception(f"Nom de fichier dangereux détecté: {name}")
+                
+                # Extraction
                 zip_file.extractall(extract_dir)
+                extracted_files = zip_file.namelist()
             
-            # Vérification des fichiers extraits
-            image_files = list(extract_dir.glob("*.png"))
-            if not image_files:
-                raise Exception("Aucune image trouvée dans le ZIP")
-            
-            self.logger.debug(f"Extrait {len(image_files)} images dans {extract_dir}")
-            return extract_dir
-            
-        except Exception as e:
-            self.logger.error(f"Erreur extraction images: {e}")
-            return None
-    
-    async def _process_with_realesrgan(self, batch_data: dict, input_dir: Path) -> Optional[Path]:
-        """Exécute Real-ESRGAN sur le dossier d'entrée"""
-        try:
-            batch_id = batch_data['id']
-            scale_factor = batch_data.get('scale_factor', 4)
-            model_name = batch_data.get('model_name', 'realesrgan-x4plus')
-            
-            # Création dossier de sortie
-            output_dir = self.work_dir / f"batch_{batch_id}_output"
-            output_dir.mkdir(exist_ok=True)
-            
-            # Construction de la commande Real-ESRGAN
-            cmd = [
-                self.realesrgan_path,
-                "-i", str(input_dir),
-                "-o", str(output_dir),
-                "-s", str(scale_factor),
-                "-n", model_name
+            # Filtrage des fichiers images
+            image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.webp'}
+            extracted_files = [
+                f for f in extracted_files 
+                if Path(f).suffix.lower() in image_extensions
             ]
             
-            # Ajout des optimisations système
-            system_optimizations = self._get_system_optimizations()
-            cmd.extend(system_optimizations)
+            return extracted_files
             
+        except Exception as e:
+            self.logger.error(f"Erreur extraction ZIP {zip_path}: {e}")
+            return []
+    
+    async def _process_images_with_realesrgan(self, input_dir: Path, output_dir: Path, 
+                                           batch_config: Dict) -> List[str]:
+        """Traite les images avec Real-ESRGAN"""
+        if not self.realesrgan_path:
+            raise Exception("Real-ESRGAN non disponible")
+        
+        # Configuration du traitement
+        config = self.realesrgan_config.copy()
+        config.update(batch_config.get('realesrgan', {}))
+        
+        # Construction de la commande
+        cmd = [
+            self.realesrgan_path,
+            '-i', str(input_dir),
+            '-o', str(output_dir),
+            '-n', config.get('model', 'RealESRGAN_x4plus'),
+            '-s', str(config.get('scale', 4)),
+            '-t', str(config.get('tile_size', 256)),
+            '-f', 'png'
+        ]
+        
+        # Options supplémentaires
+        if not config.get('use_gpu', True):
+            cmd.extend(['-g', '-1'])  # CPU seulement
+        
+        if config.get('tta_mode', False):
+            cmd.append('-x')  # Mode TTA (Test-Time Augmentation)
+        
+        try:
+            # Exécution de Real-ESRGAN
             self.logger.info(f"Exécution Real-ESRGAN: {' '.join(cmd)}")
             
-            # Exécution avec timeout
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(), 
-                    timeout=self.config.PROCESSING_TIMEOUT_SECONDS
-                )
-            except asyncio.TimeoutError:
-                process.kill()
-                raise Exception("Timeout Real-ESRGAN")
+            stdout, stderr = await process.communicate()
             
             if process.returncode != 0:
                 error_msg = stderr.decode('utf-8', errors='ignore')
-                raise Exception(f"Real-ESRGAN a échoué: {error_msg}")
+                raise Exception(f"Real-ESRGAN a échoué (code {process.returncode}): {error_msg}")
             
             # Vérification des fichiers de sortie
-            output_files = list(output_dir.glob("*.png"))
+            output_files = []
+            for file_path in output_dir.glob('*.png'):
+                if file_path.is_file() and file_path.stat().st_size > 0:
+                    output_files.append(file_path.name)
+            
             if not output_files:
-                raise Exception("Aucun fichier de sortie généré")
+                raise Exception("Aucun fichier de sortie généré par Real-ESRGAN")
             
-            self.logger.info(f"Real-ESRGAN terminé: {len(output_files)} fichiers générés")
-            return output_dir
-            
-        except Exception as e:
-            self.logger.error(f"Erreur Real-ESRGAN: {e}")
-            return None
-    
-    def _get_system_optimizations(self) -> List[str]:
-        """Retourne les optimisations selon le matériel détecté"""
-        optimizations = []
-        
-        # Détection GPU
-        gpu_info = self.system_info.get_gpu_info()
-        if gpu_info:
-            # Optimisations spécifiques GPU
-            if "RTX" in gpu_info.get('name', ''):
-                optimizations.extend(["-t", "256"])  # Tile size optimisé
-            else:
-                optimizations.extend(["-t", "128"])  # Tile size conservateur
-        else:
-            # Mode CPU uniquement
-            optimizations.extend(["-t", "64"])
-        
-        # Optimisations mémoire
-        memory_gb = self.system_info.get_memory_info().get('total_gb', 0)
-        if memory_gb < 8:
-            optimizations.extend(["-j", "1:1:1"])  # Thread limité
-        elif memory_gb >= 16:
-            optimizations.extend(["-j", "2:2:2"])  # Threads élevés
-        
-        return optimizations
-    
-    async def _validate_output(self, batch_data: dict, output_dir: Path) -> bool:
-        """Valide le résultat du traitement"""
-        try:
-            expected_count = len(batch_data.get('frame_paths', []))
-            actual_files = list(output_dir.glob("*.png"))
-            actual_count = len(actual_files)
-            
-            if actual_count != expected_count:
-                self.logger.warning(f"Nombre de fichiers incorrect: {actual_count}/{expected_count}")
-                return False
-            
-            # Vérification de la taille des fichiers (upscaling = fichiers plus gros)
-            for file_path in actual_files:
-                file_size = file_path.stat().st_size
-                if file_size < 1024:  # Moins de 1KB = probablement erreur
-                    self.logger.warning(f"Fichier trop petit: {file_path} ({file_size} bytes)")
-                    return False
-            
-            self.logger.debug("Validation résultat: OK")
-            return True
+            self.logger.info(f"Real-ESRGAN terminé - {len(output_files)} fichiers générés")
+            return output_files
             
         except Exception as e:
-            self.logger.error(f"Erreur validation: {e}")
-            return False
-    
-    async def _prepare_result(self, batch_id: str, output_dir: Path) -> bytes:
-        """Prépare le résultat pour envoi (compression + chiffrement)"""
-        try:
-            # 1. Compression en ZIP (sans compression pour optimiser)
-            zip_buffer = io.BytesIO()
-            
-            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_STORED) as zip_file:
-                for image_file in output_dir.glob("*.png"):
-                    zip_file.write(image_file, image_file.name)
-            
-            zip_data = zip_buffer.getvalue()
-            self.logger.debug(f"Résultat compressé: {len(zip_data)} bytes")
-            
-            # 2. Chiffrement
-            session_key = self.security.get_session_key()
-            if not session_key:
-                raise Exception("Aucune clé de session pour chiffrement")
-            
-            encrypted_data = self.security.encrypt_data(zip_data, session_key)
-            
-            self.logger.debug(f"Résultat chiffré: {len(encrypted_data)} bytes")
-            return encrypted_data
-            
-        except Exception as e:
-            self.logger.error(f"Erreur préparation résultat: {e}")
+            self.logger.error(f"Erreur exécution Real-ESRGAN: {e}")
             raise
     
-    async def _cleanup_batch_files(self, batch_id: str):
-        """Nettoie les fichiers temporaires du lot"""
+    def _create_result_zip(self, output_dir: Path, zip_path: Path):
+        """Crée un fichier ZIP avec les résultats"""
         try:
-            folders_to_clean = [
-                self.work_dir / f"batch_{batch_id}_input",
-                self.work_dir / f"batch_{batch_id}_output"
-            ]
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_STORED) as zip_file:  # ZIP_STORED = pas de compression
+                for file_path in output_dir.glob('*'):
+                    if file_path.is_file():
+                        zip_file.write(file_path, file_path.name)
             
-            for folder in folders_to_clean:
-                if folder.exists():
-                    shutil.rmtree(folder)
-                    self.logger.debug(f"Dossier nettoyé: {folder}")
+            self.logger.info(f"ZIP résultat créé: {zip_path}")
             
         except Exception as e:
-            self.logger.warning(f"Erreur nettoyage lot {batch_id}: {e}")
+            self.logger.error(f"Erreur création ZIP résultat: {e}")
+            raise
     
-    def _update_stats(self, batch_data: dict, success: bool):
-        """Met à jour les statistiques de traitement"""
-        if success:
-            self.stats['batches_processed'] += 1
-            frame_count = len(batch_data.get('frame_paths', []))
-            self.stats['total_frames_processed'] += frame_count
+    def _cleanup_batch_files(self, batch_id: str, *additional_paths):
+        """Nettoie les fichiers temporaires d'un lot"""
+        try:
+            # Dossiers du lot
+            batch_input_dir = self.input_dir / batch_id
+            batch_output_dir = self.output_dir / batch_id
             
-            if self.processing_start_time:
-                processing_time = time.time() - self.processing_start_time
-                self.stats['total_processing_time'] += processing_time
-                
-                # Calcul moyenne temps par frame
-                if self.stats['total_frames_processed'] > 0:
-                    self.stats['average_time_per_frame'] = (
-                        self.stats['total_processing_time'] / 
-                        self.stats['total_frames_processed']
-                    )
+            for directory in [batch_input_dir, batch_output_dir]:
+                if directory.exists():
+                    shutil.rmtree(directory)
+            
+            # Fichiers temporaires supplémentaires
+            for path in additional_paths:
+                if path and Path(path).exists():
+                    Path(path).unlink()
+            
+            self.logger.debug(f"Nettoyage lot {batch_id} terminé")
+            
+        except Exception as e:
+            self.logger.error(f"Erreur nettoyage lot {batch_id}: {e}")
     
-    def get_processing_status(self) -> dict:
-        """Retourne l'état actuel du traitement"""
-        status = {
-            'is_processing': self.is_processing,
-            'current_batch_id': self.current_batch_id,
-            'realesrgan_available': self.realesrgan_path is not None,
-            'work_directory': str(self.work_dir)
+    def test_realesrgan(self) -> Dict[str, any]:
+        """
+        Teste la disponibilité et le fonctionnement de Real-ESRGAN
+        
+        Returns:
+            Dictionnaire avec les résultats du test
+        """
+        test_result = {
+            'available': False,
+            'executable_path': self.realesrgan_path,
+            'version': None,
+            'models_available': [],
+            'gpu_support': False,
+            'test_success': False,
+            'error': None
         }
         
-        if self.is_processing and self.processing_start_time:
-            status['processing_duration'] = time.time() - self.processing_start_time
+        if not self.realesrgan_path:
+            test_result['error'] = "Exécutable Real-ESRGAN non trouvé"
+            return test_result
         
-        return status
+        try:
+            # Test de base - version
+            result = subprocess.run([self.realesrgan_path, '-h'], 
+                                  capture_output=True, text=True, timeout=10)
+            
+            if result.returncode == 0:
+                test_result['available'] = True
+                
+                # Extraction de la version si possible
+                output = result.stdout + result.stderr
+                for line in output.split('\n'):
+                    if 'Real-ESRGAN' in line and ('version' in line.lower() or 'v' in line):
+                        test_result['version'] = line.strip()
+                        break
+            
+            # Test des modèles disponibles
+            models_dir = Path(self.realesrgan_path).parent / "models"
+            if models_dir.exists():
+                model_files = list(models_dir.glob("*.bin"))
+                test_result['models_available'] = [f.stem for f in model_files]
+            
+            # Test GPU (très basique)
+            if self.system_info.is_gpu_available():
+                test_result['gpu_support'] = True
+            
+            test_result['test_success'] = True
+            self.logger.info("Test Real-ESRGAN réussi")
+            
+        except subprocess.TimeoutExpired:
+            test_result['error'] = "Timeout lors du test Real-ESRGAN"
+        except Exception as e:
+            test_result['error'] = f"Erreur test Real-ESRGAN: {e}"
+        
+        return test_result
     
-    def get_statistics(self) -> dict:
-        """Retourne les statistiques de traitement"""
-        return self.stats.copy()
-    
-    def get_capabilities(self) -> dict:
-        """Retourne les capacités du client"""
-        gpu_info = self.system_info.get_gpu_info()
-        memory_info = self.system_info.get_memory_info()
+    def get_processing_capabilities(self) -> Dict[str, any]:
+        """
+        Retourne les capacités de traitement du client
+        
+        Returns:
+            Dictionnaire avec les capacités
+        """
+        system_info = self.system_info.get_system_info()
+        realesrgan_test = self.test_realesrgan()
         
         return {
-            'realesrgan_available': self.realesrgan_path is not None,
-            'gpu_available': gpu_info is not None,
-            'gpu_name': gpu_info.get('name', '') if gpu_info else '',
-            'gpu_memory_mb': gpu_info.get('memory_mb', 0) if gpu_info else 0,
-            'system_memory_gb': memory_info.get('total_gb', 0),
-            'recommended_batch_size': self._calculate_recommended_batch_size(),
-            'estimated_time_per_frame': self.stats.get('average_time_per_frame', 2.0)
+            'system_info': {
+                'platform': system_info['basic']['platform'],
+                'cpu_cores': system_info['hardware']['cpu'].get('logical_cores', 1),
+                'ram_gb': system_info['hardware']['memory'].get('total_ram_gb', 0),
+                'gpu_available': self.system_info.is_gpu_available(),
+                'vulkan_support': system_info['vulkan']['supported']
+            },
+            'realesrgan': {
+                'available': realesrgan_test['available'],
+                'path': realesrgan_test['executable_path'],
+                'version': realesrgan_test['version'],
+                'models': realesrgan_test['models_available'],
+                'gpu_support': realesrgan_test['gpu_support']
+            },
+            'performance_score': self.system_info.get_performance_score(),
+            'recommended_config': self._get_recommended_config(),
+            'max_concurrent_batches': self.config.get("processing.max_concurrent_batches", 1)
         }
     
-    def _calculate_recommended_batch_size(self) -> int:
-        """Calcule la taille de lot recommandée selon les capacités"""
-        base_size = 25  # Taille de base conservative
+    def _get_recommended_config(self) -> Dict[str, any]:
+        """
+        Génère une configuration recommandée basée sur le matériel
         
-        gpu_info = self.system_info.get_gpu_info()
-        if gpu_info:
-            gpu_memory = gpu_info.get('memory_mb', 0)
+        Returns:
+            Configuration recommandée
+        """
+        performance_score = self.system_info.get_performance_score()
+        ram_gb = self.system_info.get_memory_gb()
+        gpu_available = self.system_info.is_gpu_available()
+        
+        config = {
+            'tile_size': 256,
+            'use_gpu': gpu_available,
+            'tta_mode': False,
+            'model': 'RealESRGAN_x4plus'
+        }
+        
+        # Ajustement basé sur la performance
+        if performance_score >= 80:
+            # Configuration haute performance
+            config['tile_size'] = 512
+            config['tta_mode'] = True
+        elif performance_score >= 60:
+            # Configuration moyenne
+            config['tile_size'] = 384
+        elif performance_score < 40:
+            # Configuration conservatrice
+            config['tile_size'] = 128
+            config['use_gpu'] = False  # Forcer CPU si performance très faible
+        
+        # Ajustement basé sur la RAM
+        if ram_gb < 4:
+            config['tile_size'] = min(config['tile_size'], 128)
+            config['tta_mode'] = False
+        elif ram_gb >= 16:
+            config['tile_size'] = max(config['tile_size'], 384)
+        
+        return config
+    
+    def get_stats(self) -> Dict[str, any]:
+        """
+        Retourne les statistiques du processeur
+        
+        Returns:
+            Dictionnaire avec les statistiques
+        """
+        return {
+            'processing_state': {
+                'is_processing': self.is_processing,
+                'current_batch_id': self.current_batch_id,
+                'processing_duration': (
+                    time.time() - self.processing_start_time 
+                    if self.processing_start_time else 0
+                )
+            },
+            'performance_stats': self.stats.copy(),
+            'system_resources': {
+                'cpu_percent': self.system_info._get_performance_info().get('cpu_percent_total', 0),
+                'memory_percent': self.system_info._get_performance_info().get('memory_percent', 0),
+                'disk_percent': self.system_info._get_performance_info().get('disk_percent', 0)
+            },
+            'work_directories': {
+                'work_dir': str(self.work_dir),
+                'temp_dir': str(self.temp_dir),
+                'input_dir': str(self.input_dir),
+                'output_dir': str(self.output_dir)
+            }
+        }
+    
+    def cleanup_old_files(self, max_age_hours: int = 24):
+        """
+        Nettoie les anciens fichiers temporaires
+        
+        Args:
+            max_age_hours: Âge maximum des fichiers en heures
+        """
+        try:
+            current_time = time.time()
+            max_age_seconds = max_age_hours * 3600
             
-            if gpu_memory >= 8192:  # 8GB+
-                return 50
-            elif gpu_memory >= 6144:  # 6GB+
-                return 40
-            elif gpu_memory >= 4096:  # 4GB+
-                return 30
+            cleaned_count = 0
+            
+            # Nettoyage des dossiers temporaires
+            for directory in [self.temp_dir, self.input_dir, self.output_dir]:
+                if not directory.exists():
+                    continue
+                
+                for item in directory.iterdir():
+                    try:
+                        # Vérification de l'âge
+                        if current_time - item.stat().st_mtime > max_age_seconds:
+                            if item.is_file():
+                                item.unlink()
+                                cleaned_count += 1
+                            elif item.is_dir():
+                                shutil.rmtree(item)
+                                cleaned_count += 1
+                    except Exception as e:
+                        self.logger.warning(f"Impossible de supprimer {item}: {e}")
+            
+            if cleaned_count > 0:
+                self.logger.info(f"Nettoyage terminé: {cleaned_count} éléments supprimés")
+            
+        except Exception as e:
+            self.logger.error(f"Erreur nettoyage fichiers anciens: {e}")
+    
+    def reset_stats(self):
+        """Remet à zéro les statistiques"""
+        self.stats = {
+            'batches_processed': 0,
+            'total_frames_processed': 0,
+            'total_processing_time': 0,
+            'average_time_per_frame': 0,
+            'errors_count': 0,
+            'last_error': None,
+            'data_received_mb': 0,
+            'data_sent_mb': 0
+        }
+        self.logger.info("Statistiques remises à zéro")
+    
+    def validate_configuration(self) -> Dict[str, any]:
+        """
+        Valide la configuration du processeur
         
-        # Mode CPU ou GPU faible
-        return base_size
-
-class ProgressTracker:
-    """Gestionnaire de progression pour le traitement"""
-    
-    def __init__(self, callback=None):
-        self.callback = callback
-        self.current_progress = 0.0
-        self.total_steps = 0
-        self.completed_steps = 0
-    
-    def set_total_steps(self, total: int):
-        """Définit le nombre total d'étapes"""
-        self.total_steps = total
-        self.completed_steps = 0
-        self.current_progress = 0.0
-    
-    def step_completed(self, step_name: str = ""):
-        """Marque une étape comme terminée"""
-        self.completed_steps += 1
+        Returns:
+            Résultat de la validation
+        """
+        validation = {
+            'valid': True,
+            'errors': [],
+            'warnings': []
+        }
         
-        if self.total_steps > 0:
-            self.current_progress = (self.completed_steps / self.total_steps) * 100
+        # Validation Real-ESRGAN
+        if not self.realesrgan_path:
+            validation['errors'].append("Exécutable Real-ESRGAN non trouvé")
+            validation['valid'] = False
+        elif not Path(self.realesrgan_path).exists():
+            validation['errors'].append(f"Fichier Real-ESRGAN inexistant: {self.realesrgan_path}")
+            validation['valid'] = False
         
-        if self.callback:
-            self.callback(self.current_progress, step_name)
-    
-    def set_progress(self, progress: float, description: str = ""):
-        """Définit directement le pourcentage de progression"""
-        self.current_progress = max(0, min(100, progress))
+        # Validation des dossiers
+        for name, directory in [
+            ('work', self.work_dir),
+            ('temp', self.temp_dir),
+            ('input', self.input_dir),
+            ('output', self.output_dir)
+        ]:
+            if not directory.exists():
+                try:
+                    directory.mkdir(parents=True, exist_ok=True)
+                    validation['warnings'].append(f"Dossier {name} créé: {directory}")
+                except Exception as e:
+                    validation['errors'].append(f"Impossible de créer le dossier {name}: {e}")
+                    validation['valid'] = False
         
-        if self.callback:
-            self.callback(self.current_progress, description)
-    
-    def get_progress(self) -> float:
-        """Retourne la progression actuelle"""
-        return self.current_progress
+        # Validation de la sécurité
+        if not self.security.is_ready():
+            validation['errors'].append("Système de sécurité non initialisé")
+            validation['valid'] = False
+        
+        # Validation de la configuration
+        if not self.config.validate_config():
+            validation['warnings'].append("Configuration client incomplète")
+        
+        return validation
