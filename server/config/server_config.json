@@ -20,8 +20,8 @@
         "gpu_memory_limit": 8192,
         "tile_size": 256,
         "max_retries": 3,
-        "duplicate_threshold": 5,
-        "ffmpeg_path": "./ffmpeg/ffmpeg.exe"
+        "ffmpeg_path": "D:\\UpscalingByNetwork\\server\\ffmpeg\\ffmpeg.exe",
+        "duplicate_threshold": 5
     },
     "storage": {
         "work_directory": "./work",
@@ -40,7 +40,7 @@
         "allowed_clients": []
     },
     "realesrgan": {
-        "executable_path": "./realesrgan-ncnn-vulkan/realesrgan-ncnn-vulkan.exe",
+        "executable_path": "D:\\UpscalingByNetwork\\server\\realesrgan-ncnn-vulkan\\realesrgan-ncnn-vulkan.exe",
         "models_directory": "./models",
         "default_model": "RealESRGAN_x4plus",
         "default_scale": 4,

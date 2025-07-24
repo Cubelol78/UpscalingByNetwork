@@ -8,6 +8,7 @@ server/gui/__pycache__
 server/models/__pycache__
 server/utils/__pycache__
 server/gui/tabs/__pycache__
+server/security/__pycache__
 
 server/logs
 
