@@ -1,0 +1,65 @@
+{
+    "server": {
+        "host": "0.0.0.0",
+        "port": 8765,
+        "max_clients": 10,
+        "heartbeat_interval": 30,
+        "client_timeout": 120,
+        "enable_ssl": false,
+        "ssl_cert_path": "",
+        "ssl_key_path": ""
+    },
+    "processing": {
+        "batch_size": 50,
+        "max_concurrent_batches": 5,
+        "upscale_factor": 4,
+        "realesrgan_model": "RealESRGAN_x4plus",
+        "output_format": "png",
+        "compression_level": 0,
+        "enable_gpu": true,
+        "gpu_memory_limit": 8192,
+        "tile_size": 256,
+        "max_retries": 3,
+        "duplicate_threshold": 5
+    },
+    "storage": {
+        "work_directory": "./work",
+        "input_directory": "./input",
+        "output_directory": "./output",
+        "temp_directory": "./temp",
+        "batches_directory": "./batches",
+        "logs_directory": "./logs",
+        "auto_cleanup": true,
+        "min_free_space_gb": 5
+    },
+    "security": {
+        "enable_encryption": true,
+        "key_exchange_timeout": 30,
+        "session_key_size": 256,
+        "allowed_clients": []
+    },
+    "realesrgan": {
+        "executable_path": "./realesrgan-ncnn-vulkan/Windows/realesrgan-ncnn-vulkan.exe",
+        "models_directory": "./models",
+        "default_model": "RealESRGAN_x4plus",
+        "default_scale": 4,
+        "tile_size": 256,
+        "gpu_id": 0,
+        "thread_load": "1:2:2",
+        "tta_mode": false
+    },
+    "monitoring": {
+        "enable_performance_monitoring": true,
+        "log_level": "INFO",
+        "max_log_files": 10,
+        "metrics_retention_days": 30,
+        "enable_gpu_monitoring": true
+    },
+    "gui": {
+        "theme": "dark",
+        "auto_refresh_interval": 2000,
+        "show_detailed_logs": true,
+        "enable_notifications": true,
+        "charts_history_points": 100
+    }
+}
