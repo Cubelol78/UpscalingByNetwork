@@ -21,7 +21,26 @@ class ServerConfig:
         self.config_file = Path(__file__).parent.parent / "config" / "server_config.json"
         self.config_file.parent.mkdir(exist_ok=True)
         
-        # Configuration par défaut
+        # Initialisation des chemins détectés (sera mis à jour après)
+        self.detected_paths = {
+            'realesrgan': "./realesrgan-ncnn-vulkan/realesrgan-ncnn-vulkan.exe",
+            'ffmpeg': "./ffmpeg/ffmpeg.exe"
+        }
+        
+        # Configuration par défaut (AVANT la détection des exécutables)
+        self._setup_default_config()
+        
+        # Chargement de la configuration
+        self.config = self.load_config()
+        
+        # COMPATIBILITÉ RÉTROACTIVE : Création des attributs directs
+        self._setup_legacy_attributes()
+        
+        # Détection des exécutables (APRÈS l'initialisation)
+        self._setup_executable_paths()
+    
+    def _setup_default_config(self):
+        """Configure la configuration par défaut"""
         self.default_config = {
             "server": {
                 "host": "0.0.0.0",
@@ -43,7 +62,8 @@ class ServerConfig:
                 "enable_gpu": True,
                 "gpu_memory_limit": 8192,
                 "tile_size": 256,
-                "max_retries": 3
+                "max_retries": 3,
+                "ffmpeg_path": "./ffmpeg/ffmpeg.exe"
             },
             "storage": {
                 "work_directory": "./work",
@@ -62,7 +82,7 @@ class ServerConfig:
                 "allowed_clients": []
             },
             "realesrgan": {
-                "executable_path": "./dependencies/realesrgan-ncnn-vulkan.exe",
+                "executable_path": "./realesrgan-ncnn-vulkan/realesrgan-ncnn-vulkan.exe",
                 "models_directory": "./models",
                 "default_model": "RealESRGAN_x4plus",
                 "default_scale": 4,
@@ -86,12 +106,61 @@ class ServerConfig:
                 "charts_history_points": 100
             }
         }
-        
-        # Chargement de la configuration
-        self.config = self.load_config()
-        
-        # COMPATIBILITÉ RÉTROACTIVE : Création des attributs directs
-        self._setup_legacy_attributes()
+
+    def _setup_executable_paths(self):
+        """Configure les chemins des exécutables avec détection automatique"""
+        try:
+            from .executable_detector import executable_detector
+            
+            # Détection automatique des exécutables
+            realesrgan_path = executable_detector.find_realesrgan()
+            ffmpeg_path = executable_detector.find_ffmpeg()
+            
+            # Mise à jour des chemins détectés
+            if realesrgan_path:
+                self.detected_paths['realesrgan'] = realesrgan_path
+                # Mise à jour de la config en cours si elle existe
+                if hasattr(self, 'config'):
+                    self.set("realesrgan.executable_path", realesrgan_path)
+            
+            if ffmpeg_path:
+                self.detected_paths['ffmpeg'] = ffmpeg_path
+                # Mise à jour de la config en cours si elle existe
+                if hasattr(self, 'config'):
+                    self.set("processing.ffmpeg_path", ffmpeg_path)
+            
+            self.logger.info(f"Chemins détectés - Real-ESRGAN: {realesrgan_path}, FFmpeg: {ffmpeg_path}")
+            
+        except ImportError:
+            # Fallback si le détecteur n'est pas disponible
+            self.logger.warning("Détecteur d'exécutables non disponible, utilisation chemins par défaut")
+        except Exception as e:
+            self.logger.warning(f"Erreur détection exécutables: {e}")
+    
+    def get_executable_path(self, executable_name: str) -> str:
+        """Retourne le chemin d'un exécutable avec détection automatique"""
+        if executable_name == 'realesrgan':
+            return self.detected_paths.get('realesrgan', self.get("realesrgan.executable_path", "./realesrgan-ncnn-vulkan/realesrgan-ncnn-vulkan.exe"))
+        elif executable_name == 'ffmpeg':
+            return self.detected_paths.get('ffmpeg', self.get("processing.ffmpeg_path", "./ffmpeg/ffmpeg.exe"))
+        else:
+            return self.get(f"executables.{executable_name}", "")
+    
+    def update_executable_paths(self):
+        """Met à jour les chemins des exécutables avec une nouvelle détection"""
+        self._setup_executable_paths()
+        self.logger.info("Chemins d'exécutables mis à jour")
+    
+    def validate_executables(self) -> Dict[str, Any]:
+        """Valide la disponibilité des exécutables"""
+        try:
+            from .executable_detector import executable_detector
+            return executable_detector.get_all_executables_status()
+        except ImportError:
+            return {
+                'summary': {'all_ready': False},
+                'error': 'Détecteur d\'exécutables non disponible'
+            }
     
     def _setup_legacy_attributes(self):
         """Configure les attributs pour la compatibilité avec l'ancien code"""
@@ -121,7 +190,7 @@ class ServerConfig:
         self.USE_ENCRYPTION = self.get("security.enable_encryption", True)
         
         # Real-ESRGAN
-        self.REALESRGAN_PATH = self.get("realesrgan.executable_path", "./dependencies/realesrgan-ncnn-vulkan.exe")
+        self.REALESRGAN_PATH = self.get("realesrgan.executable_path", "./realesrgan-ncnn-vulkan/realesrgan-ncnn-vulkan.exe")
         
         self.logger.info("Configuration legacy initialisée avec compatibilité rétroactive")
     
@@ -175,6 +244,9 @@ class ServerConfig:
         Récupère une valeur de configuration avec notation pointée
         Exemple: get("server.host") ou get("processing.batch_size")
         """
+        if not hasattr(self, 'config') or not self.config:
+            return default
+            
         keys = key_path.split('.')
         current = self.config
         
@@ -191,6 +263,9 @@ class ServerConfig:
         Définit une valeur de configuration avec notation pointée
         Exemple: set("server.host", "0.0.0.0")
         """
+        if not hasattr(self, 'config'):
+            return
+            
         keys = key_path.split('.')
         current = self.config
         
@@ -236,12 +311,12 @@ class ServerConfig:
     def get_work_directories(self) -> Dict[str, Path]:
         """Retourne tous les répertoires de travail"""
         directories = {
-            'work': Path(self.get("storage.work_directory")),
-            'input': Path(self.get("storage.input_directory")),
-            'output': Path(self.get("storage.output_directory")),
-            'temp': Path(self.get("storage.temp_directory")),
-            'batches': Path(self.get("storage.batches_directory")),
-            'logs': Path(self.get("storage.logs_directory"))
+            'work': Path(self.get("storage.work_directory", "./work")),
+            'input': Path(self.get("storage.input_directory", "./input")),
+            'output': Path(self.get("storage.output_directory", "./output")),
+            'temp': Path(self.get("storage.temp_directory", "./temp")),
+            'batches': Path(self.get("storage.batches_directory", "./batches")),
+            'logs': Path(self.get("storage.logs_directory", "./logs"))
         }
         
         # Création des répertoires s'ils n'existent pas
@@ -271,7 +346,7 @@ class ServerConfig:
                 errors.append(f"Erreur validation répertoires: {e}")
             
             # Validation Real-ESRGAN
-            realesrgan_path = Path(self.get("realesrgan.executable_path"))
+            realesrgan_path = Path(self.get("realesrgan.executable_path", ""))
             if not realesrgan_path.exists():
                 warnings.append(f"Exécutable Real-ESRGAN non trouvé: {realesrgan_path}")
             
@@ -297,13 +372,13 @@ class ServerConfig:
     def get_realesrgan_config(self) -> Dict[str, Any]:
         """Retourne la configuration spécifique à Real-ESRGAN"""
         return {
-            'model': self.get('processing.realesrgan_model'),
-            'scale': self.get('processing.upscale_factor'),
-            'format': self.get('processing.output_format'),
-            'tile_size': self.get('processing.tile_size'),
-            'executable_path': self.get('realesrgan.executable_path'),
-            'gpu_id': self.get('realesrgan.gpu_id'),
-            'thread_load': self.get('realesrgan.thread_load')
+            'model': self.get('processing.realesrgan_model', 'RealESRGAN_x4plus'),
+            'scale': self.get('processing.upscale_factor', 4),
+            'format': self.get('processing.output_format', 'png'),
+            'tile_size': self.get('processing.tile_size', 256),
+            'executable_path': self.get('realesrgan.executable_path', ''),
+            'gpu_id': self.get('realesrgan.gpu_id', 0),
+            'thread_load': self.get('realesrgan.thread_load', '1:2:2')
         }
     
     def reload_config(self):

@@ -66,7 +66,18 @@ class OptimizedRealESRGAN:
         return logger
     
     def _find_realesrgan_executable(self) -> Optional[str]:
-        """Trouve l'exécutable Real-ESRGAN"""
+        """Trouve l'exécutable Real-ESRGAN en utilisant le détecteur"""
+        try:
+            # Utilisation du détecteur d'exécutables
+            from utils.executable_detector import executable_detector
+            return executable_detector.find_realesrgan()
+            
+        except ImportError:
+            self.logger.warning("Détecteur d'exécutables non disponible, recherche manuelle...")
+            return self._manual_realesrgan_search()
+    
+    def _manual_realesrgan_search(self) -> Optional[str]:
+        """Recherche manuelle de Real-ESRGAN en cas d'absence du détecteur"""
         possible_names = [
             "realesrgan-ncnn-vulkan.exe",
             "realesrgan-ncnn-vulkan",
@@ -75,10 +86,10 @@ class OptimizedRealESRGAN:
         # Chemins de recherche
         project_root = Path(__file__).parent.parent
         possible_paths = [
+            project_root / "realesrgan-ncnn-vulkan",
             project_root / "realesrgan-ncnn-vulkan" / "Windows",
             project_root / "dependencies",
             Path.cwd(),
-            Path.cwd() / "realesrgan-ncnn-vulkan",
         ]
         
         for path in possible_paths:
