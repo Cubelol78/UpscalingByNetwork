@@ -1,7 +1,7 @@
 # server/core/optimized_real_esrgan.py
 """
 Module optimisé pour Real-ESRGAN avec détection automatique du matériel
-Version corrigée avec gestion d'erreur robuste
+Version entièrement corrigée avec appels de méthodes fixes
 """
 
 import os
@@ -77,30 +77,56 @@ class OptimizedRealESRGAN:
             return self._manual_realesrgan_search()
     
     def _manual_realesrgan_search(self) -> Optional[str]:
-        """Recherche manuelle de Real-ESRGAN en cas d'absence du détecteur"""
-        possible_names = [
-            "realesrgan-ncnn-vulkan.exe",
-            "realesrgan-ncnn-vulkan",
-        ]
+        """Recherche manuelle de Real-ESRGAN selon la structure du projet"""
+        executable_name = "realesrgan-ncnn-vulkan.exe" if sys.platform == "win32" else "realesrgan-ncnn-vulkan"
         
-        # Chemins de recherche
+        # Chemins de recherche selon la structure du projet
         project_root = Path(__file__).parent.parent
         possible_paths = [
-            project_root / "realesrgan-ncnn-vulkan",
-            project_root / "realesrgan-ncnn-vulkan" / "Windows",
-            project_root / "dependencies",
-            Path.cwd(),
+            # Structure standard du projet
+            project_root / "realesrgan-ncnn-vulkan" / executable_name,
+            project_root / "realesrgan-ncnn-vulkan" / "Windows" / executable_name,
+            
+            # Structure alternative
+            project_root / "dependencies" / executable_name,
+            
+            # Dossier courant
+            Path.cwd() / "realesrgan-ncnn-vulkan" / executable_name,
+            Path.cwd() / executable_name,
         ]
         
         for path in possible_paths:
-            for name in possible_names:
-                full_path = path / name
-                if full_path.exists() and full_path.is_file():
-                    self.logger.info(f"✅ Real-ESRGAN trouvé: {full_path}")
-                    return str(full_path)
+            if path.exists() and path.is_file():
+                # Test simple de l'exécutable
+                if self._test_executable_simple(path):
+                    self.logger.info(f"✅ Real-ESRGAN trouvé et testé: {path}")
+                    return str(path)
+                else:
+                    self.logger.warning(f"⚠️ Fichier trouvé mais test échoué: {path}")
         
         self.logger.warning("⚠️ Real-ESRGAN exécutable non trouvé dans les chemins standards")
+        self.logger.warning("📥 Veuillez télécharger Real-ESRGAN depuis: https://github.com/xinntao/Real-ESRGAN/releases")
+        self.logger.warning(f"📁 Et le placer dans: {project_root / 'realesrgan-ncnn-vulkan'}")
         return None
+    
+    def _test_executable_simple(self, executable_path: Path) -> bool:
+        """Test simple de l'exécutable Real-ESRGAN"""
+        try:
+            # Test avec -h (aide) ou --help
+            result = subprocess.run(
+                [str(executable_path), "-h"],
+                capture_output=True,
+                timeout=5,
+                text=True
+            )
+            # Real-ESRGAN retourne souvent 1 même pour -h, donc on vérifie aussi la sortie
+            return result.returncode in [0, 1] and ("Real-ESRGAN" in result.stdout or "Real-ESRGAN" in result.stderr)
+        except subprocess.TimeoutExpired:
+            self.logger.warning(f"Test timeout pour {executable_path}")
+            return False
+        except Exception as e:
+            self.logger.debug(f"Test échoué pour {executable_path}: {e}")
+            return False
 
     def _initialize_system_safe(self):
         """Initialise la détection système de manière sécurisée"""
@@ -116,13 +142,16 @@ class OptimizedRealESRGAN:
             self._use_fallback_config()
     
     def _detect_hardware_safe(self):
-        """Détection matérielle sécurisée"""
+        """Détection matérielle sécurisée avec appel CORRIGÉ"""
         try:
             # Tentative d'import des modules de détection hardware
             try:
                 from utils.hardware_detector import hardware_detector
                 print("🔍 Détection des GPUs NVIDIA...")
-                self.system_info = hardware_detector.detect_system()
+                
+                # ✅ CORRECTION CRITIQUE : Utilisation de la bonne méthode
+                self.system_info = hardware_detector.detect_system_info()
+                
                 print(f"📊 GPUs détectés: {len(self.system_info.gpus) if self.system_info else 0}")
                 
             except ImportError as e:
@@ -194,31 +223,31 @@ class OptimizedRealESRGAN:
                 system_type = self.system_info.get('system_type', 'desktop')
                 cpu_cores = self.system_info.get('cpu_cores', 4)
                 
-                if system_type == 'laptop':
-                    # Configuration conservative pour laptop
-                    self.optimal_config = {
-                        'model': 'RealESRGAN_x4plus',
-                        'tile_size': 256,
-                        'gpu_id': 0,
-                        'threads': f'1:{min(2, cpu_cores//2)}:1',
-                        'use_fp16': True,
-                        'tta_mode': False
-                    }
-                else:
-                    # Configuration plus agressive pour desktop
-                    self.optimal_config = {
-                        'model': 'RealESRGAN_x4plus',
-                        'tile_size': 512,
-                        'gpu_id': 0,
-                        'threads': f'2:{min(4, cpu_cores//2)}:2',
-                        'use_fp16': True,
-                        'tta_mode': False
-                    }
+                # Configuration basique adaptée
+                self.optimal_config = {
+                    'model': 'realesr-animevideov3',
+                    'scale': 4,
+                    'tile_size': 512 if system_type == 'desktop' else 256,
+                    'gpu_id': 0,  # Utiliser le premier GPU disponible
+                    'threads': f"{cpu_cores//4}:{cpu_cores//2}:{cpu_cores//4}",
+                    'use_fp16': True,
+                    'tta_mode': False,
+                }
+                print(f"🔧 Configuration basique générée: {self.optimal_config}")
+                
             else:
-                # Utilisation de l'ancienne interface si disponible
-                self.optimal_config = self.fallback_config.copy()
-            
-            print(f"🎯 Configuration générée: {self.optimal_config}")
+                # Utilisation du nouveau système de détection avec SystemInfo
+                try:
+                    from utils.hardware_detector import hardware_detector
+                    self.optimal_config = hardware_detector.optimize_realesrgan_config(
+                        self.system_info, 
+                        model="realesr-animevideov3"
+                    )
+                    print(f"🔧 Configuration avancée générée: {self.optimal_config}")
+                except Exception as e:
+                    print(f"⚠️ Erreur optimisation config avancée: {e}")
+                    self.optimal_config = self.fallback_config.copy()
+                    print(f"🛡️ Configuration de secours utilisée: {self.optimal_config}")
             
         except Exception as e:
             print(f"❌ Erreur génération config: {e}")
@@ -226,375 +255,120 @@ class OptimizedRealESRGAN:
     
     def _use_fallback_config(self):
         """Utilise la configuration de secours"""
+        self.optimal_config = self.fallback_config.copy()
+        print(f"🛡️ Configuration de secours activée: {self.optimal_config}")
+    
+    def get_optimal_batch_size(self) -> int:
+        """Retourne la taille de lot optimale"""
+        if not self.system_info:
+            return 10  # Valeur de secours conservative
+        
         try:
-            print("🔄 Application de la configuration de secours...")
-            
-            # Chargement sécurisé de la configuration serveur
-            config_value = None
-            try:
-                # Tentative d'import de la configuration
-                from utils.config import config as server_config
-                config_value = server_config
-                
-            except ImportError:
-                print("⚠️ Module config non disponible")
-            except Exception as e:
-                print(f"⚠️ Erreur chargement config: {e}")
-            
-            # Configuration de base
-            if config_value:
-                # Utilisation des méthodes disponibles
-                try:
-                    if hasattr(config_value, 'get'):
-                        # Nouvelle API
-                        model = config_value.get('processing.realesrgan_model', 'RealESRGAN_x4plus')
-                        tile_size = config_value.get('processing.tile_size', 256)
-                    elif hasattr(config_value, 'REALESRGAN_MODEL'):
-                        # Ancienne API
-                        model = config_value.REALESRGAN_MODEL
-                        tile_size = getattr(config_value, 'TILE_SIZE', 256)
-                    else:
-                        # Configuration par défaut si aucune API disponible
-                        model = 'RealESRGAN_x4plus'
-                        tile_size = 256
-                        
-                except Exception as e:
-                    print(f"⚠️ Erreur accès config: {e}")
-                    model = 'RealESRGAN_x4plus'
-                    tile_size = 256
+            if isinstance(self.system_info, dict):
+                # Logique basique
+                cpu_cores = self.system_info.get('cpu_cores', 4)
+                return max(5, min(50, cpu_cores * 2))
             else:
-                model = 'RealESRGAN_x4plus'
-                tile_size = 256
-            
-            # Configuration finale
-            self.optimal_config = {
-                'model': model,
-                'scale': 4,
-                'tile_size': tile_size,
-                'gpu_id': 0,
-                'threads': '1:2:1',
-                'use_fp16': True,
-                'tta_mode': False
-            }
-            
-            print(f"✅ Configuration de secours appliquée: {self.optimal_config}")
-            
-        except Exception as e:
-            print(f"❌ Erreur configuration de secours: {e}")
-            # Configuration minimale en dernier recours
-            self.optimal_config = self.fallback_config.copy()
+                # Logique avancée avec SystemInfo
+                gpu_memory_gb = 0
+                if hasattr(self.system_info, 'gpus') and self.system_info.gpus:
+                    gpu_memory_gb = self.system_info.gpus[0].memory_total_mb / 1024
+                
+                if gpu_memory_gb >= 8:
+                    return 50
+                elif gpu_memory_gb >= 4:
+                    return 30
+                else:
+                    return 15
+        except Exception:
+            return 10
     
-    def get_optimal_config(self) -> Dict[str, Any]:
-        """Retourne la configuration optimale actuelle"""
-        return self.optimal_config.copy()
+    def get_recommended_concurrent_batches(self) -> int:
+        """Retourne le nombre de lots concurrents recommandés"""
+        if not self.system_info:
+            return 2
+        
+        try:
+            if isinstance(self.system_info, dict):
+                cpu_cores = self.system_info.get('cpu_cores', 4)
+                return max(1, min(4, cpu_cores // 4))
+            else:
+                # Logique basée sur les GPUs disponibles
+                gpu_count = len(self.system_info.gpus) if hasattr(self.system_info, 'gpus') else 1
+                return max(1, min(4, gpu_count))
+        except Exception:
+            return 2
     
-    def is_available(self) -> bool:
-        """Vérifie si Real-ESRGAN est disponible"""
-        return self.executable_path is not None
-    
-    def get_executable_path(self) -> Optional[str]:
-        """Retourne le chemin vers l'exécutable"""
-        return self.executable_path
-    
-    async def process_batch(self, input_path: str, output_path: str, batch_id: str = None) -> ProcessingResult:
+    async def process_batch(self, input_dir: Path, output_dir: Path, 
+                          config_override: Optional[Dict] = None) -> ProcessingResult:
         """Traite un lot d'images avec Real-ESRGAN"""
-        if not self.is_available():
+        if not self.executable_path:
             return ProcessingResult(
                 success=False,
-                processing_time=0,
+                processing_time=0.0,
                 frames_processed=0,
-                error_message="Real-ESRGAN exécutable non disponible"
+                error_message="Exécutable Real-ESRGAN non disponible"
             )
         
         start_time = time.time()
-        frames_processed = 0
+        config = {**self.optimal_config, **(config_override or {})}
         
         try:
-            # Préparation des chemins
-            input_dir = Path(input_path)
-            output_dir = Path(output_path)
-            output_dir.mkdir(parents=True, exist_ok=True)
+            # Construction de la commande
+            cmd = [
+                self.executable_path,
+                "-i", str(input_dir),
+                "-o", str(output_dir),
+                "-n", config['model'],
+                "-s", str(config['scale']),
+                "-t", str(config['tile_size']),
+                "-g", str(config['gpu_id']),
+                "-j", config['threads']
+            ]
             
-            # Comptage des images d'entrée
-            image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'}
-            input_images = [f for f in input_dir.glob('*') if f.suffix.lower() in image_extensions]
-            total_images = len(input_images)
+            # Options additionnelles
+            if config.get('use_fp16'):
+                cmd.append("-h")
             
-            if total_images == 0:
-                return ProcessingResult(
-                    success=False,
-                    processing_time=0,
-                    frames_processed=0,
-                    error_message="Aucune image trouvée dans le dossier d'entrée"
-                )
+            if config.get('tta_mode'):
+                cmd.append("-x")
             
-            # Construction de la commande Real-ESRGAN
-            cmd = [self.executable_path]
-            cmd.extend(["-i", str(input_dir)])
-            cmd.extend(["-o", str(output_dir)])
-            cmd.extend(["-n", self.optimal_config.get('model', 'RealESRGAN_x4plus')])
-            cmd.extend(["-f", "png"])
-            cmd.extend(["-g", str(self.optimal_config.get('gpu_id', 0))])
-            cmd.extend(["-t", str(self.optimal_config.get('tile_size', 256))])
-            cmd.extend(["-j", self.optimal_config.get('threads', '1:2:1')])
-            
-            self.logger.info(f"🚀 Démarrage traitement lot {batch_id or 'unknown'}: {total_images} images")
-            self.logger.debug(f"Commande: {' '.join(cmd)}")
-            
-            # Exécution avec timeout
+            # Exécution
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=Path(self.executable_path).parent
+                stderr=asyncio.subprocess.PIPE
             )
             
-            # Attente avec timeout de 30 minutes
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(), 
-                    timeout=1800  # 30 minutes
-                )
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
-                return ProcessingResult(
-                    success=False,
-                    processing_time=time.time() - start_time,
-                    frames_processed=0,
-                    error_message="Timeout: traitement trop long (>30min)"
-                )
-            
-            # Vérification du code de retour
-            if process.returncode != 0:
-                error_msg = stderr.decode('utf-8', errors='ignore') if stderr else "Erreur inconnue"
-                return ProcessingResult(
-                    success=False,
-                    processing_time=time.time() - start_time,
-                    frames_processed=0,
-                    error_message=f"Erreur Real-ESRGAN (code {process.returncode}): {error_msg}"
-                )
-            
-            # Vérification des images de sortie
-            output_images = [f for f in output_dir.glob('*') if f.suffix.lower() in image_extensions]
-            frames_processed = len(output_images)
+            stdout, stderr = await process.communicate()
             
             processing_time = time.time() - start_time
             
-            # Enregistrement des performances
-            self._record_performance({
-                'batch_id': batch_id,
-                'frames_processed': frames_processed,
-                'processing_time': processing_time,
-                'fps': frames_processed / processing_time if processing_time > 0 else 0,
-                'config_used': self.optimal_config.copy()
-            })
-            
-            success = frames_processed >= total_images * 0.8  # 80% de réussite minimum
-            
-            self.logger.info(f"✅ Traitement terminé: {frames_processed}/{total_images} images en {processing_time:.1f}s")
-            
-            return ProcessingResult(
-                success=success,
-                processing_time=processing_time,
-                frames_processed=frames_processed,
-                performance_metrics={
-                    'fps': frames_processed / processing_time if processing_time > 0 else 0,
-                    'total_images': total_images,
-                    'success_rate': (frames_processed / total_images) * 100 if total_images > 0 else 0
-                }
-            )
-            
+            if process.returncode == 0:
+                # Compte les images traitées
+                frames_processed = len(list(output_dir.glob("*.png"))) if output_dir.exists() else 0
+                
+                return ProcessingResult(
+                    success=True,
+                    processing_time=processing_time,
+                    frames_processed=frames_processed
+                )
+            else:
+                error_msg = stderr.decode('utf-8') if stderr else "Erreur inconnue"
+                return ProcessingResult(
+                    success=False,
+                    processing_time=processing_time,
+                    frames_processed=0,
+                    error_message=error_msg
+                )
+                
         except Exception as e:
-            error_msg = f"Erreur traitement batch: {str(e)}"
-            self.logger.error(error_msg)
-            
             return ProcessingResult(
                 success=False,
                 processing_time=time.time() - start_time,
-                frames_processed=frames_processed,
-                error_message=error_msg
+                frames_processed=0,
+                error_message=str(e)
             )
-    
-    def _record_performance(self, performance_data: Dict[str, Any]):
-        """Enregistre les données de performance"""
-        try:
-            performance_data['timestamp'] = time.time()
-            self.performance_history.append(performance_data)
-            
-            # Limiter l'historique à 100 entrées
-            if len(self.performance_history) > 100:
-                self.performance_history = self.performance_history[-100:]
-                
-        except Exception as e:
-            self.logger.warning(f"Erreur enregistrement performance: {e}")
-    
-    def get_performance_stats(self) -> Dict[str, Any]:
-        """Retourne les statistiques de performance"""
-        if not self.performance_history:
-            return {
-                'total_batches': 0,
-                'average_fps': 0,
-                'total_frames': 0,
-                'total_time': 0
-            }
-        
-        try:
-            total_batches = len(self.performance_history)
-            total_frames = sum(p.get('frames_processed', 0) for p in self.performance_history)
-            total_time = sum(p.get('processing_time', 0) for p in self.performance_history)
-            average_fps = sum(p.get('fps', 0) for p in self.performance_history) / total_batches
-            
-            return {
-                'total_batches': total_batches,
-                'average_fps': round(average_fps, 2),
-                'total_frames': total_frames,
-                'total_time': round(total_time, 1),
-                'last_batch_fps': self.performance_history[-1].get('fps', 0) if self.performance_history else 0
-            }
-            
-        except Exception as e:
-            self.logger.warning(f"Erreur calcul statistiques: {e}")
-            return {
-                'total_batches': 0,
-                'average_fps': 0,
-                'total_frames': 0,
-                'total_time': 0
-            }
-    
-    def update_config(self, new_config: Dict[str, Any]):
-        """Met à jour la configuration optimale"""
-        try:
-            self.optimal_config.update(new_config)
-            self.logger.info(f"Configuration mise à jour: {self.optimal_config}")
-        except Exception as e:
-            self.logger.error(f"Erreur mise à jour config: {e}")
-    
-    def benchmark_configurations(self, test_frames: List[str]) -> Dict[str, Any]:
-        """Effectue un benchmark des différentes configurations"""
-        try:
-            if not test_frames or len(test_frames) < 3:
-                return {
-                    'error': 'Pas assez d\'images de test pour le benchmark'
-                }
-            
-            # Configurations de test
-            test_configs = [
-                # Configuration actuelle
-                self.optimal_config.copy(),
-                
-                # Configuration conservative
-                {**self.optimal_config, 'tile_size': 128, 'threads': '1:2:1'},
-                
-                # Configuration agressive (si possible)
-                {**self.optimal_config, 'tile_size': 512, 'threads': '2:4:2'},
-            ]
-            
-            results = []
-            
-            for i, test_config in enumerate(test_configs):
-                self.logger.info(f"Test configuration {i+1}/{len(test_configs)}")
-                
-                # Sauvegarde config actuelle
-                original_config = self.optimal_config.copy()
-                self.optimal_config = test_config
-                
-                try:
-                    # Estimation basée sur la configuration
-                    estimated_fps = self._estimate_performance(test_config)
-                    
-                    results.append({
-                        'config': test_config.copy(),
-                        'estimated_fps': estimated_fps,
-                        'tile_size': test_config.get('tile_size', 256),
-                        'threads': test_config.get('threads', '1:2:1')
-                    })
-                    
-                except Exception as e:
-                    self.logger.error(f"Erreur benchmark config {i}: {e}")
-                    
-                finally:
-                    # Restauration config
-                    self.optimal_config = original_config
-            
-            # Sélection de la meilleure configuration
-            if results:
-                best_config = max(results, key=lambda r: r.get('estimated_fps', 0))
-                
-                return {
-                    'best_config': best_config['config'],
-                    'all_results': results,
-                    'recommendation': f"Configuration optimale estimée: {best_config['estimated_fps']:.1f} FPS"
-                }
-            else:
-                return {'error': 'Aucun résultat de benchmark disponible'}
-                
-        except Exception as e:
-            self.logger.error(f"Erreur benchmark: {e}")
-            return {'error': f'Erreur benchmark: {str(e)}'}
-    
-    def _estimate_performance(self, config: Dict[str, Any]) -> float:
-        """Estime les performances d'une configuration"""
-        try:
-            # Facteurs de performance basés sur la configuration
-            base_fps = 2.0  # FPS de base
-            
-            # Ajustement selon la taille des tuiles
-            tile_size = config.get('tile_size', 256)
-            if tile_size <= 128:
-                tile_factor = 1.2  # Plus rapide avec petites tuiles
-            elif tile_size <= 256:
-                tile_factor = 1.0  # Performance standard
-            elif tile_size <= 512:
-                tile_factor = 0.8  # Plus lent avec grandes tuiles
-            else:
-                tile_factor = 0.6  # Très lent
-            
-            # Ajustement selon les threads
-            threads_str = config.get('threads', '1:2:1')
-            try:
-                # Parse format "load:proc:save"
-                load_threads, proc_threads, save_threads = map(int, threads_str.split(':'))
-                thread_factor = min(1.5, 1.0 + (proc_threads - 1) * 0.1)
-            except:
-                thread_factor = 1.0
-            
-            # Ajustement selon le GPU
-            gpu_factor = 1.5 if config.get('gpu_id', 0) >= 0 else 0.5
-            
-            # Calcul final
-            estimated_fps = base_fps * tile_factor * thread_factor * gpu_factor
-            
-            return round(estimated_fps, 2)
-            
-        except Exception as e:
-            self.logger.warning(f"Erreur estimation performance: {e}")
-            return 1.0  # Valeur par défaut conservative
 
-# Instance globale créée de manière sécurisée
-try:
-    optimized_realesrgan = OptimizedRealESRGAN()
-    print("✅ OptimizedRealESRGAN initialisé avec succès")
-except Exception as e:
-    print(f"❌ Erreur initialisation OptimizedRealESRGAN: {e}")
-    print("🔄 Création d'une instance de secours...")
-    
-    # Instance de secours minimale
-    class FallbackRealESRGAN:
-        def __init__(self):
-            self.optimal_config = {
-                'model': 'RealESRGAN_x4plus',
-                'tile_size': 256,
-                'gpu_id': 0,
-                'threads': '1:2:1'
-            }
-            self.executable_path = None
-        
-        def is_available(self):
-            return False
-        
-        def get_optimal_config(self):
-            return self.optimal_config.copy()
-    
-    optimized_realesrgan = FallbackRealESRGAN()
-    print("⚠️ Instance de secours créée")
+# Instance globale
+optimized_realesrgan = OptimizedRealESRGAN()

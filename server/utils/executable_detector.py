@@ -2,11 +2,13 @@
 """
 Détecteur d'exécutables pour le serveur d'upscaling distribué
 Recherche FFmpeg et Real-ESRGAN dans les dossiers locaux du projet
+Version corrigée pour respecter la structure UpscalingByNetwork
 """
 
 import os
 import sys
 import subprocess
+import shutil
 from pathlib import Path
 from typing import Optional, Dict, List
 import logging
@@ -27,10 +29,11 @@ class ExecutableDetector:
         self._ffprobe_path = None
         
         self.logger.info(f"Détecteur initialisé - Racine projet: {self.project_root}")
+        self.logger.info(f"Racine serveur: {self.server_root}")
     
     def _find_project_root(self) -> Path:
         """Trouve la racine du projet UpscalingByNetwork"""
-        current = Path(__file__).parent
+        current = Path(__file__).resolve()
         
         # Remonte jusqu'à trouver le dossier UpscalingByNetwork
         while current.parent != current:
@@ -40,16 +43,18 @@ class ExecutableDetector:
                 return current / "UpscalingByNetwork"
             current = current.parent
         
-        # Si pas trouvé, utilise le dossier parent du serveur
-        server_file = Path(__file__)
-        if "server" in server_file.parts:
-            return server_file.parent.parent
+        # Si pas trouvé via la structure, utilise l'emplacement du fichier actuel
+        # Ce fichier est dans server/utils/, donc la racine est 2 niveaux au-dessus
+        current_file = Path(__file__).resolve()
+        if "server" in current_file.parts and "utils" in current_file.parts:
+            # Remonte de utils -> server -> UpscalingByNetwork
+            return current_file.parent.parent
         
-        # Fallback
+        # Fallback : utilise le dossier courant
         return Path.cwd()
     
     def find_realesrgan(self) -> Optional[str]:
-        """Trouve l'exécutable Real-ESRGAN"""
+        """Trouve l'exécutable Real-ESRGAN selon la structure du projet"""
         if self._realesrgan_path:
             return self._realesrgan_path
         
@@ -59,18 +64,21 @@ class ExecutableDetector:
         else:
             executable_name = "realesrgan-ncnn-vulkan"
         
-        # Chemins de recherche spécifiques au projet
+        # Chemins de recherche selon la structure du projet mentionnée
         search_paths = [
-            # Structure serveur
+            # Structure principale du projet
             self.server_root / "realesrgan-ncnn-vulkan" / executable_name,
             self.server_root / "realesrgan-ncnn-vulkan" / "Windows" / executable_name,
+            self.server_root / "realesrgan-ncnn-vulkan" / "bin" / executable_name,
+            
+            # Structure alternative avec dossier dependencies
+            self.server_root / "dependencies" / "realesrgan-ncnn-vulkan" / executable_name,
             self.server_root / "dependencies" / executable_name,
             
-            # Structure racine projet
-            self.project_root / "server" / "realesrgan-ncnn-vulkan" / executable_name,
-            self.project_root / "server" / "realesrgan-ncnn-vulkan" / "Windows" / executable_name,
+            # Dossier racine du serveur
+            self.server_root / executable_name,
             
-            # Fallbacks
+            # Fallbacks dans le dossier courant
             Path.cwd() / "realesrgan-ncnn-vulkan" / executable_name,
             Path.cwd() / executable_name,
         ]
@@ -80,25 +88,30 @@ class ExecutableDetector:
         for path in search_paths:
             self.logger.debug(f"  Vérification: {path}")
             if path.exists() and path.is_file():
-                self._realesrgan_path = str(path)
-                self.logger.info(f"✅ Real-ESRGAN trouvé: {path}")
-                return self._realesrgan_path
+                # Test de l'exécutable
+                if self._test_executable(path, ["-h"]):
+                    self._realesrgan_path = str(path)
+                    self.logger.info(f"✅ Real-ESRGAN trouvé et testé: {path}")
+                    return self._realesrgan_path
+                else:
+                    self.logger.warning(f"⚠️ Fichier trouvé mais non fonctionnel: {path}")
         
         # Recherche dans le PATH système
-        system_path = self._find_in_system_path(executable_name)
+        system_path = shutil.which(executable_name)
         if system_path:
-            self._realesrgan_path = system_path
-            self.logger.info(f"✅ Real-ESRGAN trouvé dans PATH: {system_path}")
-            return self._realesrgan_path
+            if self._test_executable(system_path, ["-h"]):
+                self._realesrgan_path = system_path
+                self.logger.info(f"✅ Real-ESRGAN trouvé dans PATH: {system_path}")
+                return self._realesrgan_path
         
-        self.logger.warning(f"❌ Real-ESRGAN non trouvé")
-        self.logger.warning("📥 Téléchargez depuis: https://github.com/xinntao/Real-ESRGAN/releases")
-        self.logger.warning(f"📁 Placez dans: {self.server_root / 'realesrgan-ncnn-vulkan'}")
+        self.logger.error(f"❌ Real-ESRGAN non trouvé")
+        self.logger.error("📥 Téléchargez depuis: https://github.com/xinntao/Real-ESRGAN/releases")
+        self.logger.error(f"📁 Placez dans: {self.server_root / 'realesrgan-ncnn-vulkan'}")
         
         return None
     
     def find_ffmpeg(self) -> Optional[str]:
-        """Trouve l'exécutable FFmpeg"""
+        """Trouve l'exécutable FFmpeg selon la structure du projet"""
         if self._ffmpeg_path:
             return self._ffmpeg_path
         
@@ -108,16 +121,20 @@ class ExecutableDetector:
         else:
             executable_name = "ffmpeg"
         
-        # Chemins de recherche spécifiques au projet
+        # Chemins de recherche selon la structure du projet
         search_paths = [
-            # Structure serveur
+            # Structure principale du serveur
             self.server_root / "ffmpeg" / executable_name,
             self.server_root / "ffmpeg" / "bin" / executable_name,
+            self.server_root / "ffmpeg" / "Windows" / executable_name,
+            
+            # Structure alternative avec dependencies
+            self.server_root / "dependencies" / "ffmpeg" / executable_name,
+            self.server_root / "dependencies" / "ffmpeg" / "bin" / executable_name,
             self.server_root / "dependencies" / executable_name,
             
-            # Structure racine projet
-            self.project_root / "server" / "ffmpeg" / executable_name,
-            self.project_root / "server" / "ffmpeg" / "bin" / executable_name,
+            # Dossier racine du serveur
+            self.server_root / executable_name,
             
             # Fallbacks
             Path.cwd() / "ffmpeg" / executable_name,
@@ -129,169 +146,143 @@ class ExecutableDetector:
         for path in search_paths:
             self.logger.debug(f"  Vérification: {path}")
             if path.exists() and path.is_file():
-                self._ffmpeg_path = str(path)
-                self.logger.info(f"✅ FFmpeg trouvé: {path}")
-                return self._ffmpeg_path
+                if self._test_executable(path, ["-version"]):
+                    self._ffmpeg_path = str(path)
+                    self.logger.info(f"✅ FFmpeg trouvé et testé: {path}")
+                    return self._ffmpeg_path
+                else:
+                    self.logger.warning(f"⚠️ Fichier trouvé mais non fonctionnel: {path}")
         
         # Recherche dans le PATH système
-        system_path = self._find_in_system_path(executable_name)
+        system_path = shutil.which(executable_name)
         if system_path:
-            self._ffmpeg_path = system_path
-            self.logger.info(f"✅ FFmpeg trouvé dans PATH: {system_path}")
-            return self._ffmpeg_path
+            if self._test_executable(system_path, ["-version"]):
+                self._ffmpeg_path = system_path
+                self.logger.info(f"✅ FFmpeg trouvé dans PATH: {system_path}")
+                return self._ffmpeg_path
         
-        self.logger.warning(f"❌ FFmpeg non trouvé")
+        self.logger.warning(f"⚠️ FFmpeg non trouvé")
         self.logger.warning("📥 Téléchargez depuis: https://ffmpeg.org/download.html")
         self.logger.warning(f"📁 Placez dans: {self.server_root / 'ffmpeg'}")
         
         return None
     
     def find_ffprobe(self) -> Optional[str]:
-        """Trouve l'exécutable FFprobe"""
+        """Trouve l'exécutable FFprobe (généralement avec FFmpeg)"""
         if self._ffprobe_path:
             return self._ffprobe_path
         
-        # Noms possibles selon la plateforme
-        if sys.platform == "win32":
-            executable_name = "ffprobe.exe"
-        else:
-            executable_name = "ffprobe"
-        
-        # Chemins basés sur FFmpeg
+        # FFprobe est généralement dans le même dossier que FFmpeg
         ffmpeg_path = self.find_ffmpeg()
         if ffmpeg_path:
             ffmpeg_dir = Path(ffmpeg_path).parent
-            ffprobe_path = ffmpeg_dir / executable_name
-            if ffprobe_path.exists():
-                self._ffprobe_path = str(ffprobe_path)
-                self.logger.info(f"✅ FFprobe trouvé: {ffprobe_path}")
+            if sys.platform == "win32":
+                probe_name = "ffprobe.exe"
+            else:
+                probe_name = "ffprobe"
+            
+            probe_path = ffmpeg_dir / probe_name
+            if probe_path.exists() and self._test_executable(probe_path, ["-version"]):
+                self._ffprobe_path = str(probe_path)
+                self.logger.info(f"✅ FFprobe trouvé: {probe_path}")
                 return self._ffprobe_path
         
         # Recherche indépendante
-        search_paths = [
-            self.server_root / "ffmpeg" / executable_name,
-            self.server_root / "ffmpeg" / "bin" / executable_name,
-            self.project_root / "server" / "ffmpeg" / executable_name,
-        ]
-        
-        for path in search_paths:
-            if path.exists() and path.is_file():
-                self._ffprobe_path = str(path)
-                self.logger.info(f"✅ FFprobe trouvé: {path}")
-                return self._ffprobe_path
-        
-        # Recherche dans le PATH système
-        system_path = self._find_in_system_path(executable_name)
-        if system_path:
+        system_path = shutil.which("ffprobe.exe" if sys.platform == "win32" else "ffprobe")
+        if system_path and self._test_executable(system_path, ["-version"]):
             self._ffprobe_path = system_path
             self.logger.info(f"✅ FFprobe trouvé dans PATH: {system_path}")
             return self._ffprobe_path
         
-        self.logger.warning(f"❌ FFprobe non trouvé")
+        self.logger.warning(f"⚠️ FFprobe non trouvé")
         return None
     
-    def _find_in_system_path(self, executable_name: str) -> Optional[str]:
-        """Recherche un exécutable dans le PATH système"""
+    def _test_executable(self, executable_path: str, test_args: List[str]) -> bool:
+        """Teste si un exécutable fonctionne correctement"""
         try:
-            import shutil
-            return shutil.which(executable_name)
-        except:
-            return None
-    
-    def test_executable(self, executable_path: str, test_args: List[str] = None) -> bool:
-        """Teste si un exécutable fonctionne"""
-        if not executable_path or not Path(executable_path).exists():
-            return False
-        
-        try:
-            test_args = test_args or ["-version"]
             result = subprocess.run(
-                [executable_path] + test_args,
+                [str(executable_path)] + test_args,
                 capture_output=True,
                 timeout=10,
                 text=True
             )
-            return result.returncode == 0
+            return result.returncode == 0 or result.returncode == 1  # Certains programmes retournent 1 pour -h
         except Exception as e:
             self.logger.debug(f"Test exécutable échoué pour {executable_path}: {e}")
             return False
     
-    def get_executable_info(self, executable_path: str) -> Dict[str, str]:
-        """Récupère les informations d'un exécutable"""
-        info = {
-            'path': executable_path,
-            'exists': False,
-            'version': 'Inconnue',
-            'working': False
-        }
-        
-        if not executable_path:
-            return info
-        
-        path_obj = Path(executable_path)
-        info['exists'] = path_obj.exists()
-        
-        if info['exists']:
-            try:
-                result = subprocess.run(
-                    [executable_path, "-version"],
-                    capture_output=True,
-                    timeout=10,
-                    text=True
-                )
-                
-                if result.returncode == 0:
-                    info['working'] = True
-                    # Extraction de la version depuis la sortie
-                    output = result.stdout + result.stderr
-                    lines = output.split('\n')
-                    if lines:
-                        info['version'] = lines[0].strip()
-                        
-            except Exception as e:
-                self.logger.debug(f"Erreur récupération info {executable_path}: {e}")
-        
-        return info
-    
-    def get_all_executables_status(self) -> Dict[str, Dict]:
+    def get_all_executables_status(self) -> Dict[str, any]:
         """Retourne le statut de tous les exécutables"""
         status = {
-            'realesrgan': self.get_executable_info(self.find_realesrgan()),
-            'ffmpeg': self.get_executable_info(self.find_ffmpeg()),
-            'ffprobe': self.get_executable_info(self.find_ffprobe())
+            'realesrgan': {
+                'path': self.find_realesrgan(),
+                'required': True,
+                'description': 'Real-ESRGAN pour l\'upscaling d\'images'
+            },
+            'ffmpeg': {
+                'path': self.find_ffmpeg(),
+                'required': True,
+                'description': 'FFmpeg pour le traitement vidéo'
+            },
+            'ffprobe': {
+                'path': self.find_ffprobe(),
+                'required': False,
+                'description': 'FFprobe pour l\'analyse vidéo'
+            }
         }
         
-        # Statistiques globales
+        # Résumé
+        missing_required = [name for name, info in status.items() 
+                          if info['required'] and not info['path']]
+        
         status['summary'] = {
-            'total_found': sum(1 for exe in status.values() if isinstance(exe, dict) and exe.get('exists', False)),
-            'total_working': sum(1 for exe in status.values() if isinstance(exe, dict) and exe.get('working', False)),
-            'all_ready': all(exe.get('working', False) for exe in status.values() if isinstance(exe, dict))
+            'all_found': len(missing_required) == 0,
+            'missing_required': missing_required,
+            'project_root': str(self.project_root),
+            'server_root': str(self.server_root)
         }
         
         return status
     
-    def setup_instructions(self) -> List[str]:
-        """Retourne les instructions de configuration"""
-        instructions = [
-            "📋 Instructions de configuration des exécutables:",
-            "",
-            "1. Real-ESRGAN:",
-            f"   📁 Dossier cible: {self.server_root / 'realesrgan-ncnn-vulkan'}",
-            "   📥 Télécharger: https://github.com/xinntao/Real-ESRGAN/releases",
-            "   📦 Fichier: realesrgan-ncnn-vulkan-YYYYMMDD-windows.zip",
-            "",
-            "2. FFmpeg:",
-            f"   📁 Dossier cible: {self.server_root / 'ffmpeg'}",
-            "   📥 Télécharger: https://ffmpeg.org/download.html",
-            "   📦 Fichier: ffmpeg-master-latest-win64-gpl.zip",
-            "",
-            "3. Structure finale attendue:",
-            f"   {self.server_root / 'realesrgan-ncnn-vulkan' / 'realesrgan-ncnn-vulkan.exe'}",
-            f"   {self.server_root / 'ffmpeg' / 'ffmpeg.exe'}",
-            f"   {self.server_root / 'ffmpeg' / 'ffprobe.exe'}",
-        ]
+    def is_server_ready(self) -> bool:
+        """Vérifie si le serveur a tous les exécutables requis"""
+        status = self.get_all_executables_status()
+        return status['summary']['all_found']
+    
+    def print_status_report(self):
+        """Affiche un rapport de statut complet"""
+        status = self.get_all_executables_status()
         
-        return instructions
+        print("\n" + "="*60)
+        print("📋 RAPPORT DE STATUT DES EXÉCUTABLES SERVEUR")
+        print("="*60)
+        print(f"📁 Racine du projet: {status['summary']['project_root']}")
+        print(f"🖥️  Racine du serveur: {status['summary']['server_root']}")
+        print()
+        
+        for name, info in status.items():
+            if name == 'summary':
+                continue
+                
+            required_str = "REQUIS" if info['required'] else "OPTIONNEL"
+            if info['path']:
+                print(f"✅ {name.upper()}: {info['path']} ({required_str})")
+            else:
+                print(f"❌ {name.upper()}: NON TROUVÉ ({required_str})")
+            print(f"   └─ {info['description']}")
+        
+        print()
+        if status['summary']['all_found']:
+            print("🎉 Tous les exécutables requis sont disponibles!")
+        else:
+            print("⚠️  Exécutables manquants:")
+            for missing in status['summary']['missing_required']:
+                print(f"   - {missing}")
+        print("="*60)
 
 # Instance globale
 executable_detector = ExecutableDetector()
+
+# Test au démarrage si exécuté directement
+if __name__ == "__main__":
+    executable_detector.print_status_report()

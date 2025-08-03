@@ -40,7 +40,7 @@
         "allowed_clients": []
     },
     "realesrgan": {
-        "executable_path": "D:\\UpscalingByNetwork\\server\\realesrgan-ncnn-vulkan\\realesrgan-ncnn-vulkan.exe",
+        "executable_path": "d:\\UpscalingByNetwork\\server\\realesrgan-ncnn-vulkan\\realesrgan-ncnn-vulkan.exe",
         "models_directory": "./models",
         "default_model": "RealESRGAN_x4plus",
         "default_scale": 4,
