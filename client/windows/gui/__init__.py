@@ -1,8 +1,13 @@
-# client/windows/gui/__init__.py
+# UpscalingByNetwork/client/windows/gui/__init__.py
 """
-Module GUI pour le client Windows d'upscaling distribué
+Interface graphique pour le client Windows
 """
 
-from .main_window import MainWindow
+try:
+    from .client_window import ClientWindow
+    GUI_AVAILABLE = True
+except ImportError:
+    ClientWindow = None
+    GUI_AVAILABLE = False
 
-__all__ = ['MainWindow']
+__all__ = ['ClientWindow', 'GUI_AVAILABLE']

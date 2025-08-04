@@ -1,18 +1,14 @@
-# gui/__init__.py - Fichier d'initialisation du module GUI
+# UpscalingByNetwork/server/gui/__init__.py
+"""
+Module d'interface graphique pour le serveur
+"""
 
-# Imports des widgets principaux
-from .main_window import MainWindow
-from .status_bar import StatusBarWidget
-from .tabs_manager import TabsManager
+# Import conditionnel des widgets principaux
+try:
+    from .server_window import ServerWindow
+    GUI_AVAILABLE = True
+except ImportError:
+    ServerWindow = None
+    GUI_AVAILABLE = False
 
-# Imports des mixins
-from .server_control import ServerControlMixin
-from .configuration import ConfigurationMixin
-
-__all__ = [
-    'MainWindow',
-    'StatusBarWidget', 
-    'TabsManager',
-    'ServerControlMixin',
-    'ConfigurationMixin'
-]
+__all__ = ['ServerWindow', 'GUI_AVAILABLE']

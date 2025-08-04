@@ -1,8 +1,13 @@
-# client/windows/core/__init__.py
+# UpscalingByNetwork/client/windows/core/__init__.py
 """
-Cœur du client Windows
+Module principal du client distribué
 """
 
-from .processor import ClientProcessor
+try:
+    from .distributed_client import DistributedClient
+    CLIENT_AVAILABLE = True
+except ImportError:
+    DistributedClient = None
+    CLIENT_AVAILABLE = False
 
-__all__ = ['ClientProcessor']
+__all__ = ['DistributedClient', 'CLIENT_AVAILABLE']

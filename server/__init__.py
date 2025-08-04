@@ -1,7 +1,9 @@
-# server/__init__.py
+# UpscalingByNetwork/server/__init__.py
 """
-Serveur pour l'upscaling distribué
+Package serveur d'UpscalingByNetwork
+Serveur distribué pour l'upscaling de vidéos avec Real-ESRGAN
 """
 
 __version__ = "1.0.0"
 __author__ = "R2tex"
+

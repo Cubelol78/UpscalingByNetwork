@@ -1,108 +1,86 @@
+# UpscalingByNetwork/server/server_main.py
 """
-Point d'entrée principal pour le serveur d'upscaling distribué
-UpscalingByNetwork/server/server_main.py
+Point d'entrée principal du serveur d'upscaling distribué
+Version corrigée pour les imports relatifs
 """
 
 import sys
 import os
 import asyncio
-import argparse
 import logging
-import signal
 from pathlib import Path
 
-# Ajout du dossier parent au PYTHONPATH
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# CORRECTIF IMPORT: Ajouter le dossier parent au PYTHONPATH
+current_dir = Path(__file__).resolve().parent
+project_root = current_dir.parent  # UpscalingByNetwork/
+server_root = current_dir  # UpscalingByNetwork/server/
 
-def setup_logging(level: str = "INFO", log_file: str = None):
-    """Configure le logging pour le serveur"""
-    
-    # Niveau de logging
-    numeric_level = getattr(logging, level.upper(), logging.INFO)
-    
-    # Format des logs
-    log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    
-    # Configuration de base
-    handlers = [logging.StreamHandler(sys.stdout)]
-    
-    # Fichier de log si spécifié
-    if log_file:
-        log_dir = Path(log_file).parent
-        log_dir.mkdir(parents=True, exist_ok=True)
-        handlers.append(logging.FileHandler(log_file, encoding='utf-8'))
+# Ajouter les chemins nécessaires
+sys.path.insert(0, str(project_root))
+sys.path.insert(0, str(server_root))
+
+# Configuration du logging avant tous les autres imports
+def setup_logging():
+    """Configure le système de logging"""
+    log_dir = server_root / "logs"
+    log_dir.mkdir(exist_ok=True)
     
     logging.basicConfig(
-        level=numeric_level,
-        format=log_format,
-        handlers=handlers
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_dir / "server.log"),
+            logging.StreamHandler(sys.stdout)
+        ]
     )
-    
-    # Configuration spécifique pour websockets (moins verbeux)
-    logging.getLogger('websockets').setLevel(logging.WARNING)
-    logging.getLogger('asyncio').setLevel(logging.WARNING)
 
 def check_dependencies():
-    """Vérifie les dépendances requises"""
-    logger = logging.getLogger(__name__)
-    
+    """Vérifie les dépendances critiques"""
     missing_deps = []
     
-    # Vérification des modules Python
-    required_modules = [
-        'websockets',
-        'cryptography',
-        'psutil',
-        'PyQt5'
-    ]
+    try:
+        import PyQt5
+    except ImportError:
+        missing_deps.append("PyQt5")
     
-    for module in required_modules:
-        try:
-            __import__(module)
-        except ImportError:
-            missing_deps.append(f"Module Python: {module}")
+    try:
+        import qasync
+    except ImportError:
+        missing_deps.append("qasync")
     
-    # Vérification des exécutables
-    executables = {
-        'ffmpeg': 'ffmpeg/ffmpeg.exe',
-        'Real-ESRGAN': 'realesrgan-ncnn-vulkan/realesrgan-ncnn-vulkan.exe'
-    }
-    
-    for name, path in executables.items():
-        if not Path(path).exists():
-            logger.warning(f"{name} non trouvé à {path}")
-            # Note: Real-ESRGAN n'est pas obligatoire côté serveur si traitement client uniquement
+    try:
+        import cryptography
+    except ImportError:
+        missing_deps.append("cryptography")
     
     if missing_deps:
+        logger = logging.getLogger(__name__)
         logger.error("Dépendances manquantes:")
         for dep in missing_deps:
             logger.error(f"  - {dep}")
+        logger.error("Installez avec: pip install PyQt5 qasync cryptography")
         return False
     
-    logger.info("Toutes les dépendances sont satisfaites")
     return True
 
 def create_directories():
     """Crée les dossiers nécessaires"""
-    logger = logging.getLogger(__name__)
-    
     directories = [
-        'server_work',
-        'server_work/jobs',
-        'server_work/temp',
-        'server_work/temp/encryption_keys',
-        'server_work/temp/client_sessions',
-        'logs',
-        'output'
+        server_root / "server_work",
+        server_root / "server_work" / "jobs",
+        server_root / "server_work" / "temp",
+        server_root / "server_work" / "encryption_keys",
+        server_root / "logs",
+        server_root / "output"
     ]
     
     for directory in directories:
-        Path(directory).mkdir(parents=True, exist_ok=True)
-        logger.debug(f"Dossier créé/vérifié: {directory}")
+        directory.mkdir(parents=True, exist_ok=True)
 
-async def run_server_gui(host: str, port: int):
+async def run_server_gui(host: str = "0.0.0.0", port: int = 8888):
     """Lance le serveur avec interface graphique"""
     try:
+        # Import des modules GUI après correction du PYTHONPATH
         import qasync
         from PyQt5.QtWidgets import QApplication
         from gui.server_window import ServerWindow
@@ -111,187 +89,106 @@ async def run_server_gui(host: str, port: int):
         app = QApplication(sys.argv)
         app.setApplicationName("UpscalingByNetwork Server")
         app.setApplicationVersion("1.0.0")
+        app.setOrganizationName("UpscalingByNetwork")
         
-        # Event loop asynchrone
+        # Event loop asynchrone  
         loop = qasync.QEventLoop(app)
         asyncio.set_event_loop(loop)
         
         # Fenêtre principale
         window = ServerWindow()
-        
-        # Configuration serveur
-        window.config['server_host'] = host
-        window.config['server_port'] = port
-        
+        window.set_server_config(host, port)
         window.show()
         
         logger = logging.getLogger(__name__)
-        logger.info(f"Interface graphique serveur démarrée")
-        
-        # Démarrage automatique si configuré
-        if window.config.get('auto_start', False):
-            await window.start_server()
+        logger.info(f"Interface graphique serveur démarrée sur {host}:{port}")
         
         # Boucle principale
         with loop:
-            await loop.create_future()  # Run forever
+            await loop.create_future()
             
     except ImportError as e:
         logger = logging.getLogger(__name__)
         logger.error(f"Interface graphique non disponible: {e}")
-        logger.info("Utilisez --no-gui pour le mode console")
+        logger.info("Solution: pip install PyQt5 qasync")
+        logger.info("Ou utilisez --no-gui pour le mode console")
         return False
     except Exception as e:
         logger = logging.getLogger(__name__)
         logger.error(f"Erreur interface graphique: {e}")
         return False
 
-async def run_server_console(host: str, port: int):
+async def run_server_console(host: str = "0.0.0.0", port: int = 8888):
     """Lance le serveur en mode console"""
-    from core.distributed_server import DistributedServer
-    
-    logger = logging.getLogger(__name__)
-    logger.info("Démarrage du serveur en mode console")
-    
-    # Création du serveur
-    server = DistributedServer(host, port)
-    
-    # Gestionnaire de signaux pour arrêt propre
-    def signal_handler(signum, frame):
-        logger.info(f"Signal {signum} reçu, arrêt du serveur...")
-        asyncio.create_task(server.stop_server())
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
     try:
-        # Démarrage du serveur
-        await server.start_server()
+        # Import du serveur distribué
+        from core.distributed_server import DistributedServer
         
-    except KeyboardInterrupt:
-        logger.info("Interruption clavier, arrêt du serveur...")
+        logger = logging.getLogger(__name__)
+        logger.info(f"Démarrage serveur console sur {host}:{port}")
+        
+        # Création et démarrage du serveur
+        server = DistributedServer()
+        await server.start(host, port)
+        
+        logger.info("Serveur démarré. Appuyez sur Ctrl+C pour arrêter.")
+        
+        # Boucle principale
+        try:
+            while True:
+                await asyncio.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("Arrêt du serveur...")
+            await server.stop()
+            
     except Exception as e:
-        logger.error(f"Erreur serveur: {e}")
-    finally:
-        if server:
-            await server.stop_server()
+        logger = logging.getLogger(__name__)
+        logger.error(f"Erreur serveur console: {e}")
+        return False
 
 def main():
     """Point d'entrée principal"""
-    parser = argparse.ArgumentParser(
-        description="Serveur d'upscaling distribué UpscalingByNetwork",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Exemples:
-  %(prog)s                          # Interface graphique sur localhost:8888
-  %(prog)s --no-gui                 # Mode console
-  %(prog)s --host 0.0.0.0 --port 9000  # Écoute sur toutes les interfaces
-  %(prog)s --log-level DEBUG        # Logs détaillés
-        """
-    )
+    import argparse
     
-    parser.add_argument(
-        '--host',
-        default='0.0.0.0',
-        help='Adresse IP d\'écoute (défaut: 0.0.0.0)'
-    )
-    
-    parser.add_argument(
-        '--port',
-        type=int,
-        default=8888,
-        help='Port d\'écoute (défaut: 8888)'
-    )
-    
-    parser.add_argument(
-        '--no-gui',
-        action='store_true',
-        help='Mode console sans interface graphique'
-    )
-    
-    parser.add_argument(
-        '--log-level',
-        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
-        default='INFO',
-        help='Niveau de logging (défaut: INFO)'
-    )
-    
-    parser.add_argument(
-        '--log-file',
-        help='Fichier de log (défaut: logs/server.log)'
-    )
-    
-    parser.add_argument(
-        '--auto-start',
-        action='store_true',
-        help='Démarre automatiquement le serveur'
-    )
-    
-    parser.add_argument(
-        '--check-deps',
-        action='store_true',
-        help='Vérifie uniquement les dépendances et quitte'
-    )
-    
-    parser.add_argument(
-        '--version',
-        action='version',
-        version='UpscalingByNetwork Server 1.0.0'
-    )
+    # Configuration des arguments
+    parser = argparse.ArgumentParser(description="Serveur d'upscaling distribué")
+    parser.add_argument("--host", default="0.0.0.0", help="Adresse d'écoute")
+    parser.add_argument("--port", type=int, default=8888, help="Port d'écoute")
+    parser.add_argument("--no-gui", action="store_true", help="Mode console uniquement")
+    parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], 
+                       default="INFO", help="Niveau de log")
     
     args = parser.parse_args()
     
     # Configuration du logging
-    log_file = args.log_file or "logs/server.log"
-    setup_logging(args.log_level, log_file)
+    setup_logging()
+    logging.getLogger().setLevel(getattr(logging, args.log_level))
     
     logger = logging.getLogger(__name__)
-    logger.info("=" * 60)
-    logger.info("UpscalingByNetwork - Serveur Distribué v1.0.0")
-    logger.info("=" * 60)
+    logger.info("=== DÉMARRAGE SERVEUR UPSCALING DISTRIBUÉ ===")
+    logger.info(f"Racine projet: {project_root}")
+    logger.info(f"Racine serveur: {server_root}")
     
-    # Vérification des dépendances
+    # Vérifications préliminaires
     if not check_dependencies():
-        if args.check_deps:
-            print("❌ Dépendances manquantes")
-            sys.exit(1)
-        else:
-            logger.warning("Certaines dépendances sont manquantes, le serveur pourrait ne pas fonctionner correctement")
-    elif args.check_deps:
-        print("✅ Toutes les dépendances sont satisfaites")
-        sys.exit(0)
+        return 1
     
-    # Création des dossiers
     create_directories()
     
-    # Validation des paramètres
-    if not (1024 <= args.port <= 65535):
-        logger.error(f"Port invalide: {args.port} (doit être entre 1024 et 65535)")
-        sys.exit(1)
-    
-    logger.info(f"Configuration serveur:")
-    logger.info(f"  - Adresse: {args.host}")
-    logger.info(f"  - Port: {args.port}")
-    logger.info(f"  - Mode: {'Console' if args.no_gui else 'Interface graphique'}")
-    logger.info(f"  - Niveau log: {args.log_level}")
-    logger.info(f"  - Fichier log: {log_file}")
-    
+    # Démarrage selon le mode
     try:
         if args.no_gui:
-            # Mode console
             asyncio.run(run_server_console(args.host, args.port))
         else:
-            # Mode interface graphique
             asyncio.run(run_server_gui(args.host, args.port))
-            
     except KeyboardInterrupt:
         logger.info("Arrêt demandé par l'utilisateur")
     except Exception as e:
         logger.error(f"Erreur fatale: {e}")
-        sys.exit(1)
+        return 1
     
     logger.info("Serveur arrêté")
-    sys.exit(0)
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -1,638 +1,844 @@
+# UpscalingByNetwork/server/core/distributed_server.py
 """
-Serveur principal pour l'upscaling distribué
-UpscalingByNetwork/server/core/distributed_server.py
+Serveur distribué pour l'upscaling de vidéos
+Gère les clients, les lots, le chiffrement et la distribution du travail
 """
 
 import asyncio
-import websockets
+import logging
 import json
 import time
-import uuid
+import hashlib
+import zipfile
 import shutil
 from pathlib import Path
-from typing import Dict, List, Optional, Set
-import logging
-from dataclasses import asdict
+from typing import Dict, List, Optional, Tuple, Any
+from dataclasses import dataclass, asdict
+from datetime import datetime
+import uuid
 
-from ..models.distributed_job import DistributedJob, JobStatus
-from ..models.network_batch import NetworkBatch, BatchStatus  
-from ..models.remote_client import RemoteClient, ClientStatus
-from ..utils.encryption import SecurityManager
-from ..utils.compression import BatchCompressor
-from ..utils.wan_protocol import WANProtocol
-from ...shared.protocol.messages import NetworkMessage, MessageType
-from ...shared.utils.mac_address import get_mac_from_connection
+# Imports pour le réseau et le chiffrement
+import socket
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.backends import default_backend
+import os
+
+# Import conditionnel pour FFmpeg et utils
+try:
+    from ..utils.ffmpeg_handler import FFmpegHandler
+    from ..utils.realesrgan_handler import RealESRGANHandler
+    from ..utils.encryption_manager import EncryptionManager
+except ImportError:
+    # Fallback pour les tests
+    FFmpegHandler = None
+    RealESRGANHandler = None
+    EncryptionManager = None
+
+@dataclass
+class ClientInfo:
+    """Informations sur un client connecté"""
+    mac_address: str
+    hostname: str
+    ip_address: str
+    port: int
+    connected_at: datetime
+    last_seen: datetime
+    status: str  # "idle", "processing", "disconnected"
+    current_batch: Optional[str] = None
+    batches_processed: int = 0
+    total_images_processed: int = 0
+    session_key: Optional[bytes] = None
+    
+    def to_dict(self):
+        """Convertit en dictionnaire pour JSON"""
+        data = asdict(self)
+        data['connected_at'] = self.connected_at.isoformat()
+        data['last_seen'] = self.last_seen.isoformat()
+        if self.session_key:
+            data['session_key'] = self.session_key.hex()
+        return data
+
+@dataclass  
+class BatchInfo:
+    """Informations sur un lot d'images"""
+    batch_id: str
+    job_id: str
+    start_frame: int
+    end_frame: int
+    total_images: int
+    status: str  # "pending", "assigned", "processing", "completed", "error"
+    assigned_client: Optional[str] = None
+    assigned_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    retry_count: int = 0
+    input_path: Optional[Path] = None
+    output_path: Optional[Path] = None
+    
+    def to_dict(self):
+        """Convertit en dictionnaire pour JSON"""
+        data = asdict(self)
+        if self.assigned_at:
+            data['assigned_at'] = self.assigned_at.isoformat()
+        if self.completed_at:
+            data['completed_at'] = self.completed_at.isoformat()
+        if self.input_path:
+            data['input_path'] = str(self.input_path)
+        if self.output_path:
+            data['output_path'] = str(self.output_path)
+        return data
+
+@dataclass
+class JobInfo:
+    """Informations sur un job d'upscaling"""
+    job_id: str
+    video_path: Path
+    output_path: Path
+    scale_factor: int
+    model: str
+    batch_size: int
+    total_frames: int
+    total_batches: int
+    completed_batches: int
+    status: str  # "preparing", "processing", "assembling", "completed", "error"
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+    
+    def to_dict(self):
+        """Convertit en dictionnaire pour JSON"""
+        data = asdict(self)
+        data['video_path'] = str(self.video_path)
+        data['output_path'] = str(self.output_path)
+        data['created_at'] = self.created_at.isoformat()
+        if self.started_at:
+            data['started_at'] = self.started_at.isoformat()
+        if self.completed_at:
+            data['completed_at'] = self.completed_at.isoformat()
+        return data
 
 class DistributedServer:
-    """Serveur principal pour la distribution d'upscaling"""
+    """Serveur principal pour l'upscaling distribué"""
     
-    def __init__(self, host: str = "0.0.0.0", port: int = 8888):
-        self.host = host
-        self.port = port
-        self.running = False
-        
-        # Collections principales
-        self.jobs: Dict[str, DistributedJob] = {}
-        self.batches: Dict[str, NetworkBatch] = {}
-        self.clients: Dict[str, RemoteClient] = {}  # MAC -> Client
-        self.websockets: Dict[str, websockets.WebSocketServerProtocol] = {}  # MAC -> WebSocket
-        
-        # Gestionnaires
-        self.security_manager = SecurityManager()
-        self.compressor = BatchCompressor()
-        self.wan_protocol = WANProtocol()
+    def __init__(self, work_dir: Path = None):
+        self.logger = logging.getLogger(__name__)
         
         # Configuration
+        self.host = "0.0.0.0"
+        self.port = 8888
+        self.max_clients = 50
         self.batch_size = 50
-        self.max_retries = 3
-        self.duplicate_threshold = 5
-        self.heartbeat_interval = 30
-        self.client_timeout = 120
-        
-        # Statistiques
-        self.stats = {
-            'total_jobs': 0,
-            'total_batches': 0,
-            'completed_batches': 0,
-            'failed_batches': 0,
-            'active_clients': 0,
-            'uptime': 0
-        }
+        self.max_retry_attempts = 3
+        self.client_timeout = 300  # 5 minutes
         
         # Dossiers de travail
-        self.work_dir = Path("server_work")
+        self.work_dir = work_dir or Path("server_work")
         self.jobs_dir = self.work_dir / "jobs"
         self.temp_dir = self.work_dir / "temp"
+        self.encryption_keys_dir = self.temp_dir / "encryption_keys"
+        self.output_dir = Path("output")
         
-        self.setup_directories()
-        self.setup_logging()
+        # État du serveur
+        self.running = False
+        self.server_socket = None
+        self.start_time = None
         
-        # Job actuel (pour traitement local si nécessaire)
-        self.current_job_id: Optional[str] = None
+        # Données d'état
+        self.connected_clients: Dict[str, ClientInfo] = {}
+        self.active_jobs: Dict[str, JobInfo] = {}
+        self.active_batches: Dict[str, BatchInfo] = {}
+        self.pending_batches: List[str] = []  # Liste des IDs de lots en attente
         
-        # Flag pour traitement local du serveur
-        self.server_can_process = True
+        # Gestionnaires
+        self.encryption_manager = None
+        self.ffmpeg_handler = None
+        self.realesrgan_handler = None
+        
+        # Tâches asynchrones
+        self.server_task = None
+        self.client_monitor_task = None
+        self.batch_manager_task = None
+        
+        # Créer les dossiers nécessaires
+        self.create_directories()
+        
+        self.logger.info("Serveur distribué initialisé")
     
-    def setup_directories(self):
-        """Crée les dossiers de travail"""
-        for directory in [self.work_dir, self.jobs_dir, self.temp_dir]:
+    def create_directories(self):
+        """Crée les dossiers nécessaires"""
+        directories = [
+            self.work_dir,
+            self.jobs_dir,
+            self.temp_dir,
+            self.encryption_keys_dir,
+            self.output_dir
+        ]
+        
+        for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)
         
-        # Dossiers pour sécurité
-        (self.temp_dir / "encryption_keys").mkdir(exist_ok=True)
-        (self.temp_dir / "client_sessions").mkdir(exist_ok=True)
+        self.logger.debug("Dossiers de travail créés")
     
-    def setup_logging(self):
-        """Configure le logging"""
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        self.logger = logging.getLogger(__name__)
-    
-    async def start_server(self):
-        """Démarre le serveur WebSocket"""
-        self.logger.info(f"Démarrage du serveur sur {self.host}:{self.port}")
-        self.running = True
-        self.stats['uptime'] = time.time()
-        
-        # Démarrage des tâches de background
-        asyncio.create_task(self.heartbeat_monitor())
-        asyncio.create_task(self.batch_distributor())
-        asyncio.create_task(self.cleanup_task())
-        
-        # Serveur WebSocket
-        async with websockets.serve(self.handle_client, self.host, self.port):
-            self.logger.info("Serveur démarré, en attente de connexions...")
-            await asyncio.Future()  # Run forever
-    
-    async def handle_client(self, websocket, path):
-        """Gère une connexion client"""
-        client_mac = None
+    def initialize_handlers(self):
+        """Initialise les gestionnaires d'outils"""
         try:
-            # Authentification et identification du client
-            client_mac = await self.authenticate_client(websocket)
-            if not client_mac:
-                await websocket.close(1000, "Authentification échouée")
+            # Gestionnaire de chiffrement
+            if EncryptionManager:
+                self.encryption_manager = EncryptionManager(self.encryption_keys_dir)
+            
+            # Gestionnaire FFmpeg
+            if FFmpegHandler:
+                self.ffmpeg_handler = FFmpegHandler()
+            
+            # Gestionnaire Real-ESRGAN
+            if RealESRGANHandler:
+                self.realesrgan_handler = RealESRGANHandler()
+            
+            self.logger.info("Gestionnaires initialisés")
+            
+        except Exception as e:
+            self.logger.error(f"Erreur initialisation gestionnaires: {e}")
+    
+    async def start(self, host: str = "0.0.0.0", port: int = 8888):
+        """Démarre le serveur"""
+        if self.running:
+            self.logger.warning("Le serveur est déjà démarré")
+            return
+        
+        self.host = host
+        self.port = port
+        self.start_time = datetime.now()
+        
+        try:
+            # Initialisation des gestionnaires
+            self.initialize_handlers()
+            
+            # Création du socket serveur
+            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.server_socket.bind((host, port))
+            self.server_socket.listen(self.max_clients)
+            self.server_socket.setblocking(False)
+            
+            self.running = True
+            
+            # Démarrage des tâches de gestion
+            self.server_task = asyncio.create_task(self.accept_clients())
+            self.client_monitor_task = asyncio.create_task(self.monitor_clients())
+            self.batch_manager_task = asyncio.create_task(self.manage_batches())
+            
+            self.logger.info(f"Serveur démarré sur {host}:{port}")
+            
+        except Exception as e:
+            self.logger.error(f"Erreur démarrage serveur: {e}")
+            await self.stop()
+            raise
+    
+    async def stop(self):
+        """Arrête le serveur"""
+        if not self.running:
+            return
+        
+        self.running = False
+        
+        try:
+            # Arrêt des tâches
+            if self.server_task:
+                self.server_task.cancel()
+            if self.client_monitor_task:
+                self.client_monitor_task.cancel()
+            if self.batch_manager_task:
+                self.batch_manager_task.cancel()
+            
+            # Déconnexion des clients
+            for client_mac in list(self.connected_clients.keys()):
+                await self.disconnect_client(client_mac)
+            
+            # Fermeture du socket
+            if self.server_socket:
+                self.server_socket.close()
+            
+            self.logger.info("Serveur arrêté")
+            
+        except Exception as e:
+            self.logger.error(f"Erreur arrêt serveur: {e}")
+    
+    async def accept_clients(self):
+        """Accepte les connexions des clients"""
+        while self.running:
+            try:
+                client_socket, address = await asyncio.get_event_loop().sock_accept(self.server_socket)
+                client_socket.setblocking(False)
+                
+                # Traitement de la connexion client dans une tâche séparée
+                asyncio.create_task(self.handle_client(client_socket, address))
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.logger.error(f"Erreur acceptation client: {e}")
+                await asyncio.sleep(1)
+    
+    async def handle_client(self, client_socket, address):
+        """Gère la communication avec un client"""
+        client_mac = None
+        
+        try:
+            # Handshake initial et authentification
+            client_info = await self.perform_handshake(client_socket, address)
+            if not client_info:
                 return
             
-            # Enregistrement du client
-            await self.register_client(client_mac, websocket)
+            client_mac = client_info.mac_address
+            self.connected_clients[client_mac] = client_info
             
-            # Boucle de traitement des messages
-            async for message in websocket:
-                await self.handle_message(client_mac, message)
-                
-        except websockets.exceptions.ConnectionClosed:
-            self.logger.info(f"Client {client_mac} déconnecté")
+            self.logger.info(f"Client connecté: {client_mac} ({client_info.hostname})")
+            
+            # Boucle de communication
+            while self.running and client_mac in self.connected_clients:
+                try:
+                    # Réception des messages
+                    data = await asyncio.wait_for(
+                        asyncio.get_event_loop().sock_recv(client_socket, 4096),
+                        timeout=60
+                    )
+                    
+                    if not data:
+                        break
+                    
+                    # Traitement du message
+                    await self.process_client_message(client_mac, data)
+                    
+                    # Mise à jour de l'heure de dernière activité
+                    self.connected_clients[client_mac].last_seen = datetime.now()
+                    
+                except asyncio.TimeoutError:
+                    # Vérification de la connexion
+                    await self.send_ping(client_socket)
+                    
+                except Exception as e:
+                    self.logger.error(f"Erreur communication client {client_mac}: {e}")
+                    break
+            
         except Exception as e:
-            self.logger.error(f"Erreur connexion client {client_mac}: {e}")
+            self.logger.error(f"Erreur gestion client {address}: {e}")
+            
         finally:
+            # Nettoyage de la connexion
             if client_mac:
                 await self.disconnect_client(client_mac)
+            
+            try:
+                client_socket.close()
+            except:
+                pass
     
-    async def authenticate_client(self, websocket) -> Optional[str]:
-        """Authentifie un client et retourne son adresse MAC"""
+    async def perform_handshake(self, client_socket, address) -> Optional[ClientInfo]:
+        """Effectue le handshake avec un client"""
         try:
-            # Réception du message de connexion
-            message_str = await asyncio.wait_for(websocket.recv(), timeout=30)
-            message_data = json.loads(message_str)
+            # Réception des informations client
+            data = await asyncio.wait_for(
+                asyncio.get_event_loop().sock_recv(client_socket, 1024),
+                timeout=30
+            )
             
-            if message_data.get('type') != 'client_connect':
+            client_hello = json.loads(data.decode('utf-8'))
+            
+            # Validation des informations
+            if not all(key in client_hello for key in ['mac_address', 'hostname', 'version']):
+                self.logger.warning(f"Handshake invalide de {address}")
                 return None
             
-            client_mac = message_data.get('mac_address')
-            if not client_mac:
-                return None
+            # Génération de la clé de session
+            session_key = os.urandom(32)  # AES-256
             
-            # Handshake sécurisé
-            session_key = await self.security_manager.handshake_with_client(client_mac, websocket)
-            if not session_key:
-                return None
+            # Création des informations client
+            client_info = ClientInfo(
+                mac_address=client_hello['mac_address'],
+                hostname=client_hello['hostname'],
+                ip_address=address[0],
+                port=address[1],
+                connected_at=datetime.now(),
+                last_seen=datetime.now(),
+                status="idle",
+                session_key=session_key
+            )
             
-            self.logger.info(f"Client authentifié: {client_mac}")
-            return client_mac
+            # Réponse du serveur avec la clé de session
+            server_hello = {
+                'status': 'accepted',
+                'server_version': '1.0.0',
+                'session_key': session_key.hex(),
+                'batch_size': self.batch_size,
+                'supported_models': [
+                    'realesr-animevideov3',
+                    'realesrgan-x4plus',
+                    'realesrgan-x4plus-anime'
+                ]
+            }
+            
+            response = json.dumps(server_hello).encode('utf-8')
+            await asyncio.get_event_loop().sock_sendall(client_socket, response)
+            
+            return client_info
             
         except Exception as e:
-            self.logger.error(f"Erreur authentification: {e}")
+            self.logger.error(f"Erreur handshake avec {address}: {e}")
             return None
     
-    async def register_client(self, client_mac: str, websocket):
-        """Enregistre un nouveau client"""
-        # Création/mise à jour du client
-        if client_mac in self.clients:
-            client = self.clients[client_mac]
-            client.reconnect()
-        else:
-            client = RemoteClient(mac_address=client_mac)
-            self.clients[client_mac] = client
-        
-        # Stockage de la WebSocket
-        self.websockets[client_mac] = websocket
-        
-        # Notification de connexion
-        await self.send_message(client_mac, NetworkMessage(
-            type=MessageType.STATUS_UPDATE,
-            client_mac=client_mac,
-            timestamp=time.time(),
-            data={'status': 'connected', 'server_version': '1.0'}
-        ))
-        
-        self.stats['active_clients'] = len([c for c in self.clients.values() if c.is_online])
-        self.logger.info(f"Client {client_mac} enregistré. Total: {self.stats['active_clients']}")
-    
-    async def disconnect_client(self, client_mac: str):
-        """Déconnecte un client"""
-        if client_mac in self.clients:
-            client = self.clients[client_mac]
-            
-            # Libération du lot en cours
-            if client.current_batch_id:
-                await self.release_batch(client.current_batch_id, "Client déconnecté")
-            
-            client.disconnect()
-        
-        # Suppression de la WebSocket
-        if client_mac in self.websockets:
-            del self.websockets[client_mac]
-        
-        self.stats['active_clients'] = len([c for c in self.clients.values() if c.is_online])
-        self.logger.info(f"Client {client_mac} déconnecté")
-    
-    async def handle_message(self, client_mac: str, message_str: str):
+    async def process_client_message(self, client_mac: str, data: bytes):
         """Traite un message reçu d'un client"""
         try:
-            message = NetworkMessage.from_json(message_str)
-            client = self.clients.get(client_mac)
+            # Déchiffrement du message si nécessaire
+            client_info = self.connected_clients[client_mac]
+            if client_info.session_key:
+                # TODO: Implémenter le déchiffrement
+                pass
             
-            if not client:
-                return
+            message = json.loads(data.decode('utf-8'))
+            message_type = message.get('type')
             
-            client.last_activity = time.time()
-            
-            # Dispatch selon le type de message
-            if message.type == MessageType.HEARTBEAT:
-                await self.handle_heartbeat(client_mac, message)
-            elif message.type == MessageType.BATCH_ACCEPTED:
-                await self.handle_batch_accepted(client_mac, message)
-            elif message.type == MessageType.BATCH_PROGRESS:
+            if message_type == 'ping':
+                await self.handle_ping(client_mac)
+                
+            elif message_type == 'batch_request':
+                await self.handle_batch_request(client_mac)
+                
+            elif message_type == 'batch_progress':
                 await self.handle_batch_progress(client_mac, message)
-            elif message.type == MessageType.BATCH_COMPLETED:
+                
+            elif message_type == 'batch_completed':
                 await self.handle_batch_completed(client_mac, message)
-            elif message.type == MessageType.BATCH_FAILED:
-                await self.handle_batch_failed(client_mac, message)
+                
+            elif message_type == 'batch_error':
+                await self.handle_batch_error(client_mac, message)
+                
             else:
-                self.logger.warning(f"Message non géré: {message.type}")
+                self.logger.warning(f"Type de message inconnu de {client_mac}: {message_type}")
                 
         except Exception as e:
             self.logger.error(f"Erreur traitement message de {client_mac}: {e}")
     
-    async def create_distributed_job(self, video_path: str):
-        """Crée un job pour traitement distribué"""
-        
-        # 1. Extraction des frames
-        job_id = str(uuid.uuid4())
-        frames_dir = f"jobs/{job_id}/frames"
-        
-        # FFmpeg : extraction frames
-        await self.extract_frames(video_path, frames_dir)
-        
-        # 2. Découpage en lots de 50 images
-        frame_files = sorted(Path(frames_dir).glob("*.png"))
-        
-        batches = []
-        for i in range(0, len(frame_files), 50):
-            batch_frames = frame_files[i:i+50]
-            batch_id = f"batch_{i//50 + 1:03d}"
-            
-            # Création du dossier batch
-            batch_dir = f"jobs/{job_id}/batches/{batch_id}"
-            
-            # Copie des images dans le batch
-            for frame in batch_frames:
-                shutil.copy(frame, f"{batch_dir}/input/")
-            
-            # Création du ZIP (compression 0)
-            zip_path = f"{batch_dir}/{batch_id}.zip"
-            self.create_batch_zip(f"{batch_dir}/input", zip_path)
-            
-            batches.append({
-                'id': batch_id,
-                'status': 'pending',
-                'zip_path': zip_path,
-                'frame_count': len(batch_frames)
-            })
-        
-        return job_id, batches
-    
-    async def extract_frames_and_create_batches(self, job_id: str) -> bool:
-        """Extrait les frames et crée les lots"""
+    async def send_ping(self, client_socket):
+        """Envoie un ping au client"""
         try:
-            if job_id not in self.jobs:
-                raise ValueError(f"Job {job_id} non trouvé")
+            ping_message = json.dumps({'type': 'ping'}).encode('utf-8')
+            await asyncio.get_event_loop().sock_sendall(client_socket, ping_message)
+        except Exception as e:
+            self.logger.error(f"Erreur envoi ping: {e}")
+    
+    async def handle_ping(self, client_mac: str):
+        """Gère un ping reçu d'un client"""
+        # Mise à jour de l'heure de dernière activité
+        if client_mac in self.connected_clients:
+            self.connected_clients[client_mac].last_seen = datetime.now()
+    
+    async def handle_batch_request(self, client_mac: str):
+        """Gère une demande de lot d'un client"""
+        if client_mac not in self.connected_clients:
+            return
+        
+        client_info = self.connected_clients[client_mac]
+        
+        # Vérifier si le client n'est pas déjà occupé
+        if client_info.status == "processing":
+            self.logger.warning(f"Client {client_mac} demande un lot mais en traite déjà un")
+            return
+        
+        # Assigner un lot si disponible
+        batch_id = await self.assign_batch_to_client(client_mac)
+        if batch_id:
+            self.logger.info(f"Lot {batch_id} assigné au client {client_mac}")
+        else:
+            self.logger.debug(f"Aucun lot disponible pour le client {client_mac}")
+    
+    async def assign_batch_to_client(self, client_mac: str) -> Optional[str]:
+        """Assigne un lot à un client"""
+        if not self.pending_batches:
+            return None
+        
+        # Prendre le premier lot en attente
+        batch_id = self.pending_batches.pop(0)
+        batch_info = self.active_batches[batch_id]
+        
+        # Mise à jour du lot
+        batch_info.status = "assigned"
+        batch_info.assigned_client = client_mac
+        batch_info.assigned_at = datetime.now()
+        
+        # Mise à jour du client
+        client_info = self.connected_clients[client_mac]
+        client_info.status = "processing"
+        client_info.current_batch = batch_id
+        
+        # Préparation et envoi du lot au client
+        await self.send_batch_to_client(client_mac, batch_id)
+        
+        return batch_id
+    
+    async def send_batch_to_client(self, client_mac: str, batch_id: str):
+        """Envoie un lot à un client"""
+        try:
+            batch_info = self.active_batches[batch_id]
             
-            job = self.jobs[job_id]
-            job.status = JobStatus.EXTRACTING
+            # Création du package de lot (ZIP + chiffrement)
+            batch_package = await self.create_batch_package(batch_info)
             
-            job_dir = self.jobs_dir / job_id
-            frames_dir = job_dir / 'frames'
-            
-            # Extraction des frames avec FFmpeg
-            ffmpeg_cmd = [
-                "ffmpeg/ffmpeg.exe",
-                "-i", str(job_dir / 'input' / Path(job.input_video_path).name),
-                "-q:v", "1",
-                str(frames_dir / "frame_%06d.png"),
-                "-loglevel", "quiet"
-            ]
-            
-            process = await asyncio.create_subprocess_exec(
-                *ffmpeg_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode != 0:
-                raise Exception(f"Erreur FFmpeg: {stderr.decode()}")
-            
-            # Comptage des frames
-            frame_files = sorted(list(frames_dir.glob("frame_*.png")))
-            job.total_frames = len(frame_files)
-            
-            if job.total_frames == 0:
-                raise Exception("Aucune frame extraite")
-            
-            # Extraction de l'audio
-            await self.extract_audio(job_id)
-            
-            # Création des lots
-            await self.create_batches_from_frames(job_id, frame_files)
-            
-            job.status = JobStatus.PROCESSING
-            job.start_time = time.time()
-            
-            self.logger.info(f"Job {job_id}: {job.total_frames} frames, {len(job.batch_ids)} lots")
-            return True
+            # TODO: Envoyer le package au client via socket
+            self.logger.info(f"Package de lot {batch_id} créé pour {client_mac}")
             
         except Exception as e:
-            self.logger.error(f"Erreur extraction/création lots: {e}")
-            if job_id in self.jobs:
-                self.jobs[job_id].fail(str(e))
-            return False
+            self.logger.error(f"Erreur envoi lot {batch_id} à {client_mac}: {e}")
+            # Remettre le lot en attente
+            await self.reassign_batch(batch_id)
     
-    async def create_batches_from_frames(self, job_id: str, frame_files: List[Path]):
-        """Crée les lots à partir des frames"""
-        job = self.jobs[job_id]
-        job_dir = self.jobs_dir / job_id
-        batches_dir = job_dir / 'batches'
-        
-        batch_ids = []
-        
-        for i in range(0, len(frame_files), self.batch_size):
-            batch_frames = frame_files[i:i + self.batch_size]
-            batch_id = f"{job_id}_batch_{len(batch_ids):03d}"
-            
-            # Création du lot
-            batch = NetworkBatch(
-                id=batch_id,
-                job_id=job_id,
-                frame_start=i,
-                frame_end=min(i + self.batch_size - 1, len(frame_files) - 1),
-                frame_paths=[str(f) for f in batch_frames]
-            )
-            
-            # Dossiers du lot
-            batch_dir = batches_dir / batch_id
-            input_dir = batch_dir / 'input'
-            output_dir = batch_dir / 'output'
-            
-            for directory in [input_dir, output_dir]:
-                directory.mkdir(parents=True, exist_ok=True)
-            
-            # Copie des frames dans le lot
-            for frame_file in batch_frames:
-                shutil.copy2(frame_file, input_dir / frame_file.name)
-            
-            # Création du ZIP (compression 0 pour les images)
-            zip_path = batch_dir / f"{batch_id}.zip"
-            await self.compressor.create_batch_zip(input_dir, zip_path)
-            
-            batch.zip_path = str(zip_path)
-            
-            self.batches[batch_id] = batch
-            batch_ids.append(batch_id)
-        
-        job.batch_ids = batch_ids
-        self.stats['total_batches'] += len(batch_ids)
-    
-    async def extract_audio(self, job_id: str):
-        """Extrait l'audio de la vidéo"""
-        job = self.jobs[job_id]
-        job_dir = self.jobs_dir / job_id
-        
-        input_video = job_dir / 'input' / Path(job.input_video_path).name
-        audio_output = job_dir / 'audio' / 'audio.aac'
-        
-        ffmpeg_cmd = [
-            "ffmpeg/ffmpeg.exe",
-            "-i", str(input_video),
-            "-vn", "-acodec", "aac", "-b:a", "192k",
-            str(audio_output),
-            "-loglevel", "error"
-        ]
-        
-        process = await asyncio.create_subprocess_exec(*ffmpeg_cmd)
-        await process.communicate()
-        
-        if audio_output.exists():
-            job.has_audio = True
-            job.audio_path = str(audio_output)
-    
-    async def batch_distributor(self):
-        """Distribue les lots aux clients disponibles"""
-        while self.running:
-            try:
-                await self.distribute_pending_batches()
-                await asyncio.sleep(2)  # Vérification toutes les 2 secondes
-            except Exception as e:
-                self.logger.error(f"Erreur distributeur de lots: {e}")
-                await asyncio.sleep(5)
-    
-    async def distribute_pending_batches(self):
-        """Distribue les lots en attente"""
-        # Clients disponibles
-        available_clients = [
-            mac for mac, client in self.clients.items()
-            if client.is_online and client.status == ClientStatus.IDLE
-        ]
-        
-        if not available_clients:
-            return
-        
-        # Lots en attente
-        pending_batches = [
-            batch for batch in self.batches.values()
-            if batch.status == BatchStatus.PENDING
-        ]
-        
-        if not pending_batches:
-            # Si le serveur peut traiter et qu'il n'y a pas de lots en attente
-            if self.server_can_process:
-                await self.process_local_batches()
-            return
-        
-        # Tri par priorité (plus anciens en premier)
-        pending_batches.sort(key=lambda b: b.created_at)
-        
-        # Gestion des doublons si nécessaire
-        if (len(pending_batches) < self.duplicate_threshold and 
-            len(available_clients) > len(pending_batches)):
-            
-            for client_mac in available_clients[len(pending_batches):]:
-                # Création de doublons des lots les plus anciens
-                original_batch = pending_batches[0]
-                duplicate_batch = await self.create_duplicate_batch(original_batch)
-                if duplicate_batch:
-                    pending_batches.append(duplicate_batch)
-                    if len(pending_batches) >= len(available_clients):
-                        break
-        
-        # Attribution des lots
-        assignments = list(zip(available_clients, pending_batches[:len(available_clients)]))
-        
-        for client_mac, batch in assignments:
-            await self.assign_batch_to_client(client_mac, batch)
-    
-    async def assign_batch_to_client(self, client_mac: str, batch: NetworkBatch):
-        """Assigne un lot à un client"""
+    async def create_batch_package(self, batch_info: BatchInfo) -> bytes:
+        """Crée un package chiffré pour un lot"""
         try:
-            client = self.clients[client_mac]
+            # Création du fichier ZIP avec les images
+            zip_path = self.temp_dir / f"{batch_info.batch_id}.zip"
             
-            # Génération de la clé de session pour ce lot
-            session_key = self.security_manager.generate_session_key()
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_STORED) as zipf:
+                # Ajout des images du lot
+                for i in range(batch_info.start_frame, batch_info.end_frame + 1):
+                    image_path = batch_info.input_path / f"frame_{i:06d}.png"
+                    if image_path.exists():
+                        zipf.write(image_path, image_path.name)
             
-            # Chiffrement du lot
-            with open(batch.zip_path, 'rb') as f:
+            # Lecture et chiffrement du ZIP
+            with open(zip_path, 'rb') as f:
                 zip_data = f.read()
             
-            encrypted_data = self.security_manager.encrypt_batch(zip_data, session_key)
+            # TODO: Chiffrer les données avec la clé de session du client
+            encrypted_data = zip_data  # Placeholder
             
-            # Stockage de la clé pour ce client/lot
-            self.security_manager.store_session_key(client_mac, batch.id, session_key)
+            # Nettoyage
+            zip_path.unlink()
             
-            # Mise à jour des statuts
-            batch.assign_to_client(client_mac)
-            client.assign_batch(batch.id)
-            
-            # Envoi du lot
-            message = NetworkMessage(
-                type=MessageType.BATCH_ASSIGNMENT,
-                client_mac=client_mac,
-                timestamp=time.time(),
-                data={
-                    'batch_id': batch.id,
-                    'encrypted_data': encrypted_data.hex(),
-                    'frame_count': len(batch.frame_paths),
-                    'job_id': batch.job_id
-                }
-            )
-            
-            await self.send_message(client_mac, message)
-            self.logger.info(f"Lot {batch.id} assigné au client {client_mac}")
+            return encrypted_data
             
         except Exception as e:
-            self.logger.error(f"Erreur assignation lot {batch.id} à {client_mac}: {e}")
-            # Libération du lot en cas d'erreur
-            await self.release_batch(batch.id, f"Erreur assignation: {e}")
+            self.logger.error(f"Erreur création package lot {batch_info.batch_id}: {e}")
+            raise
     
-    async def process_local_batches(self):
-        """Traite les lots localement si le serveur peut traiter"""
-        if not self.current_job_id or self.current_job_id not in self.jobs:
+    async def handle_batch_progress(self, client_mac: str, message: dict):
+        """Gère la progression d'un lot"""
+        batch_id = message.get('batch_id')
+        processed_count = message.get('processed_count', 0)
+        
+        if batch_id in self.active_batches:
+            batch_info = self.active_batches[batch_id]
+            batch_info.status = "processing"
+            
+            self.logger.debug(f"Progression lot {batch_id}: {processed_count}/{batch_info.total_images}")
+    
+    async def handle_batch_completed(self, client_mac: str, message: dict):
+        """Gère la completion d'un lot"""
+        batch_id = message.get('batch_id')
+        
+        if batch_id not in self.active_batches:
             return
         
-        job = self.jobs[self.current_job_id]
+        batch_info = self.active_batches[batch_id]
         
-        # Recherche d'un lot à traiter localement
-        pending_batch = None
-        for batch_id in job.batch_ids:
-            batch = self.batches.get(batch_id)
-            if batch and batch.status == BatchStatus.PENDING:
-                pending_batch = batch
-                break
-        
-        if not pending_batch:
-            return
-        
-        # Traitement local du lot
-        await self.process_batch_locally(pending_batch)
-    
-    async def process_batch_locally(self, batch: NetworkBatch):
-        """Traite un lot localement sur le serveur"""
         try:
-            self.logger.info(f"Traitement local du lot {batch.id}")
+            # Réception du lot traité
+            processed_data = message.get('processed_data')  # En base64 ou référence
             
-            batch.status = BatchStatus.PROCESSING
-            batch.assigned_client = "SERVER"
-            batch.start_time = time.time()
+            # Déchiffrement et extraction
+            success = await self.process_completed_batch(batch_info, processed_data)
             
-            job_dir = self.jobs_dir / batch.job_id
-            batch_dir = job_dir / 'batches' / batch.id
-            
-            input_dir = batch_dir / 'input'
-            output_dir = batch_dir / 'output'
-            
-            # Traitement avec Real-ESRGAN
-            realesrgan_cmd = [
-                "realesrgan-ncnn-vulkan/realesrgan-ncnn-vulkan.exe",
-                "-i", str(input_dir),
-                "-o", str(output_dir),
-                "-n", "realesr-animevideov3",
-                "-s", "4",
-                "-t", "256",
-                "-g", "0"
-            ]
-            
-            process = await asyncio.create_subprocess_exec(
-                *realesrgan_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode != 0:
-                raise Exception(f"Erreur Real-ESRGAN: {stderr.decode()}")
-            
-            # Vérification des résultats
-            input_files = list(input_dir.glob("*.png"))
-            output_files = list(output_dir.glob("*.png"))
-            
-            if len(output_files) != len(input_files):
-                raise Exception(f"Traitement incomplet: {len(output_files)}/{len(input_files)}")
-            
-            # Succès
-            await self.complete_batch_processing(batch.id, "SERVER", output_dir)
-            
+            if success:
+                batch_info.status = "completed"
+                batch_info.completed_at = datetime.now()
+                
+                # Mise à jour des statistiques client
+                client_info = self.connected_clients[client_mac]
+                client_info.batches_processed += 1
+                client_info.total_images_processed += batch_info.total_images
+                client_info.status = "idle"
+                client_info.current_batch = None
+                
+                self.logger.info(f"Lot {batch_id} complété par {client_mac}")
+                
+                # Vérifier si le job est terminé
+                await self.check_job_completion(batch_info.job_id)
+                
+            else:
+                await self.reassign_batch(batch_id)
+                
         except Exception as e:
-            self.logger.error(f"Erreur traitement local lot {batch.id}: {e}")
-            await self.handle_batch_failure(batch.id, "SERVER", str(e))
+            self.logger.error(f"Erreur traitement lot complété {batch_id}: {e}")
+            await self.reassign_batch(batch_id)
     
-    async def send_message(self, client_mac: str, message: NetworkMessage):
-        """Envoie un message à un client"""
-        if client_mac not in self.websockets:
-            return False
-        
+    async def process_completed_batch(self, batch_info: BatchInfo, processed_data: Any) -> bool:
+        """Traite un lot complété reçu d'un client"""
         try:
-            websocket = self.websockets[client_mac]
-            await websocket.send(message.to_json())
+            # TODO: Déchiffrer et extraire les images traitées
+            # TODO: Valider le nombre d'images
+            # TODO: Déplacer vers le dossier de sortie
+            
+            self.logger.info(f"Lot {batch_info.batch_id} traité avec succès")
             return True
+            
         except Exception as e:
-            self.logger.error(f"Erreur envoi message à {client_mac}: {e}")
+            self.logger.error(f"Erreur traitement lot {batch_info.batch_id}: {e}")
             return False
     
-    # Autres méthodes pour le heartbeat, cleanup, etc.
-    async def heartbeat_monitor(self):
-        """Surveille les heartbeats des clients"""
-        while self.running:
-            try:
-                current_time = time.time()
-                
-                for mac, client in list(self.clients.items()):
-                    if client.is_online and (current_time - client.last_activity) > self.client_timeout:
-                        self.logger.warning(f"Client {mac} timeout")
-                        await self.disconnect_client(mac)
-                
-                await asyncio.sleep(self.heartbeat_interval)
-                
-            except Exception as e:
-                self.logger.error(f"Erreur monitor heartbeat: {e}")
-                await asyncio.sleep(10)
-    
-    async def cleanup_task(self):
-        """Tâche de nettoyage périodique"""
-        while self.running:
-            try:
-                # Nettoyage des lots échoués, etc.
-                await asyncio.sleep(300)  # Toutes les 5 minutes
-            except Exception as e:
-                self.logger.error(f"Erreur cleanup: {e}")
-    
-    def get_stats(self) -> dict:
-        """Retourne les statistiques du serveur"""
-        self.stats['active_clients'] = len([c for c in self.clients.values() if c.is_online])
-        self.stats['uptime'] = time.time() - self.stats['uptime'] if self.running else 0
+    async def handle_batch_error(self, client_mac: str, message: dict):
+        """Gère une erreur de traitement de lot"""
+        batch_id = message.get('batch_id')
+        error_message = message.get('error', 'Erreur inconnue')
         
-        return self.stats.copy()
+        self.logger.warning(f"Erreur lot {batch_id} par {client_mac}: {error_message}")
+        
+        await self.reassign_batch(batch_id)
     
-    def get_clients_status(self) -> Dict[str, dict]:
-        """Retourne le statut de tous les clients"""
+    async def reassign_batch(self, batch_id: str):
+        """Remet un lot en attente pour réassignation"""
+        if batch_id not in self.active_batches:
+            return
+        
+        batch_info = self.active_batches[batch_id]
+        batch_info.retry_count += 1
+        
+        if batch_info.retry_count >= self.max_retry_attempts:
+            batch_info.status = "error"
+            self.logger.error(f"Lot {batch_id} abandonné après {self.max_retry_attempts} tentatives")
+            return
+        
+        # Remettre en attente
+        batch_info.status = "pending"
+        batch_info.assigned_client = None
+        batch_info.assigned_at = None
+        self.pending_batches.append(batch_id)
+        
+        # Libérer le client si nécessaire
+        if batch_info.assigned_client and batch_info.assigned_client in self.connected_clients:
+            client_info = self.connected_clients[batch_info.assigned_client]
+            client_info.status = "idle"
+            client_info.current_batch = None
+        
+        self.logger.info(f"Lot {batch_id} remis en attente (tentative {batch_info.retry_count})")
+    
+    async def disconnect_client(self, client_mac: str):
+        """Déconnecte un client"""
+        if client_mac not in self.connected_clients:
+            return
+        
+        client_info = self.connected_clients[client_mac]
+        
+        # Réassigner le lot en cours si nécessaire
+        if client_info.current_batch:
+            await self.reassign_batch(client_info.current_batch)
+        
+        # Supprimer le client
+        del self.connected_clients[client_mac]
+        
+        self.logger.info(f"Client déconnecté: {client_mac}")
+    
+    async def monitor_clients(self):
+        """Surveille les clients connectés"""
+        while self.running:
+            try:
+                current_time = datetime.now()
+                clients_to_disconnect = []
+                
+                for client_mac, client_info in self.connected_clients.items():
+                    # Vérifier le timeout
+                    if (current_time - client_info.last_seen).total_seconds() > self.client_timeout:
+                        clients_to_disconnect.append(client_mac)
+                
+                # Déconnecter les clients expirés
+                for client_mac in clients_to_disconnect:
+                    await self.disconnect_client(client_mac)
+                
+                await asyncio.sleep(60)  # Vérification toutes les minutes
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.logger.error(f"Erreur surveillance clients: {e}")
+                await asyncio.sleep(60)
+    
+    async def manage_batches(self):
+        """Gère la distribution des lots"""
+        while self.running:
+            try:
+                # Vérifier s'il y a des lots en attente et des clients disponibles
+                idle_clients = [
+                    mac for mac, client in self.connected_clients.items()
+                    if client.status == "idle"
+                ]
+                
+                if self.pending_batches and idle_clients:
+                    # Assigner des lots aux clients disponibles
+                    for client_mac in idle_clients[:len(self.pending_batches)]:
+                        await self.assign_batch_to_client(client_mac)
+                
+                await asyncio.sleep(5)  # Vérification toutes les 5 secondes
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.logger.error(f"Erreur gestion lots: {e}")
+                await asyncio.sleep(5)
+    
+    # === API publique pour la création de jobs ===
+    
+    async def create_job(self, video_path: Path, scale_factor: int = 4, 
+                        model: str = "realesr-animevideov3") -> str:
+        """Crée un nouveau job d'upscaling"""
+        try:
+            # Génération de l'ID du job
+            job_id = f"job_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+            
+            # Création des dossiers du job
+            job_dir = self.jobs_dir / job_id
+            frames_dir = job_dir / "frames"
+            output_dir = job_dir / "output"
+            
+            for directory in [job_dir, frames_dir, output_dir]:
+                directory.mkdir(parents=True, exist_ok=True)
+            
+            # Extraction des frames avec FFmpeg
+            if self.ffmpeg_handler:
+                total_frames = await self.ffmpeg_handler.extract_frames(
+                    video_path, frames_dir
+                )
+            else:
+                # Fallback: estimation
+                total_frames = 1000  # Placeholder
+            
+            # Calcul du nombre de lots
+            total_batches = (total_frames + self.batch_size - 1) // self.batch_size
+            
+            # Création des informations du job
+            job_info = JobInfo(
+                job_id=job_id,
+                video_path=video_path,
+                output_path=self.output_dir / f"{video_path.stem}_upscaled.mp4",
+                scale_factor=scale_factor,
+                model=model,
+                batch_size=self.batch_size,
+                total_frames=total_frames,
+                total_batches=total_batches,
+                completed_batches=0,
+                status="preparing",
+                created_at=datetime.now()
+            )
+            
+            self.active_jobs[job_id] = job_info
+            
+            # Création des lots
+            await self.create_batches_for_job(job_info, frames_dir)
+            
+            # Démarrage du job
+            job_info.status = "processing"
+            job_info.started_at = datetime.now()
+            
+            self.logger.info(f"Job {job_id} créé: {total_batches} lots, {total_frames} frames")
+            
+            return job_id
+            
+        except Exception as e:
+            self.logger.error(f"Erreur création job: {e}")
+            raise
+    
+    async def create_batches_for_job(self, job_info: JobInfo, frames_dir: Path):
+        """Crée les lots pour un job"""
+        for batch_num in range(job_info.total_batches):
+            start_frame = batch_num * self.batch_size
+            end_frame = min(start_frame + self.batch_size - 1, job_info.total_frames - 1)
+            
+            batch_id = f"{job_info.job_id}_batch_{batch_num:04d}"
+            
+            batch_info = BatchInfo(
+                batch_id=batch_id,
+                job_id=job_info.job_id,
+                start_frame=start_frame,
+                end_frame=end_frame,
+                total_images=end_frame - start_frame + 1,
+                status="pending",
+                input_path=frames_dir,
+                output_path=self.jobs_dir / job_info.job_id / "output"
+            )
+            
+            self.active_batches[batch_id] = batch_info
+            self.pending_batches.append(batch_id)
+    
+    async def check_job_completion(self, job_id: str):
+        """Vérifie si un job est terminé"""
+        if job_id not in self.active_jobs:
+            return
+        
+        job_info = self.active_jobs[job_id]
+        
+        # Compter les lots complétés
+        completed_batches = sum(
+            1 for batch in self.active_batches.values()
+            if batch.job_id == job_id and batch.status == "completed"
+        )
+        
+        job_info.completed_batches = completed_batches
+        
+        if completed_batches >= job_info.total_batches:
+            # Job terminé, assembler la vidéo finale
+            await self.assemble_final_video(job_info)
+    
+    async def assemble_final_video(self, job_info: JobInfo):
+        """Assemble la vidéo finale"""
+        try:
+            job_info.status = "assembling"
+            
+            output_frames_dir = self.jobs_dir / job_info.job_id / "output"
+            
+            # Assemblage avec FFmpeg
+            if self.ffmpeg_handler:
+                await self.ffmpeg_handler.assemble_video(
+                    output_frames_dir,
+                    job_info.video_path,  # Pour l'audio
+                    job_info.output_path
+                )
+            
+            job_info.status = "completed"
+            job_info.completed_at = datetime.now()
+            
+            self.logger.info(f"Job {job_info.job_id} terminé: {job_info.output_path}")
+            
+        except Exception as e:
+            job_info.status = "error"
+            job_info.error_message = str(e)
+            self.logger.error(f"Erreur assemblage job {job_info.job_id}: {e}")
+    
+    # === Méthodes d'état et statistiques ===
+    
+    def get_server_stats(self) -> Dict[str, Any]:
+        """Retourne les statistiques du serveur"""
+        uptime = (datetime.now() - self.start_time).total_seconds() if self.start_time else 0
+        
         return {
-            mac: {
-                'status': client.status.value,
-                'is_online': client.is_online,
-                'current_batch': client.current_batch_id,
-                'batches_completed': client.batches_completed,
-                'current_progress': client.current_progress,
-                'last_activity': client.last_activity,
-                'total_processing_time': client.total_processing_time
-            }
-            for mac, client in self.clients.items()
+            'running': self.running,
+            'uptime': uptime,
+            'clients_connected': len(self.connected_clients),
+            'active_jobs': len(self.active_jobs),
+            'active_batches': len(self.active_batches),
+            'pending_batches': len(self.pending_batches),
+            'total_images_processed': sum(
+                client.total_images_processed for client in self.connected_clients.values()
+            )
         }
     
-    async def stop_server(self):
-        """Arrête le serveur"""
-        self.logger.info("Arrêt du serveur...")
-        self.running = False
-        
-        # Déconnexion de tous les clients
-        for client_mac in list(self.clients.keys()):
-            await self.disconnect_client(client_mac)
-        
-        self.logger.info("Serveur arrêté")
-
-# Point d'entrée pour test
-if __name__ == "__main__":
-    server = DistributedServer()
-    asyncio.run(server.start_server())
+    def get_client_stats(self) -> List[Dict[str, Any]]:
+        """Retourne les statistiques des clients"""
+        return [client.to_dict() for client in self.connected_clients.values()]
+    
+    def get_job_stats(self) -> List[Dict[str, Any]]:
+        """Retourne les statistiques des jobs"""
+        return [job.to_dict() for job in self.active_jobs.values()]
+    
+    def get_batch_stats(self) -> List[Dict[str, Any]]:
+        """Retourne les statistiques des lots"""
+        return [batch.to_dict() for batch in self.active_batches.values()]
