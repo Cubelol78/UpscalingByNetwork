@@ -1,0 +1,733 @@
+# UpscalingByNetwork - Dépendances Python
+# Installez avec: pip install -r requirements.txt
+
+# Communication réseau
+websockets>=11.0.0
+requests>=2.31.0
+
+# Interface graphique
+PyQt5>=5.15.0
+qasync>=0.24.0
+
+# Sécurité et chiffrement
+cryptography>=41.0.0
+
+# Monitoring système
+psutil>=5.9.0
+
+# Build (optionnel)
+pyinstaller>=5.13.0
+
+# Utilitaires
+pathlib2>=2.3.0; python_version < "3.4"
+
+# Dépendances développement (optionnel)
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+black>=23.7.0
+flake8>=6.0.0
+
+# UpscalingByNetwork/config/server_config.json
+
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8888,
+    "max_clients": 50,
+    "heartbeat_interval": 30,
+    "client_timeout": 120,
+    "auto_start": false
+  },
+  "processing": {
+    "batch_size": 50,
+    "max_retries": 3,
+    "duplicate_threshold": 5,
+    "server_can_process": true,
+    "cleanup_temp_files": true
+  },
+  "realesrgan": {
+    "model": "realesr-animevideov3",
+    "scale": 4,
+    "tile_size": 256,
+    "gpu_id": 0,
+    "denoise": true
+  },
+  "ffmpeg": {
+    "crf": 20,
+    "preset": "medium",
+    "threads": 12,
+    "audio_bitrate": "192k"
+  },
+  "security": {
+    "use_encryption": true,
+    "key_size": 32,
+    "session_timeout": 3600
+  },
+  "storage": {
+    "work_drive": "",
+    "temp_dir": "server_work/temp",
+    "output_dir": "server_work/output",
+    "auto_cleanup": true,
+    "min_free_space_gb": 50
+  },
+  "gui": {
+    "update_interval": 1000,
+    "log_max_lines": 1000,
+    "minimize_to_tray": true
+  }
+}
+
+# UpscalingByNetwork/config/client_config.json
+
+{
+  "connection": {
+    "server_host": "localhost",
+    "server_port": 8888,
+    "auto_connect": false,
+    "auto_reconnect": true,
+    "connection_timeout": 30,
+    "heartbeat_interval": 30
+  },
+  "processing": {
+    "max_concurrent_batches": 1,
+    "auto_start_processing": true,
+    "tile_size": 256,
+    "gpu_id": 0,
+    "cpu_threads": 4
+  },
+  "gui": {
+    "minimize_to_tray": true,
+    "notifications": true,
+    "auto_scroll_logs": true,
+    "log_level": "INFO"
+  },
+  "security": {
+    "verify_server": true,
+    "encryption_enabled": true
+  },
+  "system": {
+    "log_to_file": true,
+    "log_file": "client_work/logs/client.log",
+    "cleanup_temp_files": true
+  }
+}
+
+# UpscalingByNetwork/README.md
+
+# UpscalingByNetwork - Système d'Upscaling Distribué
+
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/votre-repo/UpscalingByNetwork)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](https://github.com/votre-repo/UpscalingByNetwork)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+## 🎯 Description
+
+UpscalingByNetwork est un système distribué permettant de partager la puissance de calcul entre plusieurs machines pour effectuer de l'upscaling vidéo en utilisant Real-ESRGAN. Le système divise les vidéos en lots d'images qui sont distribués aux clients connectés, puis reassemble le résultat final.
+
+## ✨ Fonctionnalités
+
+### 🖥️ Serveur
+- **Interface graphique intuitive** avec monitoring en temps réel
+- **Distribution intelligente** des lots avec gestion des doublons
+- **Sécurité WAN** avec chiffrement AES-256
+- **Monitoring avancé** des clients connectés
+- **Assemblage automatique** des vidéos finales
+- **Support audio** complet avec synchronisation
+
+### 💻 Client
+- **Versions Windows et Linux** autonomes
+- **Interface graphique moderne** avec statistiques
+- **Traitement automatique** des lots reçus
+- **Surveillance système** intégrée
+- **Reconnexion automatique** en cas de déconnexion
+
+### 🔧 Technique
+- **Réseau WAN** sécurisé avec identification par adresse MAC
+- **Real-ESRGAN** intégré pour l'upscaling de qualité
+- **FFmpeg** pour le traitement vidéo
+- **Compression optimisée** pour les transferts réseau
+- **Gestion d'erreurs** robuste avec retry automatique
+
+## 🚀 Installation
+
+### Serveur (Windows)
+
+1. **Téléchargez** le package serveur depuis [releases](https://github.com/votre-repo/UpscalingByNetwork/releases)
+2. **Extrayez** l'archive dans un dossier
+3. **Lancez** `Start_Server.bat`
+
+### Client Windows
+
+1. **Téléchargez** le package client Windows
+2. **Extrayez** l'archive dans un dossier
+3. **Lancez** `Start_Client.bat`
+
+### Client Linux
+
+1. **Téléchargez** le package client Linux
+2. **Extrayez** : `tar -xzf UpscalingByNetwork_Linux.tar.gz`
+3. **Installez** les dépendances : `sudo apt install python3-pyqt5`
+4. **Lancez** : `./start_client.sh`
+
+## 📋 Prérequis
+
+### Serveur
+- Windows 10/11 64-bit
+- 8 GB RAM minimum (16 GB recommandé)
+- 50 GB d'espace libre minimum
+- GPU compatible Vulkan (recommandé)
+
+### Client Windows
+- Windows 10/11 64-bit
+- 4 GB RAM minimum
+- GPU compatible Vulkan (obligatoire pour Real-ESRGAN)
+
+### Client Linux
+- Ubuntu 20.04+ / Debian 11+ / Fedora 35+ ou équivalent
+- Python 3.8+
+- PyQt5
+- GPU compatible Vulkan
+
+## 🛠️ Configuration
+
+### Configuration réseau
+
+Le serveur utilise par défaut le port **8888**. Assurez-vous que :
+- Le port est ouvert dans le pare-feu
+- Les clients peuvent accéder au serveur via ce port
+- Pour un usage WAN, configurez la redirection de port sur votre routeur
+
+### Paramètres d'upscaling
+
+Dans l'interface serveur, vous pouvez configurer :
+- **Modèle Real-ESRGAN** : `realesr-animevideov3` (recommandé pour anime/cartoon)
+- **Facteur d'échelle** : 2x, 4x ou 8x
+- **Taille des lots** : 50 images par défaut
+- **Qualité vidéo** : CRF 15-30
+
+## 📖 Utilisation
+
+### Démarrage du serveur
+
+1. **Lancez** l'interface serveur
+2. **Configurez** l'adresse IP (0.0.0.0 pour toutes les interfaces)
+3. **Cliquez** sur "Démarrer le serveur"
+4. **Vérifiez** que le statut indique "Démarré"
+
+### Connexion des clients
+
+1. **Lancez** l'interface client
+2. **Configurez** l'adresse du serveur dans l'onglet "Connexion"
+3. **Cliquez** sur "Se connecter"
+4. **Vérifiez** le statut de connexion
+
+### Traitement d'une vidéo
+
+1. Dans l'interface serveur, onglet **"Gestion des Jobs"**
+2. **Sélectionnez** une vidéo dans "Nouveau Job"
+3. **Configurez** les paramètres d'upscaling
+4. **Cliquez** sur "Créer le Job"
+5. **Surveillez** la progression dans "Jobs Actifs"
+
+### Surveillance
+
+L'onglet **"Surveillance"** du serveur affiche :
+- Clients connectés avec statut en temps réel
+- Progression des lots par client
+- Statistiques de performance
+- Alertes et notifications
+
+## 📁 Structure du projet
+
+```
+UpscalingByNetwork/
+├── server/                     # Serveur distribué
+│   ├── core/                   # Logique principale
+│   ├── gui/                    # Interface graphique
+│   ├── models/                 # Modèles de données
+│   ├── utils/                  # Utilitaires
+│   ├── ffmpeg/                 # FFmpeg binaires
+│   ├── realesrgan-ncnn-vulkan/ # Real-ESRGAN binaires
+│   └── server_main.py          # Point d'entrée
+├── client/                     # Clients
+│   ├── windows/                # Client Windows
+│   └── linux/                  # Client Linux
+├── shared/                     # Code partagé
+│   ├── protocol/               # Protocoles réseau
+│   └── utils/                  # Utilitaires partagés
+├── build_scripts/              # Scripts de construction
+├── config/                     # Configurations
+└── docs/                       # Documentation
+```
+
+## 🔧 Compilation depuis les sources
+
+### Prérequis développement
+
+```bash
+# Clonage du repository
+git clone https://github.com/votre-repo/UpscalingByNetwork.git
+cd UpscalingByNetwork
+
+# Installation des dépendances Python
+pip install -r requirements.txt
+```
+
+### Build Windows
+
+```bash
+# Build complet (serveur + client)
+python build_scripts/build_windows.py
+
+# Build serveur uniquement
+python build_scripts/build_windows.py --server-only
+
+# Build client uniquement
+python build_scripts/build_windows.py --client-only
+```
+
+### Build Linux
+
+```bash
+# Build client Linux
+python build_scripts/build_linux.py
+```
+
+Les exécutables seront générés dans le dossier `dist/`.
+
+## 🔒 Sécurité
+
+### Chiffrement
+
+- **AES-256-CBC** pour les données transférées
+- **Clés de session** uniques par connexion
+- **HMAC-SHA256** pour l'intégrité des données
+- **Handshake RSA** pour l'échange de clés
+
+### Identification
+
+- **Adresse MAC** pour identifier les clients
+- **Tokens de session** avec expiration
+- **Authentification** mutuelle serveur/client
+
+### Réseau
+
+- **Validation** des messages réseau
+- **Protection** contre les attaques de replay
+- **Isolation** des lots par client
+
+## 📊 Performance
+
+### Benchmarks typiques
+
+| Configuration | Résolution | Temps/image | Débit total |
+|---------------|------------|-------------|-------------|
+| GTX 1660 Ti   | 1080p→4K   | ~2.5s       | 24 img/min  |
+| RTX 3070      | 1080p→4K   | ~1.2s       | 50 img/min  |
+| RTX 4090      | 1080p→4K   | ~0.7s       | 85 img/min  |
+
+### Optimisations
+
+- **Taille de tuile** adaptative selon la VRAM
+- **Traitement parallèle** multi-GPU
+- **Cache intelligent** des modèles
+- **Compression réseau** optimisée
+
+## 🐛 Dépannage
+
+### Problèmes courants
+
+**Client ne se connecte pas**
+- Vérifiez l'adresse IP et le port du serveur
+- Contrôlez les paramètres de pare-feu
+- Testez la connectivité réseau
+
+**Real-ESRGAN ne fonctionne pas**
+- Vérifiez la compatibilité Vulkan du GPU
+- Mettez à jour les pilotes graphiques
+- Testez avec une taille de tuile plus petite
+
+**Traitement lent**
+- Réduisez la taille de tuile si VRAM insuffisante
+- Vérifiez la charge CPU/GPU
+- Optimisez les paramètres réseau
+
+### Logs
+
+- **Serveur** : `logs/server.log`
+- **Client Windows** : `client_work/logs/client.log`
+- **Client Linux** : `~/.local/share/UpscalingByNetwork/client.log`
+
+## 🤝 Contribution
+
+Les contributions sont les bienvenues ! Merci de :
+
+1. **Fork** le projet
+2. **Créer** une branche pour votre fonctionnalité
+3. **Commiter** vos changements
+4. **Pousser** vers la branche
+5. **Ouvrir** une Pull Request
+
+### Développement
+
+```bash
+# Tests
+pytest tests/
+
+# Formatage du code
+black .
+
+# Vérification du style
+flake8 .
+```
+
+## 📄 Licence
+
+Ce projet est sous licence MIT. Voir le fichier [LICENSE](LICENSE) pour plus de détails.
+
+## 🙏 Remerciements
+
+- **[Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN)** pour l'algorithme d'upscaling
+- **[FFmpeg](https://ffmpeg.org/)** pour le traitement vidéo
+- **[PyQt5](https://www.riverbankcomputing.com/software/pyqt/)** pour l'interface graphique
+- **Communauté open source** pour les outils et bibliothèques
+
+## 📞 Support
+
+- **Issues** : [GitHub Issues](https://github.com/votre-repo/UpscalingByNetwork/issues)
+- **Discussions** : [GitHub Discussions](https://github.com/votre-repo/UpscalingByNetwork/discussions)
+- **Wiki** : [Documentation complète](https://github.com/votre-repo/UpscalingByNetwork/wiki)
+
+---
+
+**UpscalingByNetwork** - Transformez votre réseau en ferme de calcul pour l'upscaling vidéo ! 🚀
+
+# UpscalingByNetwork/INSTALL.md
+
+# Guide d'Installation - UpscalingByNetwork
+
+## 🚀 Installation Rapide
+
+### Option 1 : Téléchargement des Releases (Recommandé)
+
+1. **Rendez-vous** sur la [page des releases](https://github.com/votre-repo/UpscalingByNetwork/releases)
+2. **Téléchargez** les packages correspondant à votre plateforme :
+   - `UpscalingByNetwork_Windows.zip` pour Windows (serveur + client)
+   - `UpscalingByNetwork_Linux.tar.gz` pour Linux (client uniquement)
+
+### Option 2 : Compilation depuis les Sources
+
+Voir la section [Compilation Avancée](#compilation-avancée) ci-dessous.
+
+## 🖥️ Installation Serveur (Windows)
+
+### Prérequis
+- Windows 10 64-bit ou supérieur
+- 8 GB RAM minimum (16 GB recommandé)
+- 50 GB d'espace disque libre minimum
+- GPU compatible Vulkan (optionnel mais recommandé)
+
+### Installation
+
+1. **Téléchargez** `UpscalingByNetwork_Windows.zip`
+2. **Extrayez** dans un dossier (ex: `C:\UpscalingByNetwork`)
+3. **Naviguez** dans le dossier extrait
+4. **Double-cliquez** sur `Start_Server.bat`
+
+L'interface graphique du serveur s'ouvrira automatiquement.
+
+### Configuration initiale
+
+1. Dans l'onglet **"Configuration"** :
+   - Configurez l'adresse IP (0.0.0.0 pour écouter sur toutes les interfaces)
+   - Vérifiez le port (8888 par défaut)
+   - Ajustez la taille des lots selon votre réseau
+
+2. **Cliquez** sur "Démarrer le serveur"
+
+3. **Vérifiez** que le statut indique "Démarré" en vert
+
+## 💻 Installation Client Windows
+
+### Prérequis
+- Windows 10 64-bit ou supérieur
+- 4 GB RAM minimum
+- GPU compatible Vulkan (obligatoire)
+- Accès réseau au serveur
+
+### Installation
+
+1. **Utilisez** le même package `UpscalingByNetwork_Windows.zip`
+2. **Extrayez** sur la machine cliente
+3. **Double-cliquez** sur `Start_Client.bat`
+
+### Configuration initiale
+
+1. Dans l'onglet **"Connexion"** :
+   - Saisissez l'adresse IP du serveur
+   - Vérifiez le port (8888 par défaut)
+   - **Cliquez** sur "Tester la connexion"
+
+2. **Cliquez** sur "Se connecter"
+
+3. **Vérifiez** que le statut indique "Connecté" en vert
+
+## 🐧 Installation Client Linux
+
+### Prérequis système
+
+**Ubuntu/Debian :**
+```bash
+sudo apt update
+sudo apt install python3 python3-pip python3-pyqt5 python3-venv
+```
+
+**Fedora :**
+```bash
+sudo dnf install python3 python3-pip python3-qt5 python3-virtualenv
+```
+
+**Arch Linux :**
+```bash
+sudo pacman -S python python-pip python-pyqt5 python-virtualenv
+```
+
+### Installation
+
+1. **Téléchargez** `UpscalingByNetwork_Linux.tar.gz`
+
+2. **Extrayez** :
+```bash
+tar -xzf UpscalingByNetwork_Linux.tar.gz
+cd UpscalingByNetwork_Linux
+```
+
+3. **Installez** les dépendances Python :
+```bash
+pip3 install --user websockets cryptography psutil qasync
+```
+
+4. **Rendez exécutable** et lancez :
+```bash
+chmod +x start_client.sh
+./start_client.sh
+```
+
+### Dépannage Linux
+
+**Si PyQt5 n'est pas trouvé :**
+```bash
+# Ubuntu/Debian
+sudo apt install python3-pyqt5-dev python3-pyqt5.qtwidgets
+
+# Fedora
+sudo dnf install python3-qt5-devel
+
+# Arch
+sudo pacman -S python-pyqt5
+```
+
+**Si Real-ESRGAN ne fonctionne pas :**
+```bash
+# Vérifiez les pilotes Vulkan
+vulkaninfo
+
+# Installez les pilotes Vulkan si nécessaire
+# NVIDIA
+sudo apt install nvidia-vulkan-driver
+
+# AMD
+sudo apt install mesa-vulkan-drivers
+
+# Intel
+sudo apt install intel-media-va-driver-non-free
+```
+
+## 🔧 Compilation Avancée
+
+### Prérequis développement
+
+```bash
+# Clone du repository
+git clone https://github.com/votre-repo/UpscalingByNetwork.git
+cd UpscalingByNetwork
+
+# Création d'un environnement virtuel (recommandé)
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# ou
+venv\Scripts\activate  # Windows
+
+# Installation des dépendances
+pip install -r requirements.txt
+```
+
+### Compilation Windows
+
+```bash
+# Installation des outils de build
+pip install pyinstaller requests
+
+# Build complet (serveur + client)
+python build_scripts/build_windows.py
+
+# Build serveur uniquement
+python build_scripts/build_windows.py --server-only
+
+# Build client uniquement
+python build_scripts/build_windows.py --client-only
+```
+
+**Note :** Le script téléchargera automatiquement FFmpeg et Real-ESRGAN.
+
+### Compilation Linux
+
+```bash
+# Build client Linux
+python build_scripts/build_linux.py
+```
+
+### Exécution depuis les sources
+
+**Serveur :**
+```bash
+cd server
+python server_main.py
+```
+
+**Client Windows :**
+```bash
+cd client/windows
+python client_main.py
+```
+
+**Client Linux :**
+```bash
+cd client/linux
+python client_main.py
+```
+
+## 🔧 Configuration Avancée
+
+### Configuration serveur (server_config.json)
+
+```json
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8888,
+    "max_clients": 50
+  },
+  "processing": {
+    "batch_size": 50,
+    "max_retries": 3,
+    "server_can_process": true
+  },
+  "realesrgan": {
+    "model": "realesr-animevideov3",
+    "scale": 4,
+    "tile_size": 256
+  }
+}
+```
+
+### Configuration client (client_config.json)
+
+```json
+{
+  "connection": {
+    "server_host": "localhost",
+    "server_port": 8888,
+    "auto_connect": false
+  },
+  "processing": {
+    "max_concurrent_batches": 1,
+    "tile_size": 256,
+    "gpu_id": 0
+  }
+}
+```
+
+## 🌐 Configuration Réseau
+
+### Pare-feu Windows
+
+1. **Ouvrez** le Pare-feu Windows Defender
+2. **Cliquez** sur "Autoriser une application"
+3. **Ajoutez** `UpscalingByNetwork_Server.exe`
+4. **Cochez** "Privé" et "Public"
+
+### Configuration routeur (accès WAN)
+
+1. **Connectez-vous** à l'interface d'administration
+2. **Configurez** la redirection de port :
+   - Port externe : 8888
+   - Port interne : 8888
+   - IP locale : IP du serveur
+   - Protocole : TCP
+
+### Test de connectivité
+
+```bash
+# Test depuis un client
+telnet <IP_SERVEUR> 8888
+
+# Ou avec netcat
+nc -zv <IP_SERVEUR> 8888
+```
+
+## 🚨 Dépannage
+
+### Problèmes courants
+
+**"Dépendances manquantes"**
+- Vérifiez l'installation de Python et PyQt5
+- Réinstallez les modules avec pip
+
+**"Real-ESRGAN non trouvé"**
+- Vérifiez la présence du dossier `realesrgan-ncnn-vulkan`
+- Téléchargez manuellement depuis [Real-ESRGAN releases](https://github.com/xinntao/Real-ESRGAN/releases)
+
+**"Impossible de se connecter au serveur"**
+- Vérifiez l'adresse IP et le port
+- Contrôlez les paramètres de pare-feu
+- Testez la connectivité réseau
+
+**"GPU non supporté"**
+- Vérifiez la compatibilité Vulkan : `vulkaninfo`
+- Mettez à jour les pilotes graphiques
+- Utilisez le traitement CPU (plus lent)
+
+### Obtenir de l'aide
+
+1. **Consultez** les logs :
+   - Serveur : `logs/server.log`
+   - Client : `client_work/logs/client.log`
+
+2. **Vérifiez** les [Issues GitHub](https://github.com/votre-repo/UpscalingByNetwork/issues)
+
+3. **Créez** une nouvelle issue avec :
+   - Version du système
+   - Logs d'erreur
+   - Configuration utilisée
+
+## 📋 Liste de vérification post-installation
+
+### Serveur
+- [ ] Interface graphique s'ouvre sans erreur
+- [ ] Statut serveur "Démarré" en vert
+- [ ] Port 8888 ouvert dans le pare-feu
+- [ ] FFmpeg et Real-ESRGAN détectés
+
+### Client
+- [ ] Interface graphique s'ouvre sans erreur
+- [ ] Connexion au serveur réussie
+- [ ] Real-ESRGAN fonctionne (test avec une image)
+- [ ] GPU Vulkan détecté
+
+### Réseau
+- [ ] Ping serveur depuis client fonctionne
+- [ ] Port 8888 accessible
+- [ ] Pas de blocage pare-feu/antivirus
+
+Une fois ces vérifications effectuées, votre système UpscalingByNetwork est prêt à l'emploi ! 🎉

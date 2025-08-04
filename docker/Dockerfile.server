@@ -1,0 +1,95 @@
+# UpscalingByNetwork Server - Dockerfile
+# UpscalingByNetwork/docker/Dockerfile.server
+
+FROM ubuntu:22.04
+
+LABEL maintainer="UpscalingByNetwork"
+LABEL description="Serveur distribué pour upscaling vidéo avec Real-ESRGAN"
+LABEL version="1.0.0"
+
+# Variables d'environnement
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV DISPLAY=:99
+
+# Installation des dépendances système
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    wget \
+    unzip \
+    xvfb \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libxrender1 \
+    libxext6 \
+    libsm6 \
+    libice6 \
+    libfontconfig1 \
+    libxss1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Création de l'utilisateur non-root
+RUN useradd -m -s /bin/bash upscaling
+USER upscaling
+WORKDIR /home/upscaling
+
+# Installation de FFmpeg
+RUN wget -q https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz \
+    && tar -xf ffmpeg-master-latest-linux64-gpl.tar.xz \
+    && mv ffmpeg-master-latest-linux64-gpl ffmpeg \
+    && rm ffmpeg-master-latest-linux64-gpl.tar.xz
+
+# Installation de Real-ESRGAN
+RUN wget -q https://github.com/xinntao/Real-ESRGAN/releases/download/v0.3.0/realesrgan-ncnn-vulkan-20220424-ubuntu.zip \
+    && unzip -q realesrgan-ncnn-vulkan-20220424-ubuntu.zip \
+    && chmod +x realesrgan-ncnn-vulkan \
+    && rm realesrgan-ncnn-vulkan-20220424-ubuntu.zip
+
+# Copie du code source
+COPY --chown=upscaling:upscaling . /home/upscaling/UpscalingByNetwork/
+
+# Installation des dépendances Python
+RUN python3 -m pip install --user --no-cache-dir \
+    websockets>=11.0.0 \
+    cryptography>=41.0.0 \
+    psutil>=5.9.0 \
+    requests>=2.31.0
+
+# Configuration des chemins
+ENV PATH="/home/upscaling/.local/bin:/home/upscaling/ffmpeg:$PATH"
+ENV PYTHONPATH="/home/upscaling/UpscalingByNetwork:$PYTHONPATH"
+
+# Création des dossiers de travail
+RUN mkdir -p /home/upscaling/data/{input,output,temp,logs}
+
+# Copie des exécutables
+RUN cp realesrgan-ncnn-vulkan /home/upscaling/UpscalingByNetwork/server/realesrgan-ncnn-vulkan/ \
+    && cp ffmpeg/bin/ffmpeg /home/upscaling/UpscalingByNetwork/server/ffmpeg/ \
+    && cp ffmpeg/bin/ffprobe /home/upscaling/UpscalingByNetwork/server/ffmpeg/
+
+# Script de démarrage
+RUN echo '#!/bin/bash\n\
+echo "🐳 Démarrage du serveur UpscalingByNetwork Docker"\n\
+echo "================================================"\n\
+\n\
+# Démarrage du serveur virtuel X (pour PyQt5)\n\
+Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &\n\
+\n\
+# Attente que X soit prêt\n\
+sleep 2\n\
+\n\
+# Démarrage du serveur\n\
+cd /home/upscaling/UpscalingByNetwork/server\n\
+python3 server_main.py --no-gui --host 0.0.0.0 --port 8888 "$@"\n\
+' > start_server.sh && chmod +x start_server.sh
+
+# Exposition du port
+EXPOSE 8888
+
+# Volumes pour persistance des données
+VOLUME ["/home/upscaling/data"]
+
+# Point d'entrée
+CMD ["./start_server.sh"]
