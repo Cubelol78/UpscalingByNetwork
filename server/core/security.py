@@ -24,25 +24,30 @@ class NetworkSecurity:
     
     def __init__(self):
         self.logger = get_logger(__name__)
-        
+
         # Clés de chiffrement
         self._server_private_key = None
         self._server_public_key = None
         self._client_symmetric_keys: Dict[str, bytes] = {}  # MAC -> Clé symétrique
-        
+
         # Tokens d'authentification
         self._auth_tokens: Dict[str, dict] = {}  # Token -> Info client
         self._token_expiry = 3600  # 1 heure
-        
+
         # Nonces pour éviter les attaques de rejeu
         self._used_nonces: Dict[str, float] = {}  # Nonce -> Timestamp
         self._nonce_cleanup_interval = 300  # 5 minutes
-        
+
+        # Background tasks tracking (prevent memory leaks)
+        self._background_tasks = set()
+
         # Génération des clés serveur
         self._generate_server_keys()
-        
+
         # Démarrage du nettoyage automatique
-        asyncio.create_task(self._cleanup_expired_data())
+        task = asyncio.create_task(self._cleanup_expired_data())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
     
     def _generate_server_keys(self):
         """Génère les clés RSA du serveur"""
@@ -61,7 +66,7 @@ class NetworkSecurity:
     
     def get_public_key_pem(self) -> str:
         """Retourne la clé publique du serveur au format PEM"""
-        pem = self._server_public_key.public_key_bytes(
+        pem = self._server_public_key.public_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )

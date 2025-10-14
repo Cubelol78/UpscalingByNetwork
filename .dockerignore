@@ -1,0 +1,106 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Logs
+*.log
+logs/
+server/logs/
+
+# Media files (examples/tests)
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.wmv
+*.flv
+*.webm
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.tiff
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+work/
+upscaled/
+frames/
+output/
+batches/
+input/
+
+# Client-specific (not needed in server Docker)
+client/
+
+# Build scripts
+build_scripts/
+
+# Windows
+*.exe
+*.dll
+*.lib
+
+# Claude AI
+.claude/
+
+# Config backups
+*.bak
+config_backup_*/
+
+# FFmpeg and Real-ESRGAN binaries (download separately)
+server/ffmpeg/
+server/realesrgan-ncnn-vulkan/

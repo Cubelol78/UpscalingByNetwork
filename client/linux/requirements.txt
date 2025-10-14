@@ -1,0 +1,20 @@
+# Core dependencies
+websockets>=11.0
+cryptography>=41.0
+psutil>=5.9
+
+# GPU support (NVIDIA)
+pynvml>=11.5
+
+# CLI interface
+click>=8.1
+rich>=13.0
+
+# GUI interface (optional)
+PyQt5>=5.15; platform_system != "Darwin"
+
+# Development dependencies
+pytest>=7.4
+pytest-asyncio>=0.21
+black>=23.0
+flake8>=6.0

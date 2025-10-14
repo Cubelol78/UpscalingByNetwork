@@ -1,0 +1,157 @@
+# GPU-enabled Dockerfile for UpscalingByNetwork Server
+# Based on NVIDIA CUDA runtime for GPU acceleration
+
+# ============================================================================
+# Stage 1: Download binaries
+# ============================================================================
+FROM ubuntu:22.04 AS downloader
+
+ARG FFMPEG_VERSION=master-latest
+ARG REALESRGAN_VERSION=v0.3.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    wget \
+    unzip \
+    xz-utils \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /downloads
+
+# Download FFmpeg with NVIDIA encoding support
+RUN wget -q https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-${FFMPEG_VERSION}-linux64-gpl.tar.xz \
+    && tar -xf ffmpeg-${FFMPEG_VERSION}-linux64-gpl.tar.xz \
+    && mv ffmpeg-${FFMPEG_VERSION}-linux64-gpl ffmpeg
+
+# Download Real-ESRGAN ncnn-vulkan
+RUN wget -q https://github.com/xinntao/Real-ESRGAN/releases/download/${REALESRGAN_VERSION}/realesrgan-ncnn-vulkan-20220424-ubuntu.zip \
+    && unzip -q realesrgan-ncnn-vulkan-20220424-ubuntu.zip \
+    && chmod +x realesrgan-ncnn-vulkan
+
+# ============================================================================
+# Stage 2: Final runtime image with NVIDIA CUDA
+# ============================================================================
+FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
+
+LABEL maintainer="UpscalingByNetwork"
+LABEL description="GPU-accelerated distributed video upscaling server"
+LABEL version="2.0.0-gpu"
+
+# Environment variables
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,video \
+    PATH="/home/upscaling/.local/bin:/opt/ffmpeg/bin:${PATH}"
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-distutils \
+    python3-pip \
+    ca-certificates \
+    # GPU libraries
+    libvulkan1 \
+    vulkan-tools \
+    mesa-vulkan-drivers \
+    # PyQt5 dependencies
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -u 1000 -s /bin/bash upscaling
+
+# Install Python packages (UPDATED VERSIONS FOR SECURITY)
+RUN pip3 install --no-cache-dir \
+    websockets>=11.0.0 \
+    aiohttp>=3.9.0 \
+    PyQt5>=5.15.9 \
+    qasync>=0.24.1 \
+    qdarkstyle>=3.1 \
+    pyqtgraph>=0.13.3 \
+    Pillow>=10.2.0 \
+    cryptography>=42.0.0 \
+    pycryptodome>=3.18.0 \
+    psutil>=5.9.5 \
+    pynvml>=11.5.0 \
+    requests>=2.31.0 \
+    pyyaml>=6.0.1 \
+    colorlog>=6.7.0 \
+    rich>=13.7.0 \
+    click>=8.1.7
+
+# Copy binaries
+COPY --from=downloader --chown=upscaling:upscaling /downloads/ffmpeg /opt/ffmpeg
+COPY --from=downloader --chown=upscaling:upscaling /downloads/realesrgan-ncnn-vulkan /opt/realesrgan/
+
+# Create directories
+RUN mkdir -p /opt/UpscalingByNetwork/server \
+    /home/upscaling/data/{input,output,temp,logs,frames,upscaled} \
+    /home/upscaling/config \
+    && chown -R upscaling:upscaling /opt/UpscalingByNetwork /home/upscaling
+
+USER upscaling
+WORKDIR /opt/UpscalingByNetwork
+
+# Copy application
+COPY --chown=upscaling:upscaling server/ ./server/
+
+# Create symlinks
+RUN ln -s /opt/realesrgan/realesrgan-ncnn-vulkan ./server/ \
+    && mkdir -p ./server/ffmpeg \
+    && ln -s /opt/ffmpeg/bin/ffmpeg ./server/ffmpeg/ \
+    && ln -s /opt/ffmpeg/bin/ffprobe ./server/ffmpeg/
+
+# Startup script with GPU checks
+RUN echo '#!/bin/bash\n\
+set -e\n\
+\n\
+echo "================================================="\n\
+echo " UpscalingByNetwork Server (GPU-Enabled)"\n\
+echo "================================================="\n\
+\n\
+# NVIDIA GPU check\n\
+if command -v nvidia-smi &> /dev/null; then\n\
+    echo "NVIDIA GPU detected:"\n\
+    nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader\n\
+else\n\
+    echo "Warning: nvidia-smi not found"\n\
+fi\n\
+\n\
+# Vulkan check\n\
+if command -v vulkaninfo &> /dev/null; then\n\
+    echo ""\n\
+    echo "Vulkan devices:"\n\
+    vulkaninfo --summary 2>/dev/null | grep "deviceName" || echo "No Vulkan devices"\n\
+else\n\
+    echo "Warning: vulkaninfo not found"\n\
+fi\n\
+\n\
+echo "================================================="\n\
+echo ""\n\
+\n\
+# Start server\n\
+cd /opt/UpscalingByNetwork/server\n\
+exec python3 server_main.py \\\n\
+    --no-gui \\\n\
+    --host "${SERVER_HOST:-0.0.0.0}" \\\n\
+    --port "${SERVER_PORT:-8888}" \\\n\
+    --log-level "${LOG_LEVEL:-INFO}" \\\n\
+    "$@"\n\
+' > /home/upscaling/start_server.sh \
+    && chmod +x /home/upscaling/start_server.sh
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python3 -c "import socket; s=socket.socket(); s.settimeout(5); s.connect(('localhost', 8888)); s.close()" || exit 1
+
+EXPOSE 8888
+
+VOLUME ["/home/upscaling/data", "/home/upscaling/config"]
+
+ENTRYPOINT ["/home/upscaling/start_server.sh"]
+CMD []

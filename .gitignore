@@ -1,26 +1,87 @@
-server/config/settings.py
-server/assets
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.spec
 
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
 
-server/config/__pycache__
-server/core/__pycache__
-server/gui/__pycache__
-server/models/__pycache__
-server/utils/__pycache__
-server/gui/tabs/__pycache__
-server/security/__pycache__
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
-server/logs
+# Logs
+*.log
+logs/
+server/logs/
+client/logs/
 
-temp
-upscaled
-frames
-output
-server.log
-work
-input
-logs
-batches
+# Working directories
+server_work/
+client_work/
+temp/
+upscaled/
+frames/
+output/
+work/
+input/
+batches/
 
-client/windows/core/__pycache__
-client/windows/security/__pycache__
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Configuration (user-specific)
+config/local_*.json
+config/*_local.json
+
+# Binaries
+server/ffmpeg/
+server/realesrgan-ncnn-vulkan/
+client/ffmpeg/
+client/realesrgan-ncnn-vulkan/
+*.exe
+*.dll
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Documentation builds
+docs/_build/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Certificates and keys (security)
+*.pem
+*.key
+*.crt
+*.p12
+server_work/encryption_keys/

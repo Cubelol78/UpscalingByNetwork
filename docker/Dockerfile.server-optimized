@@ -1,0 +1,168 @@
+# Multi-stage Dockerfile for UpscalingByNetwork Server
+# Optimized for production with GPU support
+
+# ============================================================================
+# Stage 1: Download binaries
+# ============================================================================
+FROM ubuntu:22.04 AS downloader
+
+ARG FFMPEG_VERSION=master-latest
+ARG REALESRGAN_VERSION=v0.3.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    wget \
+    unzip \
+    xz-utils \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /downloads
+
+# Download FFmpeg
+RUN wget -q https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-${FFMPEG_VERSION}-linux64-gpl.tar.xz \
+    && tar -xf ffmpeg-${FFMPEG_VERSION}-linux64-gpl.tar.xz \
+    && mv ffmpeg-${FFMPEG_VERSION}-linux64-gpl ffmpeg
+
+# Download Real-ESRGAN ncnn-vulkan
+RUN wget -q https://github.com/xinntao/Real-ESRGAN/releases/download/${REALESRGAN_VERSION}/realesrgan-ncnn-vulkan-20220424-ubuntu.zip \
+    && unzip -q realesrgan-ncnn-vulkan-20220424-ubuntu.zip \
+    && chmod +x realesrgan-ncnn-vulkan
+
+# ============================================================================
+# Stage 2: Python dependencies builder
+# ============================================================================
+FROM python:3.11-slim AS python-deps
+
+WORKDIR /build
+
+# Copy requirements
+COPY server/requirements.txt .
+
+# Install dependencies to /install directory
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# ============================================================================
+# Stage 3: Final runtime image
+# ============================================================================
+FROM ubuntu:22.04
+
+LABEL maintainer="UpscalingByNetwork"
+LABEL description="Distributed video upscaling server with Real-ESRGAN and GPU support"
+LABEL version="2.0.0"
+
+# Build arguments
+ARG SERVER_PORT=8888
+ARG GPU_SUPPORT=false
+
+# Environment variables
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PATH="/home/upscaling/.local/bin:/opt/ffmpeg/bin:${PATH}" \
+    LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
+
+# Install minimal runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-distutils \
+    python3-pip \
+    ca-certificates \
+    # Libraries for PyQt5 (if needed)
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libxrender1 \
+    libxext6 \
+    libsm6 \
+    libice6 \
+    libfontconfig1 \
+    # Vulkan support (for GPU)
+    $([ "$GPU_SUPPORT" = "true" ] && echo "libvulkan1 vulkan-tools mesa-vulkan-drivers" || echo "") \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create non-root user
+RUN useradd -m -u 1000 -s /bin/bash upscaling \
+    && mkdir -p /home/upscaling/.local/bin \
+    && chown -R upscaling:upscaling /home/upscaling
+
+# Copy Python dependencies from builder
+COPY --from=python-deps /install /usr/local
+
+# Copy binaries from downloader
+COPY --from=downloader --chown=upscaling:upscaling /downloads/ffmpeg /opt/ffmpeg
+COPY --from=downloader --chown=upscaling:upscaling /downloads/realesrgan-ncnn-vulkan /opt/realesrgan/
+COPY --from=downloader --chown=upscaling:upscaling /downloads/models /opt/realesrgan/models
+
+# Create application directory structure
+RUN mkdir -p /opt/UpscalingByNetwork/server \
+    /home/upscaling/data/{input,output,temp,logs,frames,upscaled} \
+    /home/upscaling/config \
+    && chown -R upscaling:upscaling /opt/UpscalingByNetwork /home/upscaling
+
+# Switch to non-root user
+USER upscaling
+WORKDIR /opt/UpscalingByNetwork
+
+# Copy application code (only what's needed)
+COPY --chown=upscaling:upscaling server/ ./server/
+
+# Create directory for binaries and symlinks
+RUN mkdir -p /opt/UpscalingByNetwork/server/ffmpeg \
+    && ln -s /opt/realesrgan/realesrgan-ncnn-vulkan /opt/UpscalingByNetwork/server/realesrgan-ncnn-vulkan \
+    && ln -s /opt/ffmpeg/bin/ffmpeg /opt/UpscalingByNetwork/server/ffmpeg/ffmpeg \
+    && ln -s /opt/ffmpeg/bin/ffprobe /opt/UpscalingByNetwork/server/ffmpeg/ffprobe
+
+# Create startup script
+RUN echo '#!/bin/bash\n\
+set -e\n\
+\n\
+echo "================================================="\n\
+echo " UpscalingByNetwork Server (Docker)"\n\
+echo "================================================="\n\
+echo "Host: ${SERVER_HOST:-0.0.0.0}"\n\
+echo "Port: ${SERVER_PORT:-8888}"\n\
+echo "GPU Support: ${GPU_SUPPORT:-false}"\n\
+echo "================================================="\n\
+echo ""\n\
+\n\
+# Check GPU availability\n\
+if [ "$GPU_SUPPORT" = "true" ]; then\n\
+    echo "Checking GPU..."\n\
+    if command -v vulkaninfo &> /dev/null; then\n\
+        vulkaninfo --summary 2>/dev/null || echo "Warning: Vulkan not detected"\n\
+    fi\n\
+    if command -v nvidia-smi &> /dev/null; then\n\
+        nvidia-smi || echo "Warning: NVIDIA GPU not detected"\n\
+    fi\n\
+    echo ""\n\
+fi\n\
+\n\
+# Start server in CLI mode (use main.py instead of server_main.py)\n\
+cd /opt/UpscalingByNetwork/server\n\
+exec python3 main.py \\\n\
+    --no-gui \\\n\
+    --non-interactive \\\n\
+    --host "${SERVER_HOST:-0.0.0.0}" \\\n\
+    --port "${SERVER_PORT:-8888}" \\\n\
+    --log-level "${LOG_LEVEL:-INFO}" \\\n\
+    "$@"\n\
+' > /home/upscaling/start_server.sh \
+    && chmod +x /home/upscaling/start_server.sh
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python3 -c "import socket; s=socket.socket(); s.settimeout(5); s.connect(('localhost', ${SERVER_PORT})); s.close()" || exit 1
+
+# Expose server port
+EXPOSE ${SERVER_PORT}
+
+# Volumes for data persistence
+VOLUME ["/home/upscaling/data", "/home/upscaling/config"]
+
+# Entry point
+ENTRYPOINT ["/home/upscaling/start_server.sh"]
+CMD []

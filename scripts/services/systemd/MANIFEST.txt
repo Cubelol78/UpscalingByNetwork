@@ -1,0 +1,296 @@
+================================================================================
+UpscalingByNetwork - Systemd Services Package
+================================================================================
+
+Package Version: 1.0
+Created: 2025-10-14
+Total Files: 11
+Total Lines: 3,317
+Package Size: 101KB
+
+================================================================================
+SERVICE FILES (2 files)
+================================================================================
+
+1. upscaling-server.service (4KB)
+   - Main server systemd service unit
+   - Runs as 'upscaling' user
+   - Security hardening enabled
+   - Resource limits: 4GB RAM, 200% CPU
+   - GPU device access configured
+   - Auto-restart on failure
+
+2. upscaling-client@.service (4KB)
+   - Client systemd service template
+   - Per-user instances
+   - Security hardening enabled
+   - Resource limits: 8GB RAM, 400% CPU
+   - GPU device access configured
+   - Auto-restart on failure
+
+================================================================================
+INSTALLATION SCRIPTS (3 files)
+================================================================================
+
+3. install-systemd.sh (12KB, executable)
+   - Automated installation script
+   - Checks prerequisites
+   - Creates service user
+   - Installs application files
+   - Sets up directories and permissions
+   - Configures services
+   - Interactive service enablement
+
+4. uninstall-systemd.sh (8KB, executable)
+   - Automated uninstallation script
+   - Stops and disables services
+   - Removes service files
+   - Optional cleanup of application, config, and user
+   - Safety confirmations
+
+5. check-systemd.sh (16KB, executable)
+   - Health check and validation script
+   - Verifies systemd installation
+   - Checks service configuration
+   - Validates dependencies
+   - Tests service status
+   - Checks GPU access
+   - Scans logs for errors
+   - Reports summary
+
+================================================================================
+DOCUMENTATION (4 files)
+================================================================================
+
+6. README.md (20KB)
+   - Complete reference documentation
+   - Installation instructions
+   - Configuration guide
+   - Usage examples
+   - Troubleshooting guide
+   - Security documentation
+   - Performance tuning
+   - Advanced topics
+
+7. QUICKSTART.md (12KB)
+   - Quick start guide
+   - 5-minute installation
+   - Quick command reference
+   - Common tasks
+   - Basic troubleshooting
+   - Quick reference card
+
+8. INDEX.md (12KB)
+   - Package overview
+   - File directory
+   - Feature summary
+   - Quick navigation
+   - Documentation hierarchy
+
+9. MANIFEST.txt (This file)
+   - Package contents
+   - File descriptions
+   - Usage instructions
+
+================================================================================
+CONFIGURATION TEMPLATES (2 files)
+================================================================================
+
+10. server.env.example (4KB)
+    - Server environment variable template
+    - Comprehensive configuration options
+    - Inline documentation
+    - Copy to /etc/upscaling/server.env
+
+11. client.env.example (4KB)
+    - Client environment variable template
+    - Comprehensive configuration options
+    - Inline documentation
+    - Copy to ~/.upscaling/client.env
+
+================================================================================
+ADDITIONAL FILES
+================================================================================
+
+.gitignore
+    - Git ignore patterns
+    - Excludes .env files and logs
+
+================================================================================
+QUICK START
+================================================================================
+
+1. Review Documentation:
+   Read INDEX.md or QUICKSTART.md
+
+2. Install Services:
+   sudo ./install-systemd.sh
+
+3. Verify Installation:
+   ./check-systemd.sh
+
+4. Start Services:
+   sudo systemctl start upscaling-server
+   sudo systemctl start upscaling-client@USERNAME
+
+5. Check Status:
+   sudo systemctl status upscaling-server
+   sudo journalctl -u upscaling-server -f
+
+================================================================================
+FILE LISTING
+================================================================================
+
+Scripts (Executable):
+  - check-systemd.sh         (16KB, 550 lines)
+  - install-systemd.sh       (12KB, 400 lines)
+  - uninstall-systemd.sh     ( 8KB, 280 lines)
+
+Service Files:
+  - upscaling-server.service ( 4KB,  73 lines)
+  - upscaling-client@.service( 4KB,  69 lines)
+
+Documentation:
+  - README.md                (20KB, 850 lines)
+  - QUICKSTART.md            (12KB, 500 lines)
+  - INDEX.md                 (12KB, 520 lines)
+  - MANIFEST.txt             ( 4KB, 175 lines)
+
+Configuration:
+  - server.env.example       ( 4KB, 135 lines)
+  - client.env.example       ( 4KB, 145 lines)
+
+Other:
+  - .gitignore               (<1KB,  10 lines)
+
+================================================================================
+SYSTEM REQUIREMENTS
+================================================================================
+
+Required:
+  - Linux with systemd (v232+)
+  - Python 3.8+
+  - Root/sudo access for installation
+  - cryptography, psutil Python packages
+
+Optional:
+  - PyQt5, qasync (for GUI mode)
+  - GPU drivers (NVIDIA, AMD, or Intel)
+  - rich (for enhanced CLI)
+
+================================================================================
+FEATURES
+================================================================================
+
+Security:
+  ✓ Non-root execution
+  ✓ Sandboxing (PrivateTmp, ProtectSystem, etc.)
+  ✓ System call filtering
+  ✓ No capabilities granted
+  ✓ Namespace restrictions
+  ✓ Device policy enforcement
+
+Reliability:
+  ✓ Auto-restart on failure
+  ✓ Graceful shutdown (30s timeout)
+  ✓ Network dependency management
+  ✓ Service health monitoring
+
+Resource Management:
+  ✓ Memory limits (configurable)
+  ✓ CPU quotas (configurable)
+  ✓ File descriptor limits
+  ✓ Process/task limits
+
+Logging:
+  ✓ Systemd journal integration
+  ✓ Structured logging
+  ✓ Log rotation
+  ✓ Error tracking
+
+GPU Support:
+  ✓ NVIDIA GPU access
+  ✓ AMD/Intel GPU access
+  ✓ Device permissions
+  ✓ Multi-GPU support
+
+================================================================================
+INSTALLATION LOCATIONS
+================================================================================
+
+After installation:
+
+Service Files:
+  /etc/systemd/system/upscaling-server.service
+  /etc/systemd/system/upscaling-client@.service
+
+Application:
+  /opt/UpscalingByNetwork/
+  /opt/UpscalingByNetwork/server/
+  /opt/UpscalingByNetwork/client/
+
+Configuration:
+  /etc/upscaling/server.env
+
+Server Working Directories:
+  /opt/UpscalingByNetwork/server/server_work/
+  /opt/UpscalingByNetwork/server/logs/
+  /opt/UpscalingByNetwork/server/output/
+
+Client Working Directories (per user):
+  ~/.upscaling/
+  ~/.upscaling/logs/
+  ~/.upscaling/work/
+  ~/.upscaling/temp/
+
+================================================================================
+SUPPORT
+================================================================================
+
+Documentation:
+  - Start with QUICKSTART.md for basic usage
+  - See README.md for detailed information
+  - Check INDEX.md for navigation
+
+Troubleshooting:
+  1. Run health check: ./check-systemd.sh
+  2. Check service status: systemctl status upscaling-server
+  3. View logs: journalctl -u upscaling-server -n 100
+  4. Review troubleshooting section in README.md
+
+Common Issues:
+  - Service won't start: Check logs and dependencies
+  - Permission errors: Verify file ownership
+  - Port conflicts: Change port in environment file
+  - GPU not detected: Check device permissions and groups
+
+================================================================================
+VERSION HISTORY
+================================================================================
+
+v1.0 (2025-10-14) - Initial Release
+  - Complete systemd service files
+  - Installation and uninstallation scripts
+  - Health check script
+  - Comprehensive documentation
+  - Configuration templates
+  - Security hardening
+  - Resource management
+  - GPU support
+
+================================================================================
+LICENSE
+================================================================================
+
+Same as UpscalingByNetwork project.
+
+================================================================================
+CHECKSUM INFORMATION
+================================================================================
+
+To verify package integrity, run:
+  sha256sum *.sh *.service *.md *.example > checksums.txt
+
+================================================================================
+END OF MANIFEST
+================================================================================

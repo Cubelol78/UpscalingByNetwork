@@ -102,7 +102,7 @@ WORK_DIRS = {
         'work': 'server_work',
         'jobs': 'server_work/jobs',
         'temp': 'server_work/temp',
-        'encryption_keys': 'server_work/temp/encryption_keys',
+        'encryption_keys': 'server_work/encryption_keys',  # Moved out of temp for security
         'logs': 'logs',
         'output': 'output'
     },

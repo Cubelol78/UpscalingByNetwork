@@ -90,17 +90,17 @@ class UpscalingServer:
         # Fermeture de toutes les connexions clients
         for websocket in list(self.websockets.values()):
             try:
-                await websocket.close()
-            except:
-                pass
-        
+                await websocket.close(code=1001, reason="Server shutting down")
+            except Exception as e:
+                self.logger.debug(f"Error closing websocket: {e}")
+
         # Arrêt du serveur WebSocket
         if self.server:
             self.server.close()
             try:
                 await self.server.wait_closed()
-            except:
-                pass
+            except Exception as e:
+                self.logger.debug(f"Error waiting for server close: {e}")
             
         # Nettoyage des données
         self.clients.clear()

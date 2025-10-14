@@ -1,0 +1,76 @@
+[Unit]
+Description=UpscalingByNetwork Client for %I - Distributed Video Upscaling Client
+Documentation=https://github.com/yourusername/UpscalingByNetwork
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+WorkingDirectory=/home/%i/.upscaling
+
+# Client execution command (console mode for systemd)
+ExecStart=/usr/bin/python3 /opt/UpscalingByNetwork/client/windows/main.py --console --auto-connect
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Graceful shutdown with timeout
+ExecStop=/bin/kill -SIGTERM $MAINPID
+TimeoutStopSec=30
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=5
+
+# Environment variables
+Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONPATH=/opt/UpscalingByNetwork"
+EnvironmentFile=-/home/%i/.upscaling/client.env
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+MemoryMax=8G
+MemoryHigh=6G
+CPUQuota=400%
+TasksMax=4096
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/%i/.upscaling
+ReadWritePaths=/tmp
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+PrivateDevices=false
+DevicePolicy=closed
+DeviceAllow=/dev/dri rw
+DeviceAllow=/dev/nvidia* rw
+
+# System call filtering
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete
+SystemCallErrorNumber=EPERM
+
+# Capability restrictions
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=upscaling-client-%i
+
+[Install]
+WantedBy=multi-user.target

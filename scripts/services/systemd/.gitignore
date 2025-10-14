@@ -1,0 +1,15 @@
+# Ignore user-specific environment files
+*.env
+
+# Ignore log files
+*.log
+
+# Ignore backup files
+*.bak
+*~
+.*.swp
+
+# Ignore test/temporary files
+test_*
+tmp/
+temp/
