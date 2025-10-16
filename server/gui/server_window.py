@@ -127,11 +127,12 @@ class ServerWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        
+
         # Serveur distribué
         self.server: Optional["DistributedServer"] = None
         self.server_running = False
-        
+        self.server_start_time = None
+
         # Configuration
         self.config = {
             'host': '0.0.0.0',
@@ -141,21 +142,21 @@ class ServerWindow(QMainWindow):
             'auto_start': False,
             'minimize_to_tray': True
         }
-        
+
         # Données d'état
         self.connected_clients: Dict[str, Dict] = {}
         self.active_batches: Dict[str, BatchStatusWidget] = {}
         self.current_job = None
-        
+
         # Interface
         self.setup_ui()
         self.setup_tray()
         self.setup_timers()
         self.setup_styles()
-        
+
         # État initial
         self.update_ui_state()
-        
+
         self.setWindowTitle("UpscalingByNetwork - Serveur Distribué")
         self.setGeometry(100, 100, 1400, 900)
         self.setMinimumSize(1200, 700)
@@ -533,51 +534,139 @@ class ServerWindow(QMainWindow):
     
     def update_statistics(self):
         """Met à jour les statistiques détaillées"""
-        if self.server_running:
+        if self.server_running and self.server_start_time:
             # Calcul de l'uptime
-            # TODO: Implémenter le calcul d'uptime
-            pass
+            elapsed = datetime.now() - self.server_start_time
+            hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
+            minutes, seconds = divmod(remainder, 60)
+            self.uptime_label.setText(f"Uptime: {hours:02d}:{minutes:02d}:{seconds:02d}")
+
+            # Mise à jour des statistiques depuis le serveur
+            if self.server:
+                try:
+                    stats = self.server.get_server_stats()
+
+                    # Synchroniser les clients avec le serveur
+                    if hasattr(self.server, 'connected_clients'):
+                        self.connected_clients = {}
+                        for mac, client_info in self.server.connected_clients.items():
+                            self.connected_clients[mac] = {
+                                'hostname': client_info.hostname,
+                                'ip': client_info.ip_address,
+                                'batches_processed': client_info.batches_processed,
+                                'status': client_info.status
+                            }
+                        self.update_clients_table()
+
+                    # Mettre à jour le compteur de jobs
+                    self.jobs_count_label.setText(f"Jobs: {stats.get('active_jobs', 0)}")
+
+                except Exception as e:
+                    self.log_message(f"Erreur mise à jour statistiques: {e}")
+        else:
+            self.uptime_label.setText("Uptime: 00:00:00")
     
     def toggle_server(self):
         """Démarre ou arrête le serveur"""
         if self.server_running:
-            self.stop_server()
+            asyncio.ensure_future(self.stop_server_async())
         else:
-            self.start_server()
-    
-    def start_server(self):
-        """Démarre le serveur"""
+            asyncio.ensure_future(self.start_server_async())
+
+    async def start_server_async(self):
+        """Démarre le serveur de manière asynchrone"""
         try:
+            if DistributedServer is None:
+                QMessageBox.critical(
+                    self,
+                    "Erreur",
+                    "Le module DistributedServer n'est pas disponible.\n"
+                    "Vérifiez que toutes les dépendances sont installées."
+                )
+                return
+
             host = self.host_input.text()
             port = self.port_input.value()
-            
-            # TODO: Démarrer le serveur distribué
-            # self.server = DistributedServer()
-            # await self.server.start(host, port)
-            
+
+            self.log_message(f"Démarrage du serveur sur {host}:{port}...")
+
+            # Désactiver les contrôles pendant le démarrage
+            self.start_stop_btn.setEnabled(False)
+            self.host_input.setEnabled(False)
+            self.port_input.setEnabled(False)
+
+            # Créer et démarrer le serveur
+            self.server = DistributedServer()
+
+            # Configurer le serveur selon les paramètres GUI
+            self.server.max_clients = self.max_clients_spin.value()
+            self.server.batch_size = self.batch_size_spin.value()
+
+            # Démarrer le serveur (async)
+            await self.server.start(host, port)
+
+            # Marquer comme démarré
             self.server_running = True
-            self.log_message(f"Serveur démarré sur {host}:{port}")
-            
+            self.server_start_time = datetime.now()
+
+            self.log_message(f"Serveur démarré avec succès sur {host}:{port}")
+            self.status_bar.showMessage(f"Serveur en cours d'exécution sur {host}:{port}")
+
+            # Réactiver les contrôles
+            self.start_stop_btn.setEnabled(True)
+
+            # Mettre à jour l'interface
+            self.update_ui_state()
+
         except Exception as e:
+            self.log_message(f"Erreur démarrage serveur: {e}")
             QMessageBox.critical(self, "Erreur", f"Impossible de démarrer le serveur:\n{e}")
-    
-    def stop_server(self):
-        """Arrête le serveur"""
+
+            # Réactiver les contrôles
+            self.start_stop_btn.setEnabled(True)
+            self.host_input.setEnabled(True)
+            self.port_input.setEnabled(True)
+
+    async def stop_server_async(self):
+        """Arrête le serveur de manière asynchrone"""
         try:
-            # TODO: Arrêter le serveur distribué
-            # if self.server:
-            #     await self.server.stop()
-            
+            self.log_message("Arrêt du serveur...")
+
+            # Désactiver les contrôles pendant l'arrêt
+            self.start_stop_btn.setEnabled(False)
+
+            # Arrêter le serveur
+            if self.server:
+                await self.server.stop()
+                self.server = None
+
+            # Marquer comme arrêté
             self.server_running = False
+            self.server_start_time = None
+
+            # Nettoyer l'interface
             self.connected_clients.clear()
             self.active_batches.clear()
             self.update_clients_table()
             self.update_batches_display()
-            
+
             self.log_message("Serveur arrêté")
-            
+            self.status_bar.showMessage("Serveur arrêté")
+
+            # Réactiver les contrôles
+            self.start_stop_btn.setEnabled(True)
+            self.host_input.setEnabled(True)
+            self.port_input.setEnabled(True)
+
+            # Mettre à jour l'interface
+            self.update_ui_state()
+
         except Exception as e:
+            self.log_message(f"Erreur arrêt serveur: {e}")
             QMessageBox.critical(self, "Erreur", f"Erreur lors de l'arrêt:\n{e}")
+
+            # Réactiver les contrôles
+            self.start_stop_btn.setEnabled(True)
     
     def browse_video_file(self):
         """Ouvre un dialogue pour sélectionner un fichier vidéo"""
@@ -597,16 +686,40 @@ class ServerWindow(QMainWindow):
         if not video_path or not Path(video_path).exists():
             QMessageBox.warning(self, "Erreur", "Veuillez sélectionner un fichier vidéo valide")
             return
-        
+
+        if not self.server_running or not self.server:
+            QMessageBox.warning(self, "Erreur", "Le serveur doit être démarré pour créer un job")
+            return
+
         scale_factor = int(self.scale_factor_combo.currentText())
         model = self.model_combo.currentText()
-        
-        # TODO: Créer le job dans le serveur distribué
-        job_id = f"job_{int(time.time())}"
-        self.log_message(f"Création du job {job_id}: {Path(video_path).name}")
-        
-        # Réinitialiser le formulaire
-        self.video_path_input.clear()
+
+        # Créer le job de manière asynchrone
+        asyncio.ensure_future(self.create_job_async(Path(video_path), scale_factor, model))
+
+    async def create_job_async(self, video_path: Path, scale_factor: int, model: str):
+        """Crée un job de manière asynchrone"""
+        try:
+            self.log_message(f"Création du job pour {video_path.name}...")
+
+            # Désactiver le bouton pendant la création
+            self.create_job_btn.setEnabled(False)
+
+            # Créer le job via le serveur
+            job_id = await self.server.create_job(video_path, scale_factor, model)
+
+            self.log_message(f"Job {job_id} créé avec succès")
+
+            # Réinitialiser le formulaire
+            self.video_path_input.clear()
+
+            # Réactiver le bouton
+            self.create_job_btn.setEnabled(True)
+
+        except Exception as e:
+            self.log_message(f"Erreur création job: {e}")
+            QMessageBox.critical(self, "Erreur", f"Erreur lors de la création du job:\n{e}")
+            self.create_job_btn.setEnabled(True)
     
     def update_clients_table(self):
         """Met à jour le tableau des clients"""
@@ -744,9 +857,22 @@ class ServerWindow(QMainWindow):
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.No
                 )
-                
+
                 if reply == QMessageBox.Yes:
-                    self.stop_server()
+                    # Arrêter le serveur de manière synchrone avant de fermer
+                    if self.server:
+                        # Utiliser asyncio.get_event_loop() pour exécuter l'arrêt
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            # Si le loop est en cours, créer une tâche
+                            asyncio.ensure_future(self.stop_server_async())
+                            # Donner du temps pour l'arrêt propre
+                            QTimer.singleShot(500, lambda: event.accept())
+                            event.ignore()
+                            return
+                        else:
+                            # Si le loop n'est pas en cours, exécuter de manière synchrone
+                            loop.run_until_complete(self.stop_server_async())
                     event.accept()
                 else:
                     event.ignore()

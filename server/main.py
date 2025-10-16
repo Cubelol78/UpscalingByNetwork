@@ -229,27 +229,16 @@ async def run_server_gui(host: str = "0.0.0.0", port: int = 8888):
         window.set_server_config(host, port)
         window.show()
 
-        logger.info(f"GUI server started on {host}:{port}")
+        logger.info(f"GUI interface initialized")
+        logger.info(f"Server can be started from the GUI on {host}:{port}")
 
-        # Run event loop - use asyncio.Event for proper qasync integration
-        # This keeps the event loop running until the window is closed
-        shutdown_event = asyncio.Event()
-
-        # Connect window close to shutdown event
-        def on_close():
-            shutdown_event.set()
-
-        # Override the window's closeEvent to trigger shutdown
-        original_close_event = window.closeEvent
-        def close_event_wrapper(event):
-            original_close_event(event)
-            if event.isAccepted():
-                on_close()
-        window.closeEvent = close_event_wrapper
-
-        # Wait for shutdown event
+        # Run the event loop
+        # The qasync event loop handles both Qt events and asyncio tasks
         with loop:
-            await shutdown_event.wait()
+            # Run the event loop until the application exits
+            loop.run_forever()
+
+        logger.info("GUI closed")
 
     except ImportError as e:
         logger.error(f"GUI dependencies not available: {e}")
