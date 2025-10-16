@@ -47,15 +47,14 @@ RUN wget -q https://github.com/xinntao/Real-ESRGAN/releases/download/v0.3.0/real
     && chmod +x realesrgan-ncnn-vulkan \
     && rm realesrgan-ncnn-vulkan-20220424-ubuntu.zip
 
-# Copie du code source
-COPY --chown=upscaling:upscaling . /home/upscaling/UpscalingByNetwork/
+# Copie du fichier requirements.txt
+COPY --chown=upscaling:upscaling server/requirements.txt /home/upscaling/
 
 # Installation des dépendances Python
-RUN python3 -m pip install --user --no-cache-dir \
-    websockets>=11.0.0 \
-    cryptography>=41.0.0 \
-    psutil>=5.9.0 \
-    requests>=2.31.0
+RUN python3 -m pip install --user --no-cache-dir -r /home/upscaling/requirements.txt
+
+# Copie du code source
+COPY --chown=upscaling:upscaling . /home/upscaling/UpscalingByNetwork/
 
 # Configuration des chemins
 ENV PATH="/home/upscaling/.local/bin:/home/upscaling/ffmpeg:$PATH"

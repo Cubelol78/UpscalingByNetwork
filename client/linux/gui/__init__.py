@@ -3,10 +3,10 @@ GUI components for the Linux client
 """
 
 try:
-    from .main_window import ClientMainWindow
-    from .connection_panel import ConnectionPanel
-    from .processing_panel import ProcessingPanel
-    from .settings_panel import SettingsPanel
+    from gui.main_window import ClientMainWindow
+    from gui.connection_panel import ConnectionPanel
+    from gui.processing_panel import ProcessingPanel
+    from gui.settings_panel import SettingsPanel
 
     GUI_AVAILABLE = True
 

@@ -12,4 +12,4 @@ fi
 
 # Launch GUI
 echo "Starting Upscaling Client GUI..."
-python3 client_gui.py "$@"
+python3 -m client_gui "$@"

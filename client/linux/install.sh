@@ -34,6 +34,9 @@ echo "Installing dependencies..."
 pip install --upgrade pip
 pip install -r requirements.txt
 
+echo "Installing client package..."
+pip install -e .
+
 echo
 echo "==================================="
 echo "Installation complete!"

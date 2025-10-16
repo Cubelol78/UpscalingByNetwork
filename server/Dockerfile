@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Copy requirements first (for layer caching)
+# NOTE: Use requirements.txt for GUI support or requirements-headless.txt for headless/Docker/systemd deployments
 COPY server/requirements.txt /app/server/requirements.txt
 
 # Install Python dependencies

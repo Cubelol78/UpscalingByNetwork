@@ -2,21 +2,21 @@
 # Dépendances pour le client Windows d'upscaling distribué
 
 # Interface graphique
-PyQt5>=5.15.0
+PyQt5>=5.15.9,<6.0.0
 
 # Communication réseau
-websockets>=10.0
-aiohttp>=3.8.0
+websockets>=11.0.0,<13.0.0
+aiohttp>=3.9.0,<4.0.0
 
 # Traitement d'images
-Pillow>=9.0.0
+Pillow>=10.2.0,<11.0.0
 
 # Cryptographie pour la sécurité
-cryptography>=3.4.0
-pycryptodome>=3.15.0
+cryptography>=42.0.0,<43.0.0
+pycryptodome>=3.18.0,<4.0.0
 
 # Utilitaires système
-psutil>=5.9.0
+psutil>=5.9.5,<6.0.0
 GPUtil>=1.4.0
 wmi>=1.5.1  # Spécifique Windows
 
@@ -24,11 +24,11 @@ wmi>=1.5.1  # Spécifique Windows
 asyncio-extras>=1.3.0
 
 # Logging
-colorlog>=6.7.0
+colorlog>=6.7.0,<7.0.0
 
 # Formats de données
-pyyaml>=6.0
+pyyaml>=6.0.1,<7.0.0
 
-# Tests (optionnel)
-pytest>=7.0.0
-pytest-asyncio>=0.21.0
+# CLI interface
+rich>=13.7.0,<14.0.0
+click>=8.1.7,<9.0.0

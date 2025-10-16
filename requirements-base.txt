@@ -1,0 +1,16 @@
+# UpscalingByNetwork - Base Dependencies
+# Shared between all server and client installations
+# Python 3.8+ required
+
+# === Core Networking ===
+websockets>=11.0.0,<13.0.0
+requests>=2.31.0,<3.0.0
+
+# === Security & Encryption ===
+cryptography>=42.0.0,<43.0.0     # CVE-2023-49083, CVE-2023-50782 patched
+
+# === System Monitoring ===
+psutil>=5.9.5,<6.0.0
+
+# === Configuration ===
+pyyaml>=6.0.1,<7.0.0

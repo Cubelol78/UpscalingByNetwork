@@ -53,13 +53,31 @@ desktop.ini
 config/local_*.json
 config/*_local.json
 
-# Binaries
+# Old binary locations (deprecated - use assets/ instead)
+# Keep ignoring these to prevent accidental re-addition
 server/ffmpeg/
 server/realesrgan-ncnn-vulkan/
 client/ffmpeg/
 client/realesrgan-ncnn-vulkan/
+client/windows/ffmpeg/
+client/windows/realesrgan-ncnn-vulkan/
+client/linux/realesrgan-ncnn-vulkan/
+
+# Assets directory contains all binaries and models
+# These are now committed to the repository for easier deployment
+# Large files should be managed by Git LFS (see .gitattributes)
+# Explicitly allow assets directory
+!assets/
+!assets/**/
+
+# Still ignore loose executables and DLLs outside assets/
 *.exe
 *.dll
+# But allow them inside assets/
+!assets/**/*.exe
+!assets/**/*.dll
+!assets/**/*.bin
+!assets/**/*.param
 
 # Test coverage
 .coverage

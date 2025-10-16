@@ -2,10 +2,10 @@
 Utility modules for the Linux client
 """
 
-from .config import ClientConfig, config
-from .system_info import SystemInfo
-from .logger import setup_logging, get_logger
-from .realesrgan_handler import RealESRGANHandler
+from utils.config import ClientConfig, config
+from utils.system_info import SystemInfo
+from utils.logger import setup_logging, get_logger
+from utils.realesrgan_handler import RealESRGANHandler
 
 __all__ = [
     "ClientConfig",

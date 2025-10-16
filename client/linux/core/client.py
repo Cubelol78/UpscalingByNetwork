@@ -10,13 +10,13 @@ import uuid
 from typing import Dict, Any, Optional, Callable
 from pathlib import Path
 
-from .connection import ConnectionManager, ConnectionState
-from .processor import ClientProcessor
-from .batch_processor import BatchProcessor
-from .security import ClientSecurity
-from ..utils.config import config
-from ..utils.system_info import SystemInfo
-from ..utils.realesrgan_handler import RealESRGANHandler
+from core.connection import ConnectionManager, ConnectionState
+from core.processor import ClientProcessor
+from core.batch_processor import BatchProcessor
+from core.security import ClientSecurity
+from utils.config import config
+from utils.system_info import SystemInfo
+from utils.realesrgan_handler import RealESRGANHandler
 
 
 class DistributedUpscalingClient:
@@ -27,7 +27,7 @@ class DistributedUpscalingClient:
 
         # Configuration
         if config_path:
-            from ..utils.config import ClientConfig
+            from utils.config import ClientConfig
 
             self.config = ClientConfig(config_path)
         else:

@@ -14,10 +14,10 @@ try:
 except ImportError:
     CLICK_AVAILABLE = False
 
-from ..core.client import DistributedUpscalingClient
-from ..utils.config import config
-from ..utils.logger import setup_logging
-from .ui import CLIInterface
+from core.client import DistributedUpscalingClient
+from utils.config import config
+from utils.logger import setup_logging
+from cli.ui import CLIInterface
 
 
 if not CLICK_AVAILABLE:
@@ -123,7 +123,7 @@ def info(ctx):
     """Show system information"""
     try:
         ui = CLIInterface()
-        from ..utils.system_info import SystemInfo
+        from utils.system_info import SystemInfo
 
         system_info = SystemInfo()
         sys_info = system_info.get_system_info()
@@ -207,7 +207,7 @@ def config_reset(ctx):
 def test_realesrgan(ctx):
     """Test Real-ESRGAN installation"""
     try:
-        from ..utils.realesrgan_handler import RealESRGANHandler
+        from utils.realesrgan_handler import RealESRGANHandler
 
         handler = RealESRGANHandler()
         test_result = handler.test_installation()

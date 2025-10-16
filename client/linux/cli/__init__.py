@@ -2,7 +2,7 @@
 CLI components for the Linux client
 """
 
-from .commands import cli
-from .ui import CLIInterface
+from cli.commands import cli
+from cli.ui import CLIInterface
 
 __all__ = ["cli", "CLIInterface"]
