@@ -231,9 +231,25 @@ async def run_server_gui(host: str = "0.0.0.0", port: int = 8888):
 
         logger.info(f"GUI server started on {host}:{port}")
 
-        # Run event loop
+        # Run event loop - use asyncio.Event for proper qasync integration
+        # This keeps the event loop running until the window is closed
+        shutdown_event = asyncio.Event()
+
+        # Connect window close to shutdown event
+        def on_close():
+            shutdown_event.set()
+
+        # Override the window's closeEvent to trigger shutdown
+        original_close_event = window.closeEvent
+        def close_event_wrapper(event):
+            original_close_event(event)
+            if event.isAccepted():
+                on_close()
+        window.closeEvent = close_event_wrapper
+
+        # Wait for shutdown event
         with loop:
-            await loop.create_future()
+            await shutdown_event.wait()
 
     except ImportError as e:
         logger.error(f"GUI dependencies not available: {e}")

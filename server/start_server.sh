@@ -32,6 +32,16 @@ log_error() {
     echo -e "${RED}[ERREUR]${NC} $1"
 }
 
+# Fonction pour pause avant fermeture en cas d'erreur
+pause_on_error() {
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+    echo -e "${RED}Une erreur est survenue - Lisez le message ci-dessus${NC}"
+    echo "═══════════════════════════════════════════════════════════════"
+    echo ""
+    read -p "Appuyez sur ENTRÉE pour fermer cette fenêtre..." -r
+}
+
 # Fonction de nettoyage à la sortie
 cleanup() {
     echo ""
@@ -51,6 +61,7 @@ if ! command -v python3 &> /dev/null; then
     echo "  CentOS/RHEL:   sudo yum install python3 python3-pip"
     echo "  Fedora:        sudo dnf install python3 python3-pip"
     echo ""
+    pause_on_error
     exit 1
 fi
 
@@ -65,6 +76,8 @@ cd "$SCRIPT_DIR"
 if [[ ! -f "main.py" ]]; then
     log_error "Fichier main.py non trouvé"
     echo "Vérifiez que vous êtes dans le bon dossier"
+    echo "Dossier actuel: $SCRIPT_DIR"
+    pause_on_error
     exit 1
 fi
 
@@ -92,11 +105,14 @@ if [[ -f "requirements.txt" ]]; then
     log_info "Installation des dépendances..."
     python3 -m pip install -r requirements.txt
     if [[ $? -ne 0 ]]; then
-        log_warning "Erreur installation dépendances"
+        log_error "Erreur lors de l'installation des dépendances"
+        echo ""
         echo "Le serveur peut ne pas fonctionner correctement"
+        echo ""
         read -p "Continuer quand même? (y/N) " -n 1 -r
         echo ""
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            pause_on_error
             exit 1
         fi
     fi
@@ -204,9 +220,14 @@ EXIT_CODE=$?
 echo ""
 if [[ $EXIT_CODE -ne 0 ]]; then
     log_error "Le serveur s'est arrêté avec une erreur (code: $EXIT_CODE)"
-    echo "Consultez les logs dans logs/server.log"
+    echo ""
+    echo "Consultez les logs dans logs/server.log pour plus de détails"
+    echo ""
+    pause_on_error
 else
     log_info "Serveur arrêté normalement"
+    echo ""
+    read -p "Appuyez sur ENTRÉE pour fermer..." -r
 fi
 
 # Désactivation de l'environnement virtuel si activé
