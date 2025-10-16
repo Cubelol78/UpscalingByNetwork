@@ -62,8 +62,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # Verification de l'existence du fichier principal
-if [[ ! -f "server_main.py" ]]; then
-    log_error "Fichier server_main.py non trouvé"
+if [[ ! -f "main.py" ]]; then
+    log_error "Fichier main.py non trouvé"
     echo "Vérifiez que vous êtes dans le bon dossier"
     exit 1
 fi
@@ -197,7 +197,7 @@ echo "Appuyez sur Ctrl+C pour arrêter le serveur"
 echo ""
 
 # Démarrage du serveur avec gestion des erreurs
-python3 server_main.py $LAUNCH_ARGS
+python3 main.py $LAUNCH_ARGS
 
 EXIT_CODE=$?
 
