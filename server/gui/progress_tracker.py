@@ -12,7 +12,7 @@ import pyqtgraph as pg
 from datetime import datetime
 import json
 
-from config.settings import config
+from utils.config import config
 from utils.logger import get_logger
 from utils.file_utils import format_file_size, format_duration
 from utils.performance_monitor import performance_monitor

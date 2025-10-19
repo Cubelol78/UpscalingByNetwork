@@ -36,7 +36,7 @@ class Client:
     @property
     def is_online(self) -> bool:
         """Vérifie si le client est en ligne"""
-        from config.settings import config
+        from utils.config import config
         time_diff = datetime.now() - self.last_heartbeat
         return time_diff.total_seconds() < config.CLIENT_TIMEOUT
     

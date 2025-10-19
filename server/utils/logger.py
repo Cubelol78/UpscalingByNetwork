@@ -35,8 +35,12 @@ class ColoredFormatter(logging.Formatter):
 
 def setup_logger() -> logging.Logger:
     """Configure le système de logging"""
-    from config.settings import LOGS_DIR
-    
+    from pathlib import Path
+
+    # Déterminer le dossier logs
+    LOGS_DIR = Path(__file__).parent.parent / "logs"
+    LOGS_DIR.mkdir(exist_ok=True)
+
     # Configuration du logger racine
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)

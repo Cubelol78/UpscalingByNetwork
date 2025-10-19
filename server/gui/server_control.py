@@ -5,7 +5,8 @@ Mixin pour le contrôle du serveur avec logique simplifiée
 import threading
 import asyncio
 from PyQt5.QtWidgets import QMessageBox
-from config.settings import config
+from PyQt5.QtCore import QTimer
+from utils.config import config
 
 class ServerControlMixin:
     """Mixin pour les fonctionnalités de contrôle du serveur"""
@@ -15,43 +16,55 @@ class ServerControlMixin:
         if self.server.running:
             self.logger.warning("Tentative de démarrage d'un serveur déjà en cours")
             return
-        
+
         try:
+            # Afficher le feedback de chargement
+            self.status_bar.show_operation_status("Démarrage du serveur...", "starting")
+
             # Mise à jour de la configuration avant démarrage (depuis l'interface)
             if hasattr(self.tabs_manager, 'config_tab'):
                 config_tab = self.tabs_manager.config_tab
-                
+
                 # Mise à jour des paramètres réseau depuis l'interface
                 new_host = config_tab.host_input.text().strip()
                 new_port = config_tab.port_input.value()
-                
+
                 if new_host != config.HOST or new_port != config.PORT:
                     # Sauvegarde automatique des nouveaux paramètres
                     config.apply_and_save(HOST=new_host, PORT=new_port)
-            
+
             # Démarrage du serveur dans un thread séparé
             self.server_thread = threading.Thread(target=self.run_server, daemon=True)
             self.server_thread.start()
-            
-            # Mise à jour immédiate de l'interface
-            self.status_bar.update_button_states()
-            
-            self.logger.info(f"Serveur démarré sur {config.HOST}:{config.PORT}")
-            
+
+            # Vérifier que le serveur a démarré (avec timeout)
+            QTimer.singleShot(500, self._check_server_started)
+
         except Exception as e:
             self.logger.error(f"Erreur démarrage serveur: {e}")
+            self.status_bar.hide_operation_status()
             QMessageBox.critical(self, "Erreur", f"Impossible de démarrer le serveur:\n{str(e)}")
+
+    def _check_server_started(self):
+        """Vérifie que le serveur a bien démarré"""
+        if self.server.running:
+            self.status_bar.hide_operation_status()
+            self.status_bar.update_button_states()
+            self.logger.info(f"Serveur démarré sur {config.HOST}:{config.PORT}")
+        else:
+            # Réessayer après 200ms
+            QTimer.singleShot(200, self._check_server_started)
     
     def stop_server(self):
         """Arrête le serveur avec confirmation"""
         if not self.server.running:
             self.logger.warning("Tentative d'arrêt d'un serveur déjà arrêté")
             return
-        
+
         # Vérification des jobs en cours
-        active_jobs = len([job for job in self.server.jobs.values() 
+        active_jobs = len([job for job in self.server.jobs.values()
                           if job.status.value in ['processing', 'extracting', 'assembling']])
-        
+
         # Message de confirmation adapté
         if active_jobs > 0:
             message = (f"Le serveur traite actuellement {active_jobs} job(s).\n"
@@ -61,33 +74,40 @@ class ServerControlMixin:
         else:
             message = "Êtes-vous sûr de vouloir arrêter le serveur?"
             icon = QMessageBox.Question
-        
+
         reply = QMessageBox.question(
             self, "Confirmation d'arrêt", message,
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
-        
+
         if reply == QMessageBox.Yes:
             try:
+                # Afficher le feedback de chargement
+                self.status_bar.show_operation_status("Arrêt du serveur...", "stopping")
+
                 # Arrêt du serveur de manière synchrone
                 if self.server.running:
                     # Utiliser la méthode synchrone pour éviter les problèmes d'asyncio
                     self.server.stop_sync()
-                
+
+                # Masquer le feedback
+                self.status_bar.hide_operation_status()
+
                 # Mise à jour immédiate de l'interface
                 self.status_bar.update_button_states()
-                
+
                 self.logger.info("Serveur arrêté")
-                
+
                 # Notification optionnelle si des jobs étaient en cours
                 if active_jobs > 0:
-                    QMessageBox.information(self, "Serveur arrêté", 
+                    QMessageBox.information(self, "Serveur arrêté",
                         f"Serveur arrêté. {active_jobs} job(s) ont été interrompus.")
-                
+
             except Exception as e:
                 self.logger.error(f"Erreur arrêt serveur: {e}")
+                self.status_bar.hide_operation_status()
                 QMessageBox.critical(self, "Erreur", f"Erreur lors de l'arrêt:\n{str(e)}")
-                
+
                 # Forcer la mise à jour de l'interface même en cas d'erreur
                 self.status_bar.update_button_states()
     

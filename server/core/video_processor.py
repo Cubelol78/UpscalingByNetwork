@@ -12,7 +12,7 @@ import re
 
 from models.job import Job, JobStatus, AudioTrack, SubtitleTrack
 from models.batch import Batch
-from config.settings import config
+from utils.config import config
 from utils.logger import get_logger
 from utils.ffmpeg_utils import ffmpeg_utils
 from utils.file_utils import ensure_dir, get_video_info

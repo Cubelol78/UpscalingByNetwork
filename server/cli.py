@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 import logging
+from utils.system import detect_display_available
+from utils.file_utils import format_duration
 
 try:
     from rich.console import Console
@@ -181,7 +183,7 @@ class ServerCLI:
     def create_header_panel(self) -> Panel:
         """Create header panel"""
         stats = self.server.get_server_stats()
-        uptime = self.format_duration(stats['uptime'])
+        uptime = format_duration(int(stats['uptime']))
 
         status_text = Text()
         status_text.append("UpscalingByNetwork Server ", style="bold cyan")
@@ -272,7 +274,7 @@ class ServerCLI:
     def print_basic_status(self):
         """Print basic status without Rich library"""
         stats = self.server.get_server_stats()
-        uptime = self.format_duration(stats['uptime'])
+        uptime = format_duration(int(stats['uptime']))
 
         # Clear screen (simple approach)
         print("\n" + "=" * 70)
@@ -329,20 +331,6 @@ class ServerCLI:
             else:
                 print(f"Error during shutdown: {e}")
 
-    @staticmethod
-    def format_duration(seconds: float) -> str:
-        """Format duration in human-readable format"""
-        if seconds < 60:
-            return f"{int(seconds)}s"
-        elif seconds < 3600:
-            minutes = int(seconds / 60)
-            secs = int(seconds % 60)
-            return f"{minutes}m {secs}s"
-        else:
-            hours = int(seconds / 3600)
-            minutes = int((seconds % 3600) / 60)
-            return f"{hours}h {minutes}m"
-
     def print_startup_banner(self):
         """Print startup banner"""
         if self.use_rich:
@@ -382,7 +370,7 @@ class CLICommands:
             table.add_column("Value", justify="right")
 
             table.add_row("Status", "Running" if stats['running'] else "Stopped")
-            table.add_row("Uptime", self.format_duration(stats['uptime']))
+            table.add_row("Uptime", format_duration(int(stats['uptime'])))
             table.add_row("Connected Clients", str(stats['clients_connected']))
             table.add_row("Active Jobs", str(stats['active_jobs']))
             table.add_row("Active Batches", str(stats['active_batches']))
@@ -393,7 +381,7 @@ class CLICommands:
         else:
             print("\n=== Server Status ===")
             print(f"Status: {'Running' if stats['running'] else 'Stopped'}")
-            print(f"Uptime: {self.format_duration(stats['uptime'])}")
+            print(f"Uptime: {format_duration(int(stats['uptime']))}")
             print(f"Connected Clients: {stats['clients_connected']}")
             print(f"Active Jobs: {stats['active_jobs']}")
             print(f"Active Batches: {stats['active_batches']}")
@@ -475,57 +463,6 @@ class CLICommands:
                 print(f"  Progress: {progress:.1f}%")
                 print(f"  Frames: {job['total_frames']}")
 
-    @staticmethod
-    def format_duration(seconds: float) -> str:
-        """Format duration in human-readable format"""
-        if seconds < 60:
-            return f"{int(seconds)}s"
-        elif seconds < 3600:
-            minutes = int(seconds / 60)
-            secs = int(seconds % 60)
-            return f"{minutes}m {secs}s"
-        else:
-            hours = int(seconds / 3600)
-            minutes = int((seconds % 3600) / 60)
-            return f"{hours}h {minutes}m"
-
-
-def detect_display_available() -> bool:
-    """
-    Detect if a display is available for GUI
-    Works on Linux, Windows, and macOS
-    """
-    import os
-
-    # Linux/Unix - check DISPLAY environment variable
-    if sys.platform.startswith('linux') or sys.platform == 'darwin':
-        if os.environ.get('DISPLAY'):
-            return True
-
-        # Check if running in Wayland
-        if os.environ.get('WAYLAND_DISPLAY'):
-            return True
-
-        return False
-
-    # Windows - display is usually available
-    elif sys.platform == 'win32':
-        try:
-            # Try to import win32api to check for GUI
-            import win32api
-            import win32con
-            # If we're running as a service, GetSystemMetrics will fail
-            try:
-                win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-                return True
-            except (OSError, AttributeError, Exception):
-                # Service mode or API call failed
-                return False
-        except ImportError:
-            # Assume GUI is available on Windows if win32api not available
-            return True
-
-    return False
 
 
 if __name__ == "__main__":

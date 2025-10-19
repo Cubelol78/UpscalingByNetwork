@@ -63,22 +63,28 @@ class ServerConfig:
                 "gpu_memory_limit": 8192,
                 "tile_size": 256,
                 "max_retries": 3,
+                "duplicate_threshold": 5,
                 "ffmpeg_path": "./ffmpeg/ffmpeg.exe"
             },
             "storage": {
                 "work_directory": "./work",
+                "work_drive": "",
                 "input_directory": "./input",
                 "output_directory": "./output",
                 "temp_directory": "./temp",
                 "batches_directory": "./batches",
+                "frames_directory": "./frames",
+                "upscaled_directory": "./upscaled",
                 "logs_directory": "./logs",
                 "auto_cleanup": True,
+                "auto_cleanup_age_hours": 24,
                 "min_free_space_gb": 5
             },
             "security": {
                 "enable_encryption": True,
                 "key_exchange_timeout": 30,
                 "session_key_size": 256,
+                "auth_token_length": 64,
                 "allowed_clients": []
             },
             "realesrgan": {
@@ -89,7 +95,16 @@ class ServerConfig:
                 "tile_size": 256,
                 "gpu_id": 0,
                 "thread_load": "1:2:2",
+                "use_fp16": False,
                 "tta_mode": False
+            },
+            "ffmpeg": {
+                "crf": 20,
+                "preset": "medium",
+                "threads": 12,
+                "audio_bitrate": "192k",
+                "video_codec": "libx264",
+                "pixel_format": "yuv420p"
             },
             "monitoring": {
                 "enable_performance_monitoring": True,
@@ -100,10 +115,11 @@ class ServerConfig:
             },
             "gui": {
                 "theme": "dark",
-                "auto_refresh_interval": 2000,
+                "auto_refresh_interval": 1000,
                 "show_detailed_logs": True,
                 "enable_notifications": True,
-                "charts_history_points": 100
+                "charts_history_points": 100,
+                "log_max_lines": 1000
             }
         }
 
@@ -168,30 +184,57 @@ class ServerConfig:
         self.HOST = self.get("server.host", "0.0.0.0")
         self.PORT = self.get("server.port", 8765)
         self.MAX_CLIENTS = self.get("server.max_clients", 10)
-        
+        self.HEARTBEAT_INTERVAL = self.get("server.heartbeat_interval", 30)
+        self.CLIENT_TIMEOUT = self.get("server.client_timeout", 120)
+
         # Processing
         self.BATCH_SIZE = self.get("processing.batch_size", 50)
         self.MAX_CONCURRENT_BATCHES = self.get("processing.max_concurrent_batches", 5)
         self.REALESRGAN_MODEL = self.get("processing.realesrgan_model", "RealESRGAN_x4plus")
+        self.REALESRGAN_SCALE = self.get("realesrgan.default_scale", 4)
         self.TILE_SIZE = self.get("processing.tile_size", 256)
         self.MAX_RETRIES = self.get("processing.max_retries", 3)
         self.OUTPUT_FORMAT = self.get("processing.output_format", "png")
-        
+        self.DUPLICATE_THRESHOLD = self.get("processing.duplicate_threshold", 5)
+
         # Storage
         self.WORK_DIRECTORY = self.get("storage.work_directory", "./work")
+        self.WORK_DRIVE = self.get("storage.work_drive", "")
         self.INPUT_DIRECTORY = self.get("storage.input_directory", "./input")
         self.OUTPUT_DIRECTORY = self.get("storage.output_directory", "./output")
+        self.OUTPUT_DIR = self.OUTPUT_DIRECTORY  # Alias
         self.TEMP_DIRECTORY = self.get("storage.temp_directory", "./temp")
+        self.TEMP_DIR = self.TEMP_DIRECTORY  # Alias
         self.BATCHES_DIRECTORY = self.get("storage.batches_directory", "./batches")
+        self.FRAMES_DIR = self.get("storage.frames_directory", "./frames")
+        self.UPSCALED_DIR = self.get("storage.upscaled_directory", "./upscaled")
         self.AUTO_CLEANUP = self.get("storage.auto_cleanup", True)
+        self.AUTO_CLEANUP_AGE_HOURS = self.get("storage.auto_cleanup_age_hours", 24)
         self.MIN_FREE_SPACE_GB = self.get("storage.min_free_space_gb", 5)
-        
+
         # Security
         self.USE_ENCRYPTION = self.get("security.enable_encryption", True)
-        
+        self.ENCRYPTION_KEY_SIZE = self.get("security.session_key_size", 256) // 8
+        self.AUTH_TOKEN_LENGTH = self.get("security.auth_token_length", 64)
+
         # Real-ESRGAN
         self.REALESRGAN_PATH = self.get("realesrgan.executable_path", "./realesrgan-ncnn-vulkan/realesrgan-ncnn-vulkan.exe")
-        
+        self.GPU_ID = self.get("realesrgan.gpu_id", 0)
+        self.USE_FP16 = self.get("realesrgan.use_fp16", False)
+        self.TTA_MODE = self.get("realesrgan.tta_mode", False)
+
+        # FFmpeg
+        self.FFMPEG_CRF = self.get("ffmpeg.crf", 20)
+        self.FFMPEG_PRESET = self.get("ffmpeg.preset", "medium")
+        self.FFMPEG_THREADS = self.get("ffmpeg.threads", 12)
+        self.AUDIO_BITRATE = self.get("ffmpeg.audio_bitrate", "192k")
+        self.VIDEO_CODEC = self.get("ffmpeg.video_codec", "libx264")
+        self.PIXEL_FORMAT = self.get("ffmpeg.pixel_format", "yuv420p")
+
+        # GUI
+        self.GUI_UPDATE_INTERVAL = self.get("gui.auto_refresh_interval", 1000)
+        self.LOG_MAX_LINES = self.get("gui.log_max_lines", 1000)
+
         self.logger.info("Configuration legacy initialisée avec compatibilité rétroactive")
     
     def load_config(self) -> Dict[str, Any]:
@@ -288,25 +331,51 @@ class ServerConfig:
             "server.host": "HOST",
             "server.port": "PORT",
             "server.max_clients": "MAX_CLIENTS",
+            "server.heartbeat_interval": "HEARTBEAT_INTERVAL",
+            "server.client_timeout": "CLIENT_TIMEOUT",
             "processing.batch_size": "BATCH_SIZE",
             "processing.max_concurrent_batches": "MAX_CONCURRENT_BATCHES",
             "processing.realesrgan_model": "REALESRGAN_MODEL",
             "processing.tile_size": "TILE_SIZE",
             "processing.max_retries": "MAX_RETRIES",
             "processing.output_format": "OUTPUT_FORMAT",
+            "processing.duplicate_threshold": "DUPLICATE_THRESHOLD",
             "storage.work_directory": "WORK_DIRECTORY",
+            "storage.work_drive": "WORK_DRIVE",
             "storage.input_directory": "INPUT_DIRECTORY",
-            "storage.output_directory": "OUTPUT_DIRECTORY",
-            "storage.temp_directory": "TEMP_DIRECTORY",
+            "storage.output_directory": ["OUTPUT_DIRECTORY", "OUTPUT_DIR"],
+            "storage.temp_directory": ["TEMP_DIRECTORY", "TEMP_DIR"],
             "storage.batches_directory": "BATCHES_DIRECTORY",
+            "storage.frames_directory": "FRAMES_DIR",
+            "storage.upscaled_directory": "UPSCALED_DIR",
             "storage.auto_cleanup": "AUTO_CLEANUP",
+            "storage.auto_cleanup_age_hours": "AUTO_CLEANUP_AGE_HOURS",
             "storage.min_free_space_gb": "MIN_FREE_SPACE_GB",
             "security.enable_encryption": "USE_ENCRYPTION",
-            "realesrgan.executable_path": "REALESRGAN_PATH"
+            "security.session_key_size": "ENCRYPTION_KEY_SIZE",
+            "security.auth_token_length": "AUTH_TOKEN_LENGTH",
+            "realesrgan.executable_path": "REALESRGAN_PATH",
+            "realesrgan.default_scale": "REALESRGAN_SCALE",
+            "realesrgan.gpu_id": "GPU_ID",
+            "realesrgan.use_fp16": "USE_FP16",
+            "realesrgan.tta_mode": "TTA_MODE",
+            "ffmpeg.crf": "FFMPEG_CRF",
+            "ffmpeg.preset": "FFMPEG_PRESET",
+            "ffmpeg.threads": "FFMPEG_THREADS",
+            "ffmpeg.audio_bitrate": "AUDIO_BITRATE",
+            "ffmpeg.video_codec": "VIDEO_CODEC",
+            "ffmpeg.pixel_format": "PIXEL_FORMAT",
+            "gui.auto_refresh_interval": "GUI_UPDATE_INTERVAL",
+            "gui.log_max_lines": "LOG_MAX_LINES",
         }
-        
+
         if key_path in legacy_mapping:
-            setattr(self, legacy_mapping[key_path], value)
+            attrs = legacy_mapping[key_path]
+            if isinstance(attrs, list):
+                for attr in attrs:
+                    setattr(self, attr, value)
+            else:
+                setattr(self, attrs, value)
     
     def get_work_directories(self) -> Dict[str, Path]:
         """Retourne tous les répertoires de travail"""
@@ -393,6 +462,148 @@ class ServerConfig:
         self._setup_legacy_attributes()
         self.save_config()
         self.logger.info("Configuration remise à zéro (valeurs par défaut)")
+
+    def reset_to_defaults(self):
+        """Alias pour reset_to_default (compatibilité settings.py)"""
+        self.reset_to_default()
+
+    def get_config_file_path(self) -> Path:
+        """Retourne le chemin du fichier de configuration"""
+        return self.config_file
+
+    def apply_and_save(self, **kwargs) -> bool:
+        """Applique les modifications et sauvegarde automatiquement (compatibilité settings.py)"""
+        try:
+            for key, value in kwargs.items():
+                # Conversion des clés en majuscules vers les chemins de configuration
+                key_mappings = {
+                    'HOST': 'server.host',
+                    'PORT': 'server.port',
+                    'MAX_CLIENTS': 'server.max_clients',
+                    'HEARTBEAT_INTERVAL': 'server.heartbeat_interval',
+                    'CLIENT_TIMEOUT': 'server.client_timeout',
+                    'BATCH_SIZE': 'processing.batch_size',
+                    'MAX_RETRIES': 'processing.max_retries',
+                    'DUPLICATE_THRESHOLD': 'processing.duplicate_threshold',
+                    'REALESRGAN_MODEL': 'processing.realesrgan_model',
+                    'REALESRGAN_SCALE': 'realesrgan.default_scale',
+                    'TILE_SIZE': 'processing.tile_size',
+                    'GPU_ID': 'realesrgan.gpu_id',
+                    'USE_FP16': 'realesrgan.use_fp16',
+                    'TTA_MODE': 'realesrgan.tta_mode',
+                    'FFMPEG_CRF': 'ffmpeg.crf',
+                    'FFMPEG_PRESET': 'ffmpeg.preset',
+                    'FFMPEG_THREADS': 'ffmpeg.threads',
+                    'AUDIO_BITRATE': 'ffmpeg.audio_bitrate',
+                    'VIDEO_CODEC': 'ffmpeg.video_codec',
+                    'PIXEL_FORMAT': 'ffmpeg.pixel_format',
+                    'AUTO_CLEANUP': 'storage.auto_cleanup',
+                    'AUTO_CLEANUP_AGE_HOURS': 'storage.auto_cleanup_age_hours',
+                    'MIN_FREE_SPACE_GB': 'storage.min_free_space_gb',
+                    'USE_ENCRYPTION': 'security.enable_encryption',
+                    'WORK_DRIVE': 'storage.work_drive',
+                }
+
+                # Obtenir le chemin de configuration ou utiliser la clé telle quelle
+                config_path = key_mappings.get(key, key)
+
+                # Mise à jour directe de l'attribut ET de la config
+                if hasattr(self, key):
+                    setattr(self, key, value)
+
+                # Mise à jour de la configuration interne
+                keys = config_path.split('.')
+                current = self.config
+                for k in keys[:-1]:
+                    if k not in current:
+                        current[k] = {}
+                    current = current[k]
+                current[keys[-1]] = value
+
+            # Sauvegarde unique après toutes les modifications
+            self.save_config()
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Erreur lors de apply_and_save: {e}")
+            return False
+
+    def get_available_drives(self) -> Dict[str, Dict[str, Any]]:
+        """Retourne la liste des disques disponibles avec leurs informations"""
+        drives = {}
+
+        try:
+            import psutil
+
+            for disk in psutil.disk_partitions():
+                try:
+                    usage = psutil.disk_usage(disk.mountpoint)
+
+                    drives[disk.mountpoint] = {
+                        'device': disk.device,
+                        'mountpoint': disk.mountpoint,
+                        'fstype': disk.fstype,
+                        'total_gb': usage.total / (1024**3),
+                        'free_gb': usage.free / (1024**3),
+                        'used_gb': usage.used / (1024**3),
+                        'percent_used': (usage.used / usage.total) * 100
+                    }
+
+                except (PermissionError, OSError):
+                    continue
+
+        except ImportError:
+            # Fallback basique si psutil n'est pas disponible
+            import shutil
+            current_drive = str(Path.cwd().drive) if hasattr(Path.cwd(), 'drive') else '/'
+            try:
+                total, used, free = shutil.disk_usage(current_drive)
+                drives[current_drive] = {
+                    'device': current_drive,
+                    'mountpoint': current_drive,
+                    'fstype': 'unknown',
+                    'total_gb': total / (1024**3),
+                    'free_gb': free / (1024**3),
+                    'used_gb': used / (1024**3),
+                    'percent_used': (used / total) * 100
+                }
+            except:
+                pass
+
+        return drives
+
+    def set_work_drive(self, drive_path: str):
+        """Change le disque de travail et sauvegarde (compatibilité settings.py)"""
+        self.set("storage.work_drive", drive_path)
+        self.WORK_DRIVE = drive_path
+        # Mise à jour des attributs legacy
+        self._setup_legacy_attributes()
+
+    def cleanup_temp_files(self, job_id: str = None) -> bool:
+        """Nettoie les fichiers temporaires"""
+        try:
+            import shutil
+            temp_path = Path(self.get("storage.temp_directory", "./temp"))
+
+            if job_id:
+                # Nettoyage spécifique à un job
+                patterns = [f"job_{job_id}_*"]
+            else:
+                # Nettoyage général
+                patterns = ["job_*_frames", "job_*_upscaled", "job_*_audio.*"]
+
+            for pattern in patterns:
+                for item in temp_path.glob(pattern):
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Erreur nettoyage: {e}")
+            return False
 
 # Instance globale
 config = ServerConfig()

@@ -9,7 +9,7 @@ import re
 
 from models.job import Job, JobStatus
 from models.batch import Batch
-from config.settings import config
+from utils.config import config
 from utils.logger import get_logger
 from utils.file_utils import ensure_dir, get_video_info
 

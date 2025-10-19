@@ -5,10 +5,10 @@ Module d'interface graphique pour le serveur
 
 # Import conditionnel des widgets principaux
 try:
-    from .server_window import ServerWindow
+    from .main_window import MainWindow
     GUI_AVAILABLE = True
 except ImportError:
-    ServerWindow = None
+    MainWindow = None
     GUI_AVAILABLE = False
 
-__all__ = ['ServerWindow', 'GUI_AVAILABLE']
+__all__ = ['MainWindow', 'GUI_AVAILABLE']

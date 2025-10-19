@@ -2,13 +2,15 @@
 Barre d'état pour l'interface principale avec logique simplifiée des boutons
 """
 
-from PyQt5.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel, 
+from PyQt5.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel,
                             QPushButton, QProgressBar, QGroupBox, QFrame)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from pathlib import Path
 
-from config.settings import config
+from utils.config import config
+from gui.widgets.loading_widget import InlineLoadingIndicator
+from gui.themes import get_button_style, get_status_label_style, Colors
 
 class StatusBarWidget(QFrame):
     """Widget de la barre d'état principale"""
@@ -38,9 +40,9 @@ class StatusBarWidget(QFrame):
         server_layout.setSpacing(5)
         
         self.server_status_label = QLabel("● Arrêté")
-        self.server_status_label.setStyleSheet("color: red; font-weight: bold; font-size: 12px;")
+        self.server_status_label.setStyleSheet(f"{get_status_label_style('offline')} font-size: 12px;")
         self.server_port_label = QLabel(f"Port: {config.PORT}")
-        self.server_port_label.setStyleSheet("font-size: 11px;")
+        self.server_port_label.setStyleSheet(f"font-size: 11px; color: {Colors.TEXT_PRIMARY};")
         
         server_layout.addWidget(self.server_status_label)
         server_layout.addWidget(self.server_port_label)
@@ -53,9 +55,9 @@ class StatusBarWidget(QFrame):
         clients_layout.setSpacing(5)
         
         self.clients_count_label = QLabel("Connectés: 0")
-        self.clients_count_label.setStyleSheet("font-size: 11px;")
+        self.clients_count_label.setStyleSheet(f"font-size: 11px; color: {Colors.TEXT_PRIMARY};")
         self.clients_processing_label = QLabel("En traitement: 0")
-        self.clients_processing_label.setStyleSheet("font-size: 11px;")
+        self.clients_processing_label.setStyleSheet(f"font-size: 11px; color: {Colors.TEXT_PRIMARY};")
         
         clients_layout.addWidget(self.clients_count_label)
         clients_layout.addWidget(self.clients_processing_label)
@@ -68,9 +70,9 @@ class StatusBarWidget(QFrame):
         batches_layout.setSpacing(5)
         
         self.batches_pending_label = QLabel("En attente: 0")
-        self.batches_pending_label.setStyleSheet("font-size: 11px;")
+        self.batches_pending_label.setStyleSheet(f"font-size: 11px; color: {Colors.TEXT_PRIMARY};")
         self.batches_completed_label = QLabel("Terminés: 0")
-        self.batches_completed_label.setStyleSheet("font-size: 11px;")
+        self.batches_completed_label.setStyleSheet(f"font-size: 11px; color: {Colors.TEXT_PRIMARY};")
         
         batches_layout.addWidget(self.batches_pending_label)
         batches_layout.addWidget(self.batches_completed_label)
@@ -83,7 +85,7 @@ class StatusBarWidget(QFrame):
         job_layout.setSpacing(5)
         
         self.current_job_label = QLabel("Aucun")
-        self.current_job_label.setStyleSheet("font-size: 11px;")
+        self.current_job_label.setStyleSheet("font-size: 11px; color: #e0e0e0;")
         self.current_job_label.setWordWrap(True)
         self.job_progress = QProgressBar()
         self.job_progress.setMinimumHeight(20)
@@ -104,9 +106,14 @@ class StatusBarWidget(QFrame):
         self.server_control_btn.setMinimumHeight(35)
         self.server_control_btn.setStyleSheet("""
             QPushButton {
+                background-color: #0d7377;
+                color: white;
                 font-weight: bold;
                 border-radius: 5px;
                 padding: 8px;
+            }
+            QPushButton:hover {
+                background-color: #14a085;
             }
         """)
         
@@ -117,11 +124,16 @@ class StatusBarWidget(QFrame):
         
         # Statut processeur natif
         self.native_status_label = QLabel("Processeur: Vérification...")
-        self.native_status_label.setStyleSheet("font-size: 10px; color: #888;")
+        self.native_status_label.setStyleSheet("font-size: 10px; color: #888888;")
         self.native_status_label.setWordWrap(True)
-        
+
+        # Indicateur de chargement pour les opérations
+        self.operation_indicator = InlineLoadingIndicator(size=20)
+        self.operation_indicator.hide()
+
         controls_layout.addWidget(self.server_control_btn)
         controls_layout.addWidget(self.start_job_btn)
+        controls_layout.addWidget(self.operation_indicator)
         controls_layout.addWidget(self.native_status_label)
         controls_layout.addStretch()
         
@@ -228,7 +240,7 @@ class StatusBarWidget(QFrame):
         """Met à jour la barre de statut quand le serveur est arrêté"""
         # Mise à jour des boutons
         self.update_button_states()
-        
+
         # Remise à zéro des statistiques
         self.clients_count_label.setText("Connectés: 0")
         self.clients_processing_label.setText("En traitement: 0")
@@ -236,3 +248,29 @@ class StatusBarWidget(QFrame):
         self.batches_completed_label.setText("Terminés: 0")
         self.current_job_label.setText("Aucun")
         self.job_progress.setValue(0)
+
+    def show_operation_status(self, message: str, operation_type: str = "generic"):
+        """Affiche un indicateur de chargement pour une opération en cours"""
+        # Désactiver les boutons pendant l'opération
+        self.server_control_btn.setEnabled(False)
+        self.start_job_btn.setEnabled(False)
+
+        # Afficher l'indicateur avec le message
+        self.operation_indicator.start(message)
+
+        # Mettre à jour le statut selon le type d'opération
+        if operation_type == "starting":
+            self.server_status_label.setText("● Démarrage...")
+            self.server_status_label.setStyleSheet("color: #FFA726; font-weight: bold; font-size: 12px;")
+        elif operation_type == "stopping":
+            self.server_status_label.setText("● Arrêt...")
+            self.server_status_label.setStyleSheet("color: #FFA726; font-weight: bold; font-size: 12px;")
+
+    def hide_operation_status(self):
+        """Masque l'indicateur de chargement"""
+        # Arrêter l'indicateur
+        self.operation_indicator.stop()
+
+        # Réactiver les boutons
+        self.server_control_btn.setEnabled(True)
+        # Le bouton start_job sera réactivé par update_button_states si le serveur est en cours

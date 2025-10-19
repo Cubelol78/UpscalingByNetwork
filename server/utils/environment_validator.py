@@ -151,8 +151,8 @@ def _validate_configuration() -> List[str]:
     
     try:
         # Vérification de la configuration de base
-        from config.settings import config
-        
+        from utils.config import config
+
         # Ports réseau
         port = config.get("server.port", 8765)
         if not isinstance(port, int) or not (1024 <= port <= 65535):
@@ -263,7 +263,7 @@ def generate_environment_report() -> Dict[str, Any]:
     
     # Configuration
     try:
-        from config.settings import config
+        from utils.config import config
         report['configuration'] = {
             'server_port': config.get("server.port"),
             'server_host': config.get("server.host"),

@@ -10,7 +10,7 @@ from websockets.server import WebSocketServerProtocol
 from models.batch import Batch, BatchStatus
 from models.client import Client, ClientStatus
 from models.job import Job, JobStatus
-from config.settings import config
+from utils.config import config
 from utils.logger import get_logger
 
 class UpscalingServer:

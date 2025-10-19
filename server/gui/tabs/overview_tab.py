@@ -47,23 +47,27 @@ class OverviewTab(QWidget):
         
         # Graphique temps réel des clients
         self.clients_chart = pg.PlotWidget(title="Clients connectés")
-        self.clients_chart.setLabel('left', 'Nombre', size='10pt')
-        self.clients_chart.setLabel('bottom', 'Temps', size='10pt')
+        self.clients_chart.setLabel('left', 'Nombre', size='10pt', color='#e0e0e0')
+        self.clients_chart.setLabel('bottom', 'Temps', size='10pt', color='#e0e0e0')
         self.clients_chart.showGrid(x=True, y=True, alpha=0.3)
         self.clients_chart.setMinimumHeight(220)
-        self.clients_chart.setBackground('black')
-        self.clients_chart.getAxis('left').setTextPen('white')
-        self.clients_chart.getAxis('bottom').setTextPen('white')
-        
+        self.clients_chart.setBackground('#2b2b2b')
+        self.clients_chart.getAxis('left').setTextPen('#e0e0e0')
+        self.clients_chart.getAxis('bottom').setTextPen('#e0e0e0')
+        self.clients_chart.getAxis('left').setPen('#555555')
+        self.clients_chart.getAxis('bottom').setPen('#555555')
+
         # Graphique des lots
         self.batches_chart = pg.PlotWidget(title="Progression des lots")
-        self.batches_chart.setLabel('left', 'Lots', size='10pt')
-        self.batches_chart.setLabel('bottom', 'Temps', size='10pt')
+        self.batches_chart.setLabel('left', 'Lots', size='10pt', color='#e0e0e0')
+        self.batches_chart.setLabel('bottom', 'Temps', size='10pt', color='#e0e0e0')
         self.batches_chart.showGrid(x=True, y=True, alpha=0.3)
         self.batches_chart.setMinimumHeight(220)
-        self.batches_chart.setBackground('black')
-        self.batches_chart.getAxis('left').setTextPen('white')
-        self.batches_chart.getAxis('bottom').setTextPen('white')
+        self.batches_chart.setBackground('#2b2b2b')
+        self.batches_chart.getAxis('left').setTextPen('#e0e0e0')
+        self.batches_chart.getAxis('bottom').setTextPen('#e0e0e0')
+        self.batches_chart.getAxis('left').setPen('#555555')
+        self.batches_chart.getAxis('bottom').setPen('#555555')
         
         layout.addWidget(self.clients_chart)
         layout.addWidget(self.batches_chart)
@@ -107,13 +111,13 @@ class OverviewTab(QWidget):
         perf_layout.setContentsMargins(10, 15, 10, 10)
         
         self.avg_batch_time_label = QLabel("Temps moyen/lot: N/A")
-        self.avg_batch_time_label.setStyleSheet("font-size: 11px;")
-        
+        self.avg_batch_time_label.setStyleSheet("font-size: 11px; color: #e0e0e0;")
+
         self.processing_rate_label = QLabel("Taux de traitement: N/A")
-        self.processing_rate_label.setStyleSheet("font-size: 11px;")
-        
+        self.processing_rate_label.setStyleSheet("font-size: 11px; color: #e0e0e0;")
+
         self.total_processed_label = QLabel("Total traité: 0")
-        self.total_processed_label.setStyleSheet("font-size: 11px; font-weight: bold;")
+        self.total_processed_label.setStyleSheet("font-size: 11px; font-weight: bold; color: #e0e0e0;")
         
         perf_layout.addWidget(self.avg_batch_time_label, 0, 0)
         perf_layout.addWidget(self.processing_rate_label, 1, 0)
@@ -132,13 +136,24 @@ class OverviewTab(QWidget):
         
         self.top_clients_table.setStyleSheet("""
             QTableWidget {
-                gridline-color: #444;
+                background-color: #2b2b2b;
+                color: #e0e0e0;
+                gridline-color: #555555;
                 font-size: 10px;
+                border: 1px solid #555555;
+            }
+            QTableWidget::item {
+                padding: 5px;
+            }
+            QTableWidget::item:selected {
+                background-color: #0d7377;
+                color: #ffffff;
             }
             QHeaderView::section {
-                background-color: #555;
+                background-color: #3c3c3c;
+                color: #e0e0e0;
                 padding: 5px;
-                border: 1px solid #666;
+                border: 1px solid #555555;
                 font-weight: bold;
             }
         """)
@@ -183,13 +198,13 @@ class OverviewTab(QWidget):
             timestamps_clients, clients_data = performance_monitor.get_time_series_data('client_count', 60)
             if timestamps_clients and clients_data:
                 self.clients_chart.clear()
-                self.clients_chart.plot(timestamps_clients, clients_data, pen='g')
-            
+                self.clients_chart.plot(timestamps_clients, clients_data, pen=pg.mkPen(color='#0d7377', width=2))
+
             # Mise à jour du graphique des lots
             timestamps_batches, batches_data = performance_monitor.get_time_series_data('batch_queue_size', 60)
             if timestamps_batches and batches_data:
                 self.batches_chart.clear()
-                self.batches_chart.plot(timestamps_batches, batches_data, pen='y')
+                self.batches_chart.plot(timestamps_batches, batches_data, pen=pg.mkPen(color='#FF9800', width=2))
                 
         except Exception as e:
             print(f"Erreur mise à jour graphiques overview: {e}")

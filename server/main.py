@@ -28,6 +28,9 @@ server_root = current_dir
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(server_root))
 
+# Import utilities
+from utils.system import detect_display_available
+
 
 # ============================================================================
 # Logging Configuration
@@ -160,41 +163,6 @@ def create_directories():
 
 
 # ============================================================================
-# Display Detection
-# ============================================================================
-
-def detect_display_available() -> bool:
-    """
-    Detect if a display is available for GUI
-    Works on Linux, Windows, and macOS
-    """
-    # Linux/Unix - check DISPLAY or WAYLAND_DISPLAY
-    if sys.platform.startswith('linux') or sys.platform == 'darwin':
-        if os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY'):
-            return True
-        return False
-
-    # Windows - usually has display unless running as service
-    elif sys.platform == 'win32':
-        # Check if running as Windows service
-        try:
-            import win32api
-            import win32con
-            try:
-                # This will fail if running as a service
-                win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-                return True
-            except (OSError, AttributeError, Exception):
-                # Service mode or API call failed
-                return False
-        except ImportError:
-            # Assume display available if we can't check
-            return True
-
-    return False
-
-
-# ============================================================================
 # Server Mode Runners
 # ============================================================================
 
@@ -212,7 +180,8 @@ async def run_server_gui(host: str = "0.0.0.0", port: int = 8888):
         # Import GUI modules
         import qasync
         from PyQt5.QtWidgets import QApplication
-        from gui.server_window import ServerWindow
+        from gui.main_window import MainWindow
+        from core.distributed_server import DistributedServer
 
         # Create Qt application
         app = QApplication(sys.argv)
@@ -224,9 +193,11 @@ async def run_server_gui(host: str = "0.0.0.0", port: int = 8888):
         loop = qasync.QEventLoop(app)
         asyncio.set_event_loop(loop)
 
-        # Create and show main window
-        window = ServerWindow()
-        window.set_server_config(host, port)
+        # Create distributed server instance
+        server = DistributedServer()
+
+        # Create and show main window with server instance
+        window = MainWindow(server)
         window.show()
 
         logger.info(f"GUI interface initialized")

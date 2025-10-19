@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
 from PyQt5.QtGui import QFont
 import logging
 
-from config.settings import config
+from utils.config import config
 
 class LogsTab(QWidget):
     """Onglet logs"""
