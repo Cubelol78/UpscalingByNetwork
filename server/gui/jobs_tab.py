@@ -64,6 +64,9 @@ class JobsTab(QWidget):
             }
         """)
 
+        # Connecter le signal de sélection
+        self.JobsTable.itemSelectionChanged.connect(self.OnSelectionChanged)
+
         Layout.addWidget(self.JobsTable)
 
         # Barre d'actions
@@ -91,6 +94,27 @@ class JobsTab(QWidget):
         """)
         self.AddVideoButton.clicked.connect(self.AddVideo)
         ActionLayout.addWidget(self.AddVideoButton)
+
+        self.CancelVideoButton = QPushButton("❌ Annuler la vidéo")
+        self.CancelVideoButton.setStyleSheet("""
+            QPushButton {
+                background-color: #F44336;
+                color: white;
+                padding: 8px 16px;
+                border: none;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #d32f2f;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+            }
+        """)
+        self.CancelVideoButton.clicked.connect(self.CancelSelectedVideo)
+        self.CancelVideoButton.setEnabled(False)
+        ActionLayout.addWidget(self.CancelVideoButton)
 
         ActionLayout.addStretch()
 
@@ -212,6 +236,64 @@ class JobsTab(QWidget):
         except Exception as e:
             self.ParentWindow.Logger.error(f"Erreur lors de l'ajout de la vidéo: {e}")
             QMessageBox.critical(self, "Erreur", f"Impossible d'ajouter la vidéo:\n{str(e)}")
+
+    def OnSelectionChanged(self):
+        """Gère le changement de sélection dans le tableau"""
+        SelectedRow = self.JobsTable.currentRow()
+        self.CancelVideoButton.setEnabled(SelectedRow >= 0)
+
+    def CancelSelectedVideo(self):
+        """Annule la vidéo sélectionnée"""
+        try:
+            SelectedRow = self.JobsTable.currentRow()
+            if SelectedRow < 0:
+                return
+
+            # Récupérer l'ID de la vidéo
+            IdItem = self.JobsTable.item(SelectedRow, 0)
+            if not IdItem:
+                return
+
+            VideoId = IdItem.data(Qt.UserRole)
+            VideoName = self.JobsTable.item(SelectedRow, 1).text()
+
+            # Confirmation
+            Reply = QMessageBox.question(
+                self,
+                "Confirmation",
+                f"Voulez-vous vraiment annuler le traitement de:\n{VideoName}?\n\n"
+                "Les fichiers temporaires seront supprimés.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+
+            if Reply != QMessageBox.Yes:
+                return
+
+            # Annuler via le JobManager
+            JobManager = self.ParentWindow.GetJobManager()
+            if JobManager:
+                Success = JobManager.CancelVideo(VideoId)
+                if Success:
+                    self.ParentWindow.Logger.info(f"Vidéo annulée: {VideoName}")
+                    QMessageBox.information(
+                        self,
+                        "Succès",
+                        f"Le traitement de la vidéo a été annulé:\n{VideoName}"
+                    )
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Avertissement",
+                        "Impossible d'annuler la vidéo. Elle est peut-être déjà terminée."
+                    )
+                self.Refresh()
+            else:
+                raise Exception("JobManager non disponible")
+
+        except Exception as e:
+            self.ParentWindow.Logger.error(f"Erreur lors de l'annulation: {e}")
+            QMessageBox.critical(self, "Erreur", f"Impossible d'annuler la vidéo:\n{str(e)}")
 
 
 class AddVideoDialog(QDialog):

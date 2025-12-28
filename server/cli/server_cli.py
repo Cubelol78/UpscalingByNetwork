@@ -100,6 +100,9 @@ class ServerCLI:
             self.Server.Database
         )
 
+        # Connecter le distributeur au serveur pour recevoir les résultats
+        self.Server.SetBatchDistributor(BatchDistributor_obj)
+
         self.JobManager = JobManager(
             VideoProcessor(
                 self.Config["server"]["work_directory"],

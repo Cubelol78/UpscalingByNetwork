@@ -473,6 +473,30 @@ class DatabaseManager:
             self.Logger.error(f"Erreur lors de la récupération des batches en attente: {e}")
             return []
 
+    def DeleteBatch(self, BatchId: str) -> bool:
+        """
+        Supprime un batch de la base de données
+
+        Args:
+            BatchId: ID du batch à supprimer
+
+        Returns:
+            True si succès
+        """
+        try:
+            Cursor = self.Connection.cursor()
+            Cursor.execute(
+                "DELETE FROM batches WHERE batch_id = ?",
+                (BatchId,)
+            )
+            self.Connection.commit()
+            self.Logger.info(f"Batch supprimé: {BatchId}")
+            return True
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la suppression du batch {BatchId}: {e}")
+            return False
+
     def GetBatchesByVideo(self, VideoId: str) -> List[Batch]:
         """
         Récupère tous les batches d'une vidéo

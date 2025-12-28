@@ -141,6 +141,56 @@ class JobManager:
             self.Logger.error(f"Erreur lors de l'ajout de la vidéo: {e}")
             return None
 
+    def CancelVideo(self, VideoId: str) -> bool:
+        """
+        Annule le traitement d'une vidéo
+
+        Args:
+            VideoId: ID de la vidéo à annuler
+
+        Returns:
+            True si succès
+        """
+        try:
+            # Récupère la vidéo
+            VideoObj = self.Database.GetVideo(VideoId)
+            if not VideoObj:
+                self.Logger.error(f"Vidéo non trouvée: {VideoId}")
+                return False
+
+            # Vérifie si la vidéo peut être annulée
+            if VideoObj.Status == JobStatus.COMPLETED:
+                self.Logger.warning(f"Vidéo déjà terminée: {VideoId}")
+                return False
+
+            self.Logger.info(f"Annulation de la vidéo {VideoId}...")
+
+            # Si c'est le job en cours, on l'arrête
+            if self.CurrentJobId == VideoId:
+                self.CurrentJobId = None
+                # Annuler les batches en cours
+                self.BatchDistributor.CancelVideoProcessing(VideoId)
+
+            # Supprime les batches associés
+            Batches = self.Database.GetBatchesByVideo(VideoId)
+            for Batch in Batches:
+                self.Database.DeleteBatch(Batch.BatchId)
+
+            # Met à jour le statut de la vidéo
+            VideoObj.Status = JobStatus.FAILED
+            VideoObj.ErrorMessage = "Annulé par l'utilisateur"
+            self.Database.UpdateVideo(VideoObj)
+
+            # Supprime les fichiers temporaires
+            self.VideoProcessor.CleanupVideoFiles(VideoId)
+
+            self.Logger.info(f"✓ Vidéo annulée: {VideoId}")
+            return True
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de l'annulation: {e}")
+            return False
+
     def GetNextQueuedJob(self) -> Optional[Video]:
         """
         Récupère le prochain job en attente

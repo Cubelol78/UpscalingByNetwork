@@ -456,6 +456,40 @@ class BatchDistributor:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la gestion du timeout: {e}")
 
+    def CancelVideoProcessing(self, VideoId: str):
+        """
+        Annule le traitement de tous les batches d'une vidéo
+
+        Args:
+            VideoId: ID de la vidéo
+        """
+        try:
+            self.Logger.info(f"Annulation du traitement pour la vidéo {VideoId}")
+
+            # Arrête la distribution si elle concerne cette vidéo
+            if self.Running:
+                asyncio.create_task(self.StopDistribution())
+
+            # Retire tous les batches actifs de cette vidéo du tracking
+            BatchesToRemove = []
+            for BatchId, BatchInfo in self.ActiveBatches.items():
+                BatchObj = self.Database.GetBatch(BatchId)
+                if BatchObj and BatchObj.VideoId == VideoId:
+                    BatchesToRemove.append(BatchId)
+                    # Remet le client en idle
+                    ClientId = BatchInfo.get("client_id")
+                    if ClientId:
+                        self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.IDLE)
+
+            for BatchId in BatchesToRemove:
+                del self.ActiveBatches[BatchId]
+                self.Logger.info(f"Batch {BatchId} retiré du tracking actif")
+
+            self.Logger.info(f"✓ Traitement annulé pour la vidéo {VideoId}")
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de l'annulation du traitement: {e}")
+
     def GetDistributionStats(self, VideoId: str) -> dict:
         """
         Récupère les statistiques de distribution

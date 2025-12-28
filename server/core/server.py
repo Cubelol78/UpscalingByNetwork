@@ -12,7 +12,7 @@ from server.core.client_manager import ClientManager
 from server.database.db_manager import DatabaseManager
 from shared.utils.logger import GetServerLogger
 from shared.utils.constants import NetworkConfig, PathConfig
-from shared.protocol.messages import MessageFactory, HeartbeatPong
+from shared.protocol.messages import MessageFactory, HeartbeatPong, BatchResult
 
 
 class UpscalingServer:
@@ -43,7 +43,19 @@ class UpscalingServer:
         # Gestionnaire de clients
         self.ClientManager = None
 
+        # Distributeur de batches (sera défini après initialisation)
+        self.BatchDistributor = None
+
         self.Logger.info("Serveur initialisé")
+
+    def SetBatchDistributor(self, Distributor):
+        """
+        Définit le distributeur de batches
+
+        Args:
+            Distributor: Instance de BatchDistributor
+        """
+        self.BatchDistributor = Distributor
 
     def Initialize(self) -> bool:
         """
@@ -245,7 +257,15 @@ class UpscalingServer:
             await self.ClientManager.UpdateHeartbeat(ClientId)
             self.Logger.debug(f"Heartbeat pong reçu du client {ClientId}")
 
-        # Autres types de messages seront ajoutés dans les prochains sprints
+        # Résultat de batch
+        elif isinstance(Message, BatchResult):
+            self.Logger.info(f"Résultat de batch reçu du client {ClientId}")
+            if self.BatchDistributor:
+                await self.BatchDistributor.ReceiveBatchResult(ClientId, Message)
+            else:
+                self.Logger.error("BatchDistributor non configuré - résultat ignoré")
+
+        # Autres types de messages
         else:
             self.Logger.debug(f"Message reçu du client {ClientId}: {MessageType}")
 

@@ -396,6 +396,15 @@ class VideoProcessor:
         except Exception as e:
             self.Logger.error(f"Erreur lors du nettoyage: {e}")
 
+    def CleanupVideoFiles(self, VideoId: str):
+        """
+        Nettoie tous les fichiers temporaires d'une vidéo annulée
+
+        Args:
+            VideoId: ID de la vidéo
+        """
+        self.CleanupVideoData(VideoId, KeepOutput=False)
+
     def GetVideoProgress(self, VideoId: str) -> Tuple[int, int, float]:
         """
         Récupère la progression d'une vidéo

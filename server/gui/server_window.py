@@ -198,6 +198,9 @@ class ServerWindow(QMainWindow):
                     self.Server.Database
                 )
 
+                # Connecter le distributeur au serveur pour recevoir les résultats
+                self.Server.SetBatchDistributor(Distributor)
+
                 self.JobManager = JobManager(
                     Processor,
                     Distributor,
