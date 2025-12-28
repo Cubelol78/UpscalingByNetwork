@@ -28,6 +28,7 @@ class UpscalingClient:
         self.Running = False
         self.Status = ClientStatus.IDLE
         self.CurrentBatch = None
+        self.ProcessingTask = None  # Tâche de traitement en arrière-plan
 
     async def Start(self, Host: str, Port: int, Password: str = "") -> bool:
         """
@@ -68,6 +69,14 @@ class UpscalingClient:
         self.Logger.info("Arrêt du client...")
 
         self.Running = False
+
+        # Annule la tâche de traitement en cours si elle existe
+        if self.ProcessingTask and not self.ProcessingTask.done():
+            self.ProcessingTask.cancel()
+            try:
+                await self.ProcessingTask
+            except asyncio.CancelledError:
+                self.Logger.info("Tâche de traitement annulée")
 
         # Déconnecte du serveur
         await self.ConnectionManager.Disconnect()
@@ -156,6 +165,7 @@ class UpscalingClient:
     async def _HandleBatchAssignment(self, Assignment: BatchAssignment):
         """
         Traite un batch d'images assigné
+        Lance le traitement en arrière-plan pour ne pas bloquer les heartbeats
 
         Args:
             Assignment: Message BatchAssignment
@@ -170,8 +180,30 @@ class UpscalingClient:
             # Met à jour le statut
             self.Status = ClientStatus.PROCESSING
 
-            # Traite le batch
-            Result = self.LocalProcessor.ProcessBatch(Assignment.Payload)
+            # Lance le traitement en tâche de fond pour ne pas bloquer la réception des heartbeats
+            self.ProcessingTask = asyncio.create_task(
+                self._ProcessBatchAsync(BatchId, Assignment.Payload)
+            )
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors du traitement du batch: {e}")
+            self.Status = ClientStatus.IDLE
+            self.CurrentBatch = None
+
+    async def _ProcessBatchAsync(self, BatchId: str, Payload: dict):
+        """
+        Traite un batch de manière asynchrone dans un thread séparé
+
+        Args:
+            BatchId: ID du batch
+            Payload: Données du batch
+        """
+        try:
+            # Traite le batch dans un thread séparé (Real-ESRGAN est bloquant)
+            Result = await asyncio.to_thread(
+                self.LocalProcessor.ProcessBatch,
+                Payload
+            )
 
             if not Result:
                 self.Logger.error(f"Échec du traitement du batch {BatchId}")
@@ -190,14 +222,14 @@ class UpscalingClient:
             else:
                 self.Logger.error(f"✗ Batch {BatchId} échoué: {Result.Payload.get('error_message')}")
 
+        except Exception as e:
+            self.Logger.error(f"Erreur lors du traitement async du batch: {e}")
+
+        finally:
             # Remet en idle
             self.Status = ClientStatus.IDLE
             self.CurrentBatch = None
-
-        except Exception as e:
-            self.Logger.error(f"Erreur lors du traitement du batch: {e}")
-            self.Status = ClientStatus.IDLE
-            self.CurrentBatch = None
+            self.ProcessingTask = None
 
     def GetStatus(self) -> dict:
         """

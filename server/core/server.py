@@ -218,10 +218,18 @@ class UpscalingServer:
 
         while self.Running:
             try:
-                # Reçoit un message du client (avec timeout)
+                # Détermine le timeout en fonction du statut du client
+                # Les clients en traitement ont besoin de plus de temps car Real-ESRGAN bloque
+                ClientStatus = self.ClientManager.GetClientStatus(ClientId)
+                if ClientStatus in ["processing", "receiving"]:
+                    CommunicationTimeout = NetworkConfig.BATCH_TIMEOUT
+                else:
+                    CommunicationTimeout = NetworkConfig.HEARTBEAT_TIMEOUT * 2
+
+                # Reçoit un message du client (avec timeout adapté)
                 MessageData = await asyncio.wait_for(
                     self.ClientManager.ReceiveMessage(ClientId, Decrypt=True),
-                    timeout=NetworkConfig.HEARTBEAT_TIMEOUT * 2
+                    timeout=CommunicationTimeout
                 )
 
                 if not MessageData:
