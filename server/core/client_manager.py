@@ -453,10 +453,18 @@ class ClientManager:
                         ClientsToRemove.append(ClientId)
                         continue
 
-                    # Vérifie le timeout
+                    # Vérifie le timeout - utilise BATCH_TIMEOUT si le client traite un batch
                     TimeSinceLastHeartbeat = time.time() - ClientInfo.LastHeartbeat
-                    if TimeSinceLastHeartbeat > NetworkConfig.HEARTBEAT_TIMEOUT:
-                        self.Logger.warning(f"Client {ClientId} timeout (pas de heartbeat depuis {TimeSinceLastHeartbeat:.1f}s)")
+
+                    # Les clients en traitement ont un timeout plus long (BATCH_TIMEOUT)
+                    # car Real-ESRGAN bloque l'envoi des heartbeats
+                    if ClientInfo.Status == ClientStatus.PROCESSING:
+                        TimeoutValue = NetworkConfig.BATCH_TIMEOUT
+                    else:
+                        TimeoutValue = NetworkConfig.HEARTBEAT_TIMEOUT
+
+                    if TimeSinceLastHeartbeat > TimeoutValue:
+                        self.Logger.warning(f"Client {ClientId} timeout (pas de heartbeat depuis {TimeSinceLastHeartbeat:.1f}s, statut: {ClientInfo.Status})")
                         ClientsToRemove.append(ClientId)
 
                 # Retire les clients timeout
