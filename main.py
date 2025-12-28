@@ -16,18 +16,19 @@ try:
     )
     FIREWALL_AVAILABLE = True
 except ImportError:
+    from typing import Tuple
     FIREWALL_AVAILABLE = False
 
-    def IsWindows():
+    def IsWindows() -> bool:
         return sys.platform == "win32"
 
-    def RequestFirewallPermission(AppName):
+    def RequestFirewallPermission(AppName: str) -> Tuple[bool, str]:
         return True, "Module pare-feu non disponible"
 
-    def ShowFirewallDialog():
+    def ShowFirewallDialog() -> bool:
         return False
 
-    def RunAsAdmin():
+    def RunAsAdmin() -> bool:
         return False
 
 
