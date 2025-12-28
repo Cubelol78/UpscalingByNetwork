@@ -20,6 +20,8 @@ from .config_tab import ConfigTab
 
 from server.core.server import UpscalingServer
 from server.core.job_manager import JobManager
+from server.core.video_processor import VideoProcessor
+from server.core.batch_distributor import BatchDistributor
 from server.database.db_manager import DatabaseManager
 from shared.utils.logger import GetServerLogger
 from shared.utils.constants import PathConfig
@@ -164,14 +166,12 @@ class ServerWindow(QMainWindow):
                 }
             }
 
-            # Créer les instances
+            # Créer le serveur
             self.Server = UpscalingServer(ServerConfig)
 
-            self.JobManager = JobManager(
-                Server=self.Server,
-                Database=self.Database,
-                WorkDirectory=GuiConfig['work_directory']
-            )
+            # Configuration pour le thread
+            WorkDir = GuiConfig['work_directory']
+            BatchSize = GuiConfig.get('batch_size', 100)
 
             # Initialiser et démarrer dans un thread asyncio séparé
             import threading
@@ -181,8 +181,26 @@ class ServerWindow(QMainWindow):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
 
-                # Initialiser et démarrer
+                # Initialiser le serveur (crée ClientManager)
                 loop.run_until_complete(self.Server.Initialize())
+
+                # Créer le VideoProcessor et BatchDistributor après Initialize
+                Processor = VideoProcessor(WorkDir, self.Server.Database)
+                Distributor = BatchDistributor(
+                    self.Server.ClientManager,
+                    Processor,
+                    self.Server.Database
+                )
+
+                self.JobManager = JobManager(
+                    Processor,
+                    Distributor,
+                    self.Server.Database,
+                    BatchSize
+                )
+
+                # Démarrer le JobManager et le serveur
+                loop.run_until_complete(self.JobManager.Start())
                 loop.run_until_complete(self.Server.Start())
 
                 # Garder la boucle active
@@ -198,7 +216,7 @@ class ServerWindow(QMainWindow):
             self.StatusLabel.setStyleSheet("color: green; font-weight: bold; font-size: 14px;")
             self.StartButton.setEnabled(False)
             self.StopButton.setEnabled(True)
-            self.UpdateStatusBar(f"Serveur démarré sur {Config['ip']}:{Config['port']}")
+            self.UpdateStatusBar(f"Serveur démarré sur {GuiConfig['ip']}:{GuiConfig['port']}")
 
             self.Logger.info("Serveur démarré avec succès")
 
