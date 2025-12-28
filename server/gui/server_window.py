@@ -2,6 +2,7 @@
 Fenêtre principale de l'interface graphique du serveur
 """
 
+import os
 import sys
 import asyncio
 from PyQt5.QtWidgets import (
@@ -21,6 +22,7 @@ from server.core.server import UpscalingServer
 from server.core.job_manager import JobManager
 from server.database.db_manager import DatabaseManager
 from shared.utils.logger import GetServerLogger
+from shared.utils.constants import PathConfig
 
 
 class ServerWindow(QMainWindow):
@@ -36,7 +38,8 @@ class ServerWindow(QMainWindow):
         self.Logger.info("Initialisation de l'interface graphique du serveur")
 
         # Composants serveur
-        self.Database = DatabaseManager()
+        DbPath = os.path.join(PathConfig.WORK_DIR, PathConfig.DATABASE_NAME)
+        self.Database = DatabaseManager(DbPath)
         self.Server = None
         self.JobManager = None
         self.IsRunning = False
@@ -147,22 +150,27 @@ class ServerWindow(QMainWindow):
         """Démarre le serveur"""
         try:
             # Récupérer la configuration
-            Config = self.ConfigTab.GetConfiguration()
+            GuiConfig = self.ConfigTab.GetConfiguration()
 
-            self.Logger.info(f"Démarrage du serveur sur {Config['ip']}:{Config['port']}")
+            self.Logger.info(f"Démarrage du serveur sur {GuiConfig['ip']}:{GuiConfig['port']}")
+
+            # Formater la configuration pour UpscalingServer
+            ServerConfig = {
+                "server": {
+                    "ip": GuiConfig['ip'],
+                    "port": GuiConfig['port'],
+                    "password": GuiConfig['password'],
+                    "work_directory": GuiConfig['work_directory']
+                }
+            }
 
             # Créer les instances
-            self.Server = UpscalingServer(
-                Host=Config['ip'],
-                Port=Config['port'],
-                Password=Config['password'],
-                Database=self.Database
-            )
+            self.Server = UpscalingServer(ServerConfig)
 
             self.JobManager = JobManager(
                 Server=self.Server,
                 Database=self.Database,
-                WorkDirectory=Config['work_directory']
+                WorkDirectory=GuiConfig['work_directory']
             )
 
             # Initialiser et démarrer dans un thread asyncio séparé

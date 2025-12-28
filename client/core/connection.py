@@ -18,8 +18,45 @@ from shared.utils.logger import GetClientLogger
 from shared.utils.constants import NetworkConfig
 
 
+class SavedServersWrapper:
+    """Wrapper pour l'accès aux serveurs sauvegardés via attribut de classe"""
+
+    def __init__(self):
+        self._Manager = None
+
+    def _GetManager(self):
+        if self._Manager is None:
+            self._Manager = SavedServersManager()
+        return self._Manager
+
+    def LoadServers(self) -> list:
+        """Charge et retourne la liste des serveurs"""
+        Manager = self._GetManager()
+        Servers = Manager.GetAllServers()
+        Result = []
+        for Name, Info in Servers.items():
+            Result.append({
+                "name": Name,
+                "host": Info.get("host", ""),
+                "port": Info.get("port", 12345),
+                "password": Info.get("password", "")
+            })
+        return Result
+
+    def SaveServer(self, Name: str, Host: str, Port: int, Password: str = ""):
+        """Sauvegarde un serveur"""
+        self._GetManager().AddServer(Name, Host, Port, Password)
+
+    def RemoveServer(self, Name: str):
+        """Supprime un serveur"""
+        self._GetManager().RemoveServer(Name)
+
+
 class ConnectionManager:
     """Gestionnaire de connexion au serveur"""
+
+    # Attribut de classe pour accès aux serveurs sauvegardés
+    SavedServers = SavedServersWrapper()
 
     def __init__(self):
         """Initialise le gestionnaire de connexion"""

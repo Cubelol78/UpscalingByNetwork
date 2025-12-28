@@ -1,10 +1,10 @@
 {
   "server": {
-    "ip": "0.0.0.0",
+    "ip": "192.168.0.74",
     "port": 8765,
-    "password": "",
+    "password": "0258",
     "work_directory": "./work",
-    "batch_size": 100
+    "batch_size": 20
   },
   "client": {
     "saved_servers": []
