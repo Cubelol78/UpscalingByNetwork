@@ -9,6 +9,27 @@ import os
 import subprocess
 import argparse
 
+# Import conditionnel pour le pare-feu Windows
+try:
+    from shared.utils.firewall import (
+        IsWindows, RequestFirewallPermission, ShowFirewallDialog, RunAsAdmin
+    )
+    FIREWALL_AVAILABLE = True
+except ImportError:
+    FIREWALL_AVAILABLE = False
+
+    def IsWindows():
+        return sys.platform == "win32"
+
+    def RequestFirewallPermission(AppName):
+        return True, "Module pare-feu non disponible"
+
+    def ShowFirewallDialog():
+        return False
+
+    def RunAsAdmin():
+        return False
+
 
 def CheckVirtualEnv():
     """Vérifie si un environnement virtuel Python est actif"""
@@ -144,11 +165,47 @@ def ChooseMode(CliMode):
                 print("Choix invalide. Veuillez choisir 1 ou 2")
 
 
+def CheckFirewallPermissions(AppName: str) -> bool:
+    """
+    Vérifie et configure les permissions pare-feu sur Windows
+
+    Args:
+        AppName: Nom de l'application pour les règles
+
+    Returns:
+        True si on peut continuer
+    """
+    if not IsWindows() or not FIREWALL_AVAILABLE:
+        return True
+
+    Success, Message = RequestFirewallPermission(AppName)
+    if Success:
+        print(f"✓ Pare-feu: {Message}")
+        return True
+
+    print(f"⚠ Pare-feu: {Message}")
+
+    # Demande à l'utilisateur
+    Response = input("\nVoulez-vous configurer le pare-feu automatiquement ? (oui/non): ").strip().lower()
+    if Response in ("oui", "o", "yes", "y"):
+        if RunAsAdmin():
+            print("Relancement en mode administrateur...")
+            sys.exit(0)
+        else:
+            print("Impossible de relancer en mode administrateur")
+
+    print("Continuation sans configuration du pare-feu...")
+    return True
+
+
 def LaunchServer(CliMode):
     """Lance le serveur"""
     print("\n" + "="*60)
     print("Lancement du serveur d'upscaling")
     print("="*60)
+
+    # Vérification du pare-feu Windows
+    CheckFirewallPermissions("UpscalingServer")
 
     if CliMode:
         try:
@@ -173,6 +230,9 @@ def LaunchClient(CliMode):
     print("\n" + "="*60)
     print("Lancement du client d'upscaling")
     print("="*60)
+
+    # Vérification du pare-feu Windows
+    CheckFirewallPermissions("UpscalingClient")
 
     if CliMode:
         try:

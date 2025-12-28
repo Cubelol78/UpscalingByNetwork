@@ -19,6 +19,9 @@ from client.core.client import UpscalingClient
 from client.core.connection import ConnectionManager
 from client.core.processor import LocalProcessor
 from shared.utils.logger import GetClientLogger
+from shared.utils.firewall import (
+    IsWindows, RequestFirewallPermission, ShowFirewallDialog, RunAsAdmin
+)
 
 
 class ClientWindow(QMainWindow):
@@ -190,6 +193,18 @@ class ClientWindow(QMainWindow):
 
 def RunClientGUI():
     """Lance l'interface graphique du client"""
+    # Vérification du pare-feu Windows
+    if IsWindows():
+        Success, Message = RequestFirewallPermission("UpscalingClient")
+        if not Success:
+            # Demande à l'utilisateur s'il veut configurer le pare-feu
+            if ShowFirewallDialog():
+                # Relance en mode administrateur
+                if RunAsAdmin():
+                    sys.exit(0)  # Ferme cette instance, la nouvelle s'ouvre en admin
+            # Continue quand même, l'utilisateur a refusé ou ça a échoué
+            print(f"Avertissement pare-feu: {Message}")
+
     App = QApplication(sys.argv)
     Window = ClientWindow()
     Window.show()

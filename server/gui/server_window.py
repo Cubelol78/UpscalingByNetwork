@@ -25,6 +25,9 @@ from server.core.batch_distributor import BatchDistributor
 from server.database.db_manager import DatabaseManager
 from shared.utils.logger import GetServerLogger
 from shared.utils.constants import PathConfig
+from shared.utils.firewall import (
+    IsWindows, RequestFirewallPermission, ShowFirewallDialog, RunAsAdmin
+)
 
 
 class ServerWindow(QMainWindow):
@@ -310,6 +313,18 @@ class ServerWindow(QMainWindow):
 
 def RunServerGUI():
     """Lance l'interface graphique du serveur"""
+    # Vérification du pare-feu Windows
+    if IsWindows():
+        Success, Message = RequestFirewallPermission("UpscalingServer")
+        if not Success:
+            # Demande à l'utilisateur s'il veut configurer le pare-feu
+            if ShowFirewallDialog():
+                # Relance en mode administrateur
+                if RunAsAdmin():
+                    sys.exit(0)  # Ferme cette instance, la nouvelle s'ouvre en admin
+            # Continue quand même, l'utilisateur a refusé ou ça a échoué
+            print(f"Avertissement pare-feu: {Message}")
+
     App = QApplication(sys.argv)
     Window = ServerWindow()
     Window.show()
