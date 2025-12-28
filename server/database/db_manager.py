@@ -321,6 +321,34 @@ class DatabaseManager:
             self.Logger.error(f"Erreur lors de la récupération de la vidéo courante: {e}")
             return None
 
+    def GetAllVideos(self, Limit: int = None) -> List[Video]:
+        """
+        Récupère toutes les vidéos
+
+        Args:
+            Limit: Nombre maximum de vidéos à retourner (None = toutes)
+
+        Returns:
+            Liste des vidéos
+        """
+        try:
+            Cursor = self.Connection.cursor()
+            if Limit:
+                Rows = Cursor.execute(
+                    "SELECT * FROM videos ORDER BY created_at DESC LIMIT ?",
+                    (Limit,)
+                ).fetchall()
+            else:
+                Rows = Cursor.execute(
+                    "SELECT * FROM videos ORDER BY created_at DESC"
+                ).fetchall()
+
+            return [Video.FromDict(dict(Row)) for Row in Rows]
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la récupération des vidéos: {e}")
+            return []
+
     # ========================================================================
     # BATCHES
     # ========================================================================

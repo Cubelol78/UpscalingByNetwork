@@ -42,6 +42,7 @@ class ServerWindow(QMainWindow):
         # Composants serveur
         DbPath = os.path.join(PathConfig.WORK_DIR, PathConfig.DATABASE_NAME)
         self.Database = DatabaseManager(DbPath)
+        self.Database.Connect()
         self.Server = None
         self.JobManager = None
         self.IsRunning = False
@@ -181,8 +182,10 @@ class ServerWindow(QMainWindow):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
 
-                # Initialiser le serveur (crée ClientManager)
-                loop.run_until_complete(self.Server.Initialize())
+                # Initialiser le serveur (crée ClientManager) - fonction synchrone
+                if not self.Server.Initialize():
+                    self.Logger.error("Échec de l'initialisation du serveur")
+                    return
 
                 # Créer le VideoProcessor et BatchDistributor après Initialize
                 Processor = VideoProcessor(WorkDir, self.Server.Database)
@@ -199,7 +202,7 @@ class ServerWindow(QMainWindow):
                     BatchSize
                 )
 
-                # Démarrer le JobManager et le serveur
+                # Démarrer le JobManager et le serveur (fonctions async)
                 loop.run_until_complete(self.JobManager.Start())
                 loop.run_until_complete(self.Server.Start())
 
