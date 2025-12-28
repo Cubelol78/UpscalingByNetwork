@@ -347,3 +347,6 @@ htmlcov/
 
 # Docker volumes
 docker-data/
+
+
+!realesrgan*
