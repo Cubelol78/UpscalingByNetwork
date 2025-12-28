@@ -13,6 +13,23 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 
+# Paramètres DH pré-générés (RFC 3526 - Group 14, 2048 bits)
+# Ceci évite les problèmes de permission sur Windows et accélère l'initialisation
+RFC3526_PRIME_2048 = int(
+    "FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"
+    "29024E088A67CC74020BBEA63B139B22514A08798E3404DD"
+    "EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245"
+    "E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED"
+    "EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3D"
+    "C2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F"
+    "83655D23DCA3AD961C62F356208552BB9ED529077096966D"
+    "670C354E4ABC9804F1746C08CA18217C32905E462E36CE3B"
+    "E39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9"
+    "DE2BCBF6955817183995497CEA956AE515D2261898FA0510"
+    "15728E5A8AACAA68FFFFFFFFFFFFFFFF", 16
+)
+RFC3526_GENERATOR = 2
+
 
 class EncryptionHandler:
     """Gestionnaire de chiffrement avec échange de clés Diffie-Hellman"""
@@ -27,13 +44,13 @@ class EncryptionHandler:
         self.SharedKey = None
         self.AesKey = None
 
-        # Génère les paramètres DH si ce n'est pas déjà fait
+        # Utilise les paramètres DH pré-générés (RFC 3526)
         if EncryptionHandler.DH_PARAMETERS is None:
-            EncryptionHandler.DH_PARAMETERS = dh.generate_parameters(
-                generator=2,
-                key_size=2048,
-                backend=default_backend()
+            ParameterNumbers = dh.DHParameterNumbers(
+                p=RFC3526_PRIME_2048,
+                g=RFC3526_GENERATOR
             )
+            EncryptionHandler.DH_PARAMETERS = ParameterNumbers.parameters(default_backend())
 
     def GenerateKeyPair(self) -> bytes:
         """

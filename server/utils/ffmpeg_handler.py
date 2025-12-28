@@ -31,19 +31,28 @@ class FFmpegHandler:
             from imageio_ffmpeg import get_ffmpeg_exe
             self.FfmpegPath = get_ffmpeg_exe()
 
-            # Dérive ffprobe depuis ffmpeg
+            # Dérive ffprobe depuis ffmpeg (si disponible)
             FfmpegDir = os.path.dirname(self.FfmpegPath)
             if os.name == 'nt':  # Windows
-                self.FfprobePath = os.path.join(FfmpegDir, 'ffprobe.exe')
+                FfprobePath = os.path.join(FfmpegDir, 'ffprobe.exe')
             else:  # Linux/Mac
-                self.FfprobePath = os.path.join(FfmpegDir, 'ffprobe')
+                FfprobePath = os.path.join(FfmpegDir, 'ffprobe')
 
-            # Vérifie que ffprobe existe, sinon utilise la commande système
-            if not os.path.exists(self.FfprobePath):
-                self.FfprobePath = 'ffprobe'
+            # Vérifie que ffprobe existe
+            if os.path.exists(FfprobePath):
+                self.FfprobePath = FfprobePath
+                self.Logger.info(f"FFprobe détecté: {self.FfprobePath}")
+            else:
+                # Essaie la commande système
+                try:
+                    subprocess.run(['ffprobe', '-version'], capture_output=True, check=True)
+                    self.FfprobePath = 'ffprobe'
+                    self.Logger.info("FFprobe système détecté")
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    self.FfprobePath = None
+                    self.Logger.warning("FFprobe non disponible - utilisation de FFmpeg pour les métadonnées")
 
             self.Logger.info(f"FFmpeg détecté: {self.FfmpegPath}")
-            self.Logger.info(f"FFprobe: {self.FfprobePath}")
 
         except Exception as e:
             self.Logger.error(f"Impossible de détecter FFmpeg: {e}")
@@ -60,35 +69,66 @@ class FFmpegHandler:
             Framerate (fps) ou None si erreur
         """
         try:
-            Command = [
-                self.FfprobePath,
-                '-v', 'error',
-                '-select_streams', 'v:0',
-                '-show_entries', 'stream=r_frame_rate',
-                '-of', 'json',
-                VideoPath
-            ]
+            # Utilise ffprobe si disponible
+            if self.FfprobePath:
+                Command = [
+                    self.FfprobePath,
+                    '-v', 'error',
+                    '-select_streams', 'v:0',
+                    '-show_entries', 'stream=r_frame_rate',
+                    '-of', 'json',
+                    VideoPath
+                ]
 
-            Result = subprocess.run(
-                Command,
-                capture_output=True,
-                text=True,
-                check=True
-            )
+                Result = subprocess.run(
+                    Command,
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
 
-            Data = json.loads(Result.stdout)
-            FrameRateStr = Data['streams'][0]['r_frame_rate']
+                Data = json.loads(Result.stdout)
+                FrameRateStr = Data['streams'][0]['r_frame_rate']
 
-            # Parse la fraction (ex: "30000/1001" ou "30/1")
-            Num, Den = map(int, FrameRateStr.split('/'))
-            Fps = Num / Den
+                # Parse la fraction (ex: "30000/1001" ou "30/1")
+                Num, Den = map(int, FrameRateStr.split('/'))
+                Fps = Num / Den
+            else:
+                # Fallback: utilise ffmpeg -i et parse stderr
+                Fps = self._ExtractFramerateWithFfmpeg(VideoPath)
 
-            self.Logger.info(f"Framerate extrait: {Fps:.2f} fps")
+            if Fps:
+                self.Logger.info(f"Framerate extrait: {Fps:.2f} fps")
             return Fps
 
         except Exception as e:
             self.Logger.error(f"Erreur lors de l'extraction du framerate: {e}")
-            return None
+            # Fallback si ffprobe échoue
+            try:
+                return self._ExtractFramerateWithFfmpeg(VideoPath)
+            except Exception:
+                return None
+
+    def _ExtractFramerateWithFfmpeg(self, VideoPath: str) -> Optional[float]:
+        """Extrait le framerate en utilisant ffmpeg -i"""
+        Command = [self.FfmpegPath, '-i', VideoPath]
+        Result = subprocess.run(Command, capture_output=True, text=True)
+
+        # Parse stderr pour trouver le framerate
+        # Format typique: "25 fps" ou "29.97 fps" ou "30 tbr"
+        Output = Result.stderr
+
+        # Cherche le pattern fps
+        FpsMatch = re.search(r'(\d+(?:\.\d+)?)\s*fps', Output)
+        if FpsMatch:
+            return float(FpsMatch.group(1))
+
+        # Cherche le pattern tbr (time base rate)
+        TbrMatch = re.search(r'(\d+(?:\.\d+)?)\s*tbr', Output)
+        if TbrMatch:
+            return float(TbrMatch.group(1))
+
+        return None
 
     def ExtractVideoMetadata(self, VideoPath: str) -> Optional[Dict]:
         """
@@ -101,29 +141,108 @@ class FFmpegHandler:
             Dictionnaire de métadonnées ou None
         """
         try:
-            Command = [
-                self.FfprobePath,
-                '-v', 'error',
-                '-show_format',
-                '-show_streams',
-                '-of', 'json',
-                VideoPath
-            ]
+            # Utilise ffprobe si disponible
+            if self.FfprobePath:
+                Command = [
+                    self.FfprobePath,
+                    '-v', 'error',
+                    '-show_format',
+                    '-show_streams',
+                    '-of', 'json',
+                    VideoPath
+                ]
 
-            Result = subprocess.run(
-                Command,
-                capture_output=True,
-                text=True,
-                check=True
-            )
+                Result = subprocess.run(
+                    Command,
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
 
-            Metadata = json.loads(Result.stdout)
-            self.Logger.info(f"Métadonnées extraites de {os.path.basename(VideoPath)}")
+                Metadata = json.loads(Result.stdout)
+            else:
+                # Fallback: utilise ffmpeg -i et parse stderr
+                Metadata = self._ExtractMetadataWithFfmpeg(VideoPath)
+
+            if Metadata:
+                self.Logger.info(f"Métadonnées extraites de {os.path.basename(VideoPath)}")
             return Metadata
 
         except Exception as e:
             self.Logger.error(f"Erreur lors de l'extraction des métadonnées: {e}")
-            return None
+            # Fallback si ffprobe échoue
+            try:
+                return self._ExtractMetadataWithFfmpeg(VideoPath)
+            except Exception:
+                return None
+
+    def _ExtractMetadataWithFfmpeg(self, VideoPath: str) -> Optional[Dict]:
+        """Extrait les métadonnées en utilisant ffmpeg -i"""
+        Command = [self.FfmpegPath, '-i', VideoPath]
+        Result = subprocess.run(Command, capture_output=True, text=True)
+        Output = Result.stderr
+
+        Metadata = {
+            'format': {},
+            'streams': []
+        }
+
+        # Parse la durée
+        DurationMatch = re.search(r'Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)', Output)
+        if DurationMatch:
+            Hours, Minutes, Seconds = DurationMatch.groups()
+            TotalSeconds = int(Hours) * 3600 + int(Minutes) * 60 + float(Seconds)
+            Metadata['format']['duration'] = str(TotalSeconds)
+
+        # Parse le bitrate global
+        BitrateMatch = re.search(r'bitrate:\s*(\d+)\s*kb/s', Output)
+        if BitrateMatch:
+            Metadata['format']['bit_rate'] = str(int(BitrateMatch.group(1)) * 1000)
+
+        # Parse les streams vidéo
+        VideoMatch = re.search(
+            r'Stream #\d+:\d+.*Video:\s*(\w+)[^,]*,\s*(\w+)[^,]*,\s*(\d+)x(\d+).*?(\d+(?:\.\d+)?)\s*fps',
+            Output
+        )
+        if VideoMatch:
+            Codec, PixFmt, Width, Height, Fps = VideoMatch.groups()
+            Metadata['streams'].append({
+                'codec_type': 'video',
+                'codec_name': Codec,
+                'pix_fmt': PixFmt,
+                'width': int(Width),
+                'height': int(Height),
+                'r_frame_rate': f"{Fps}/1"
+            })
+
+        # Parse les streams audio
+        AudioMatches = re.finditer(
+            r'Stream #\d+:(\d+).*Audio:\s*(\w+)[^,]*,\s*(\d+)\s*Hz',
+            Output
+        )
+        for Match in AudioMatches:
+            StreamIdx, Codec, SampleRate = Match.groups()
+            Metadata['streams'].append({
+                'codec_type': 'audio',
+                'codec_name': Codec,
+                'sample_rate': SampleRate,
+                'index': int(StreamIdx)
+            })
+
+        # Parse les streams de sous-titres
+        SubMatches = re.finditer(
+            r'Stream #\d+:(\d+).*Subtitle:\s*(\w+)',
+            Output
+        )
+        for Match in SubMatches:
+            StreamIdx, Codec = Match.groups()
+            Metadata['streams'].append({
+                'codec_type': 'subtitle',
+                'codec_name': Codec,
+                'index': int(StreamIdx)
+            })
+
+        return Metadata if Metadata['streams'] else None
 
     def GetTotalFrames(self, VideoPath: str) -> Optional[int]:
         """
@@ -136,35 +255,65 @@ class FFmpegHandler:
             Nombre de frames ou None
         """
         try:
-            Command = [
-                self.FfprobePath,
-                '-v', 'error',
-                '-select_streams', 'v:0',
-                '-count_frames',
-                '-show_entries', 'stream=nb_read_frames',
-                '-of', 'json',
-                VideoPath
-            ]
+            # Utilise ffprobe si disponible
+            if self.FfprobePath:
+                Command = [
+                    self.FfprobePath,
+                    '-v', 'error',
+                    '-select_streams', 'v:0',
+                    '-count_frames',
+                    '-show_entries', 'stream=nb_read_frames',
+                    '-of', 'json',
+                    VideoPath
+                ]
 
-            Result = subprocess.run(
-                Command,
-                capture_output=True,
-                text=True,
-                check=True
-            )
+                Result = subprocess.run(
+                    Command,
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
 
-            Data = json.loads(Result.stdout)
+                Data = json.loads(Result.stdout)
 
-            if 'streams' in Data and len(Data['streams']) > 0:
-                Frames = int(Data['streams'][0].get('nb_read_frames', 0))
-                self.Logger.info(f"Nombre total de frames: {Frames}")
-                return Frames
+                if 'streams' in Data and len(Data['streams']) > 0:
+                    Frames = int(Data['streams'][0].get('nb_read_frames', 0))
+                    self.Logger.info(f"Nombre total de frames: {Frames}")
+                    return Frames
+            else:
+                # Fallback: calcule à partir de la durée et du framerate
+                Frames = self._GetTotalFramesWithFfmpeg(VideoPath)
+                if Frames:
+                    self.Logger.info(f"Nombre total de frames (estimé): {Frames}")
+                    return Frames
 
             return None
 
         except Exception as e:
             self.Logger.error(f"Erreur lors du comptage des frames: {e}")
+            # Fallback
+            try:
+                return self._GetTotalFramesWithFfmpeg(VideoPath)
+            except Exception:
+                return None
+
+    def _GetTotalFramesWithFfmpeg(self, VideoPath: str) -> Optional[int]:
+        """Estime le nombre de frames en utilisant durée * framerate"""
+        Metadata = self._ExtractMetadataWithFfmpeg(VideoPath)
+        if not Metadata:
             return None
+
+        # Récupère la durée
+        Duration = float(Metadata.get('format', {}).get('duration', 0))
+        if not Duration:
+            return None
+
+        # Récupère le framerate
+        Fps = self._ExtractFramerateWithFfmpeg(VideoPath)
+        if not Fps:
+            return None
+
+        return int(Duration * Fps)
 
     def ExtractAudioTracks(self, VideoPath: str, OutputDir: str) -> List[str]:
         """
