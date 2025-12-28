@@ -2,7 +2,7 @@
   "server": {
     "ip": "192.168.0.74",
     "port": 8765,
-    "password": "0258",
+    "password": "",
     "work_directory": "./work",
     "batch_size": 20
   },

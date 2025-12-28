@@ -131,10 +131,10 @@ class ClientsTab(QWidget):
                 self.ClientsTable.setItem(RowPosition, 3, QTableWidgetItem(CurrentBatch))
 
                 # Dernier heartbeat
-                import datetime
+                import time
                 if ClientInfo.LastHeartbeat:
-                    TimeDiff = datetime.datetime.now() - ClientInfo.LastHeartbeat
-                    HeartbeatText = f"Il y a {TimeDiff.seconds}s"
+                    TimeDiff = time.time() - ClientInfo.LastHeartbeat
+                    HeartbeatText = f"Il y a {int(TimeDiff)}s"
                 else:
                     HeartbeatText = "Jamais"
                 self.ClientsTable.setItem(RowPosition, 4, QTableWidgetItem(HeartbeatText))
