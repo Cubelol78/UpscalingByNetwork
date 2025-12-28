@@ -122,16 +122,47 @@ def AskYesNo(Question):
             print("Réponse invalide. Veuillez répondre 'oui' ou 'non'")
 
 
-def RestartInVenv(VenvPath, Args):
-    """Redémarre le script dans l'environnement virtuel"""
+def GetVenvPythonPath(VenvPath):
+    """Retourne le chemin vers l'exécutable Python du venv"""
     if sys.platform == "win32":
         PythonPath = os.path.join(VenvPath, "Scripts", "python.exe")
     else:
         PythonPath = os.path.join(VenvPath, "bin", "python")
+    return PythonPath
+
+
+def VenvExists(VenvPath):
+    """Vérifie si un environnement virtuel valide existe"""
+    PythonPath = GetVenvPythonPath(VenvPath)
+    return os.path.exists(PythonPath)
+
+
+def RestartInVenv(VenvPath, Args):
+    """Redémarre le script dans l'environnement virtuel"""
+    PythonPath = GetVenvPythonPath(VenvPath)
+
+    if not os.path.exists(PythonPath):
+        print(f"✗ Python du venv non trouvé: {PythonPath}")
+        return False
 
     # Relance le script avec le Python du venv
     ScriptPath = os.path.abspath(__file__)
-    os.execv(PythonPath, [PythonPath, ScriptPath] + Args)
+
+    # Utilise subprocess au lieu de os.execv pour une meilleure compatibilité
+    try:
+        Result = subprocess.run(
+            [PythonPath, ScriptPath] + Args,
+            cwd=os.path.dirname(ScriptPath)
+        )
+        sys.exit(Result.returncode)
+    except Exception as e:
+        print(f"✗ Erreur lors du relancement dans le venv: {e}")
+        # Fallback vers os.execv
+        try:
+            os.execv(PythonPath, [PythonPath, ScriptPath] + Args)
+        except Exception as e2:
+            print(f"✗ Erreur execv: {e2}")
+            return False
 
 
 def ChooseMode(CliMode):
@@ -275,22 +306,26 @@ def Main():
     VenvPath = os.path.join(os.path.dirname(__file__), "venv")
 
     if not CheckVirtualEnv():
-        print("\n⚠ Aucun environnement virtuel Python détecté")
-
-        if os.path.exists(VenvPath):
-            print(f"Un environnement virtuel existe déjà dans: {VenvPath}")
-            if AskYesNo("Voulez-vous l'utiliser?"):
-                # Redémarre dans le venv existant
-                RestartInVenv(VenvPath, sys.argv[1:])
-            else:
-                print("Tentative de lancement sans environnement virtuel...")
+        # Vérifie si un venv valide existe
+        if VenvExists(VenvPath):
+            # Relance automatiquement dans le venv existant sans demander
+            print(f"\n→ Environnement virtuel détecté dans: {VenvPath}")
+            print("  Relancement automatique dans l'environnement virtuel...")
+            RestartInVenv(VenvPath, sys.argv[1:])
+            # Si on arrive ici, le relancement a échoué
+            print("\n⚠ Impossible de relancer dans le venv")
+            if not AskYesNo("Voulez-vous continuer sans environnement virtuel?"):
+                sys.exit(1)
         else:
+            print("\n⚠ Aucun environnement virtuel Python détecté")
             if AskYesNo("Voulez-vous créer un environnement Python pour ce logiciel?"):
                 if CreateVirtualEnv(VenvPath):
                     if InstallDependencies(VenvPath):
                         print("\n✓ Environnement prêt. Redémarrage dans le venv...")
                         # Redémarre dans le nouveau venv
                         RestartInVenv(VenvPath, sys.argv[1:])
+                        # Si on arrive ici, le relancement a échoué
+                        print("\n⚠ Impossible de relancer dans le venv")
                     else:
                         print("\n✗ Impossible d'installer les dépendances")
                         if not AskYesNo("Voulez-vous continuer quand même?"):
