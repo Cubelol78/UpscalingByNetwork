@@ -1,331 +1,439 @@
-# UpscalingByNetwork
+# Système d'Upscaling Vidéo en Réseau
 
-> **Distributed Video Upscaling System powered by Real-ESRGAN**
+Système distribué d'upscaling vidéo utilisant Real-ESRGAN pour traiter des vidéos en parallèle sur plusieurs ordinateurs.
 
-A high-performance, distributed video upscaling solution that leverages multiple machines across a network to process video files using Real-ESRGAN AI models. Perfect for upscaling anime, videos, and images with GPU acceleration.
+## 📋 Table des matières
 
-[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey.svg)](https://github.com/)
-[![Docker](https://img.shields.io/badge/Docker-Supported-blue.svg)](https://www.docker.com/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-
----
-
-## Table of Contents
-
-- [Features](#features)
+- [Caractéristiques](#caractéristiques)
 - [Architecture](#architecture)
-- [Quick Start](#quick-start)
 - [Installation](#installation)
-- [Usage](#usage)
+- [Utilisation](#utilisation)
 - [Configuration](#configuration)
-- [System Requirements](#system-requirements)
-- [Performance](#performance)
-- [Troubleshooting](#troubleshooting)
 - [Documentation](#documentation)
-- [Contributing](#contributing)
-- [License](#license)
+- [Sécurité](#sécurité)
 
----
+## ✨ Caractéristiques
 
-## Features
-
-### Core Capabilities
-- ✅ **Distributed Processing**: Harness multiple machines across your network for parallel video upscaling
-- ✅ **Real-ESRGAN Integration**: Industry-leading AI upscaling with multiple model support
-- ✅ **GPU Acceleration**: NVIDIA, AMD, and Intel GPU support via Vulkan
-- ✅ **High Performance**: Process large 4K+ videos efficiently with batch processing
-- ✅ **Automatic Load Balancing**: Smart batch distribution based on client capabilities
-- ✅ **Fault Tolerance**: Automatic retry on failure, batch reassignment, client monitoring
-
-### Interfaces
-- ✅ **Dual Interfaces**: Full-featured GUI (PyQt5) and powerful CLI (Click + Rich)
-- ✅ **Headless Mode**: Run server/clients as background services
-- ✅ **Cross-Platform**: Native support for Linux, Windows, and macOS
-
-### Enterprise Features
-- ✅ **Encryption**: End-to-end encryption for secure batch transmission
-- ✅ **Authentication**: Client authentication and session management
-- ✅ **Resource Management**: CPU, memory, and GPU resource controls
-- ✅ **Monitoring**: Real-time statistics, progress tracking, performance metrics
-- ✅ **Docker Support**: Production-ready containers with GPU support
-- ✅ **Systemd Integration**: Linux service management with security hardening
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Server (Orchestrator)                    │
-│  • Job Management    • Batch Distribution                   │
-│  • Client Management • Video Processing Pipeline            │
-│  • GUI/CLI Interface                                        │
-└───────────────┬─────────────────────────────────────────────┘
-                │
-        WebSocket (Port 8888)
-                │
-    ┌───────────┼───────────┐
-    │           │           │
-┌───▼───┐   ┌──▼───┐   ┌──▼───┐
-│Client │   │Client│   │Client│
-│  #1   │   │  #2  │   │  #3  │
-│ GPU   │   │ CPU  │   │ GPU  │
-└───────┘   └──────┘   └──────┘
-```
-
-### Workflow
-
-1. **Video Submission**: Submit video to server (GUI or command line)
-2. **Frame Extraction**: Server extracts frames using FFmpeg
-3. **Batch Creation**: Frames divided into batches (default: 50 frames)
-4. **Distribution**: Batches assigned to available clients based on performance
-5. **Processing**: Clients upscale frames using Real-ESRGAN
-6. **Collection**: Server collects processed frames
-7. **Assembly**: Final video assembled with FFmpeg, audio preserved
-
----
-
-## Quick Start
-
-### Using Docker (Recommended)
-
-```bash
-# Clone repository
-git clone https://github.com/yourusername/UpscalingByNetwork.git
-cd UpscalingByNetwork/docker
-
-# Start server with Docker Compose
-cp .env.example .env
-docker-compose -f docker-compose-optimized.yml up -d
-
-# Server is now running on port 8888
-```
-
-### Manual Installation (Linux)
-
-```bash
-# Server
-cd scripts
-sudo ./install.sh --server
-upscaling-server  # Start server
-
-# Client (on other machines)
-sudo ./install.sh --client
-upscaling-client --host SERVER_IP
-```
-
----
-
-## Installation
-
-See detailed installation guides:
-- **Server**: [Server Installation Guide](docs/SERVER_INSTALL.md)
-- **Client**: [Client Installation Guide](docs/CLIENT_INSTALL.md)
-- **Docker**: [Docker Guide](docker/README.md)
-- **Systemd**: [Linux Services](scripts/services/systemd/README.md)
-
----
-
-## Usage
-
-### Server
-
-**GUI Mode** (automatic if display detected):
-```bash
-python3 server/server_main.py
-```
-
-**CLI Mode** (headless):
-```bash
-python3 server/server_main.py --no-gui --host 0.0.0.0 --port 8888
-```
-
-**Systemd Service** (Linux):
-```bash
-sudo systemctl start upscaling-server
-sudo journalctl -u upscaling-server -f
-```
+### Serveur
+- ✅ Gestion de file d'attente FIFO pour vidéos
+- ✅ Extraction automatique audio multi-pistes et sous-titres
+- ✅ Distribution intelligente des batches aux clients
+- ✅ Monitoring en temps réel de la progression
+- ✅ Réassemblage automatique avec audio et sous-titres
+- ✅ Support encodage AV1 (optionnel)
+- ✅ Interface CLI interactive
+- ✅ **Interface graphique (GUI) PyQt5**
+- ✅ Base de données SQLite pour tracking
+- ✅ Gestion des timeouts et retry automatique
 
 ### Client
+- ✅ Connexion sécurisée au serveur
+- ✅ Upscaling local avec Real-ESRGAN
+- ✅ Gestion des serveurs favoris
+- ✅ Interface CLI simple
+- ✅ **Interface graphique (GUI) PyQt5**
+- ✅ Heartbeat automatique
+- ✅ Nettoyage automatique des fichiers temporaires
 
-**GUI Mode**:
-```bash
-python3 client/linux/client_gui.py
+### Sécurité
+- 🔒 Handshake Diffie-Hellman (2048 bits)
+- 🔒 Chiffrement AES-256-GCM
+- 🔒 Authentification par mot de passe
+- 🔒 Communication end-to-end chiffrée
+
+## 🏗️ Architecture
+
+```
+┌─────────────────────┐
+│   Main.py (CLI)     │
+│  Point d'entrée     │
+└──────────┬──────────┘
+           │
+     ┌─────┴─────┐
+     │           │
+     ▼           ▼
+┌─────────┐  ┌─────────┐
+│ Serveur │  │ Client  │
+└────┬────┘  └────┬────┘
+     │            │
+     │  Réseau    │
+     │  Chiffré   │
+     └────────────┘
 ```
 
-**CLI Mode**:
-```bash
-python3 client/linux/client_main.py run --host SERVER_IP --port 8888
+### Pipeline de traitement
+
+```
+1. SERVEUR: Réception vidéo
+   └─→ Extraction (audio, sous-titres, métadonnées)
+   └─→ Découpage en images (frames)
+   └─→ Création de batches (100 images/batch)
+
+2. DISTRIBUTION
+   ├─→ Client 1: Batch 1 → Upscaling → Retour
+   ├─→ Client 2: Batch 2 → Upscaling → Retour
+   └─→ Client N: Batch N → Upscaling → Retour
+
+3. SERVEUR: Réassemblage
+   └─→ Images upscalées → Vidéo
+   └─→ Réintégration audio + sous-titres
+   └─→ Encodage AV1 (optionnel)
+   └─→ Vidéo finale ✓
 ```
 
-**Systemd Service** (Linux):
+## 📦 Installation
+
+### Prérequis
+
+- Python 3.8+
+- Linux (Ubuntu 24.04) ou Windows
+
+### Installation rapide
+
 ```bash
-sudo systemctl start upscaling-client@$USER
+# Cloner le repository
+git clone <repository_url>
+cd UpscalingByNetwork
+
+# Créer l'environnement virtuel (recommandé)
+python3 -m venv venv
+source venv/bin/activate  # Linux/Mac
+# ou
+venv\Scripts\activate  # Windows
+
+# Installer les dépendances
+pip install -r requirements.txt
 ```
+
+### Vérification
+
+```bash
+# Tester l'installation
+python3 main.py --cli
+```
+
+## 🚀 Utilisation
+
+### Mode GUI (Interface graphique) - Recommandé
+
+**Démarrer le serveur avec GUI:**
+```bash
+python3 main.py
+> Choisir: 1 (Serveur)
+# L'interface graphique s'ouvre automatiquement
+```
+
+**Démarrer le client avec GUI:**
+```bash
+python3 main.py
+> Choisir: 2 (Client)
+# L'interface graphique s'ouvre automatiquement
+```
+
+**Fonctionnalités GUI:**
+- 📊 Monitoring en temps réel
+- 🎨 Interface intuitive et moderne
+- 📈 Graphiques de progression
+- 🔧 Configuration visuelle
+- 💾 Gestion des serveurs favoris
+
+**Documentation complète:** Voir [GUI_GUIDE.md](GUI_GUIDE.md)
 
 ---
 
-## Configuration
+### Mode CLI (Ligne de commande)
 
-Configuration files are automatically created on first run:
+**Démarrer le serveur en CLI:**
 
-- **Server**: `~/.config/distributed-upscaling/server_config.json`
-- **Client**: `~/.config/upscaling-client/config.json`
-- **Docker**: `docker/.env`
+```bash
+python3 main.py --cli
+> Choisir: 1 (Serveur)
+```
 
-Example server configuration:
+Menu serveur:
+- `1` - Statut du serveur
+- `2` - Clients connectés
+- `3` - Ajouter une vidéo
+- `4` - File de jobs
+- `5` - Statistiques
+- `6` - Configuration
+- `0` - Arrêter
+
+### Démarrer un client
+
+```bash
+python3 main.py --cli
+> Choisir: 2 (Client)
+> Connecter à un serveur
+```
+
+Menu client:
+- `1` - Connecter à un serveur
+- `2` - Serveurs sauvegardés
+- `3` - Ajouter un serveur
+- `0` - Quitter
+
+### Exemple complet
+
+#### Sur la machine serveur:
+
+```bash
+# 1. Démarrer le serveur
+python3 main.py --cli
+> 1 (Serveur)
+
+# 2. Ajouter une vidéo
+Menu > 3
+Chemin: /home/user/video.mp4
+Facteur: 4
+Modèle: 1 (realesr-animevideov3)
+
+# 3. Vérifier le statut
+Menu > 1
+État: ✓ En ligne
+Clients connectés: 0  # En attente de clients
+```
+
+#### Sur les machines clientes:
+
+```bash
+# Se connecter au serveur
+python3 main.py --cli
+> 2 (Client)
+> 1 (Connecter)
+> Adresse: 192.168.1.100
+> Port: 8765
+> Mot de passe: (vide)
+
+# Le client traite automatiquement les batches
+📊 Statut: processing
+🖼️  Traitement batch: abc123...
+✓ Batch terminé
+```
+
+## ⚙️ Configuration
+
+Fichier: `config/default_config.json`
 
 ```json
 {
   "server": {
-    "host": "0.0.0.0",
-    "port": 8888
+    "ip": "0.0.0.0",           // Toutes interfaces
+    "port": 8765,              // Port d'écoute
+    "password": "",            // Mot de passe (vide = aucun)
+    "work_directory": "./work",
+    "batch_size": 100          // Images par batch
   },
   "processing": {
-    "batch_size": 50
-  },
-  "realesrgan": {
-    "model": "realesr-animevideov3",
-    "scale": 4
+    "upscale_factor": 4,       // 2, 3, ou 4
+    "model": "realesr-animevideov3"
   }
 }
 ```
 
----
+### Configuration réseau
 
-## System Requirements
+Pour permettre des clients distants:
 
-### Server
-- CPU: 4+ cores
-- RAM: 8 GB minimum, 16 GB recommended
-- Storage: 100 GB+ free (SSD recommended)
-- Network: 100 Mbps minimum, 1 Gbps recommended
+1. **Serveur**:
+   - Configurer `"ip": "0.0.0.0"` (écoute sur toutes interfaces)
+   - Ouvrir le port 8765 dans le pare-feu
+   - Optionnel: Définir un mot de passe
 
-### Client
-- **CPU-only**: 4 cores, 4 GB RAM
-- **GPU-accelerated**: NVIDIA RTX 2060+ / AMD RX 5700+ / Intel Arc, 6 GB+ VRAM
+2. **Client**:
+   - Utiliser l'IP publique/locale du serveur
+   - Même port (défaut: 8765)
 
----
+### Modèles disponibles
 
-## Performance
+| Modèle | Usage | Facteurs | Performance |
+|--------|-------|----------|-------------|
+| `realesr-animevideov3` | Vidéos anime | x2, x3, x4 | Rapide |
+| `realesrgan-x4plus-anime` | Anime optimisé | x4 | Moyenne |
+| `realesrgan-x4plus` | Vidéos générales | x4 | Moyenne |
 
-**GPU vs CPU** (1080p → 4K upscaling):
-- CPU (Ryzen 9): ~10-20 sec/frame
-- GPU (RTX 3070): ~1-2 sec/frame
-- **10-20x faster with GPU!**
+### Optimisation batch_size
 
-**10 Distributed Clients** (1-minute 1080p video):
-- Single client: ~25-50 minutes
-- 10 clients: ~2.5-5 minutes
-- **10x speedup with distribution!**
+Ajuster selon la RAM disponible:
 
----
+- **720p**: 100-200 images/batch
+- **1080p**: 50-100 images/batch
+- **4K**: 20-50 images/batch
 
-## Troubleshooting
-
-See [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for common issues.
-
-**Quick fixes**:
-
-**Server won't start**:
-```bash
-# Check port
-sudo lsof -i :8888
-
-# Check logs
-tail -f server/logs/server.log
-```
-
-**Client can't connect**:
-```bash
-# Test connection
-python3 client_main.py test-connection --host SERVER_IP
-
-# Check firewall
-sudo ufw allow 8888/tcp
-```
-
-**GPU not detected**:
-```bash
-# NVIDIA
-nvidia-smi
-
-# Vulkan
-vulkaninfo | grep deviceName
-```
-
----
-
-## Documentation
-
-- [Server Installation](docs/SERVER_INSTALL.md)
-- [Client Installation](docs/CLIENT_INSTALL.md)
-- [Docker Guide](docker/README.md)
-- [Systemd Services](scripts/services/systemd/README.md)
-- [Configuration Reference](docs/CONFIGURATION.md)
-- [API Documentation](docs/API.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
-
----
-
-## Project Structure
+## 📁 Structure du projet
 
 ```
 UpscalingByNetwork/
-├── server/                # Server application
-│   ├── core/             # Core logic
-│   ├── gui/              # PyQt5 GUI
-│   ├── server_main.py    # Entry point
-│   └── server_cli.py     # CLI interface
-├── client/               # Client applications
-│   ├── linux/           # Linux/cross-platform client
-│   └── windows/         # Windows client
-├── docker/               # Docker configurations
-│   ├── Dockerfile.server-optimized
-│   ├── Dockerfile.server-gpu
-│   └── docker-compose-optimized.yml
-├── scripts/              # Installation scripts
-│   ├── install.sh       # Linux installer
-│   ├── install.ps1      # Windows installer
-│   └── services/        # Systemd/Windows services
-└── docs/                 # Documentation
+├── main.py                    # Point d'entrée unique
+├── requirements.txt           # Dépendances Python
+├── QUICKSTART.md             # Guide de démarrage rapide
+├── README.md                 # Ce fichier
+│
+├── config/
+│   └── default_config.json   # Configuration par défaut
+│
+├── shared/                   # Code partagé serveur/client
+│   ├── protocol/
+│   │   ├── messages.py      # Protocole de messages
+│   │   └── encryption.py    # Chiffrement E2E
+│   └── utils/
+│       ├── logger.py        # Système de logging
+│       └── constants.py     # Constantes
+│
+├── server/                   # Serveur
+│   ├── core/
+│   │   ├── server.py        # Serveur TCP asyncio
+│   │   ├── client_manager.py
+│   │   ├── video_processor.py
+│   │   ├── batch_distributor.py
+│   │   └── job_manager.py
+│   ├── database/
+│   │   ├── db_manager.py    # SQLite
+│   │   └── models.py
+│   ├── utils/
+│   │   ├── ffmpeg_handler.py
+│   │   └── realesrgan_handler.py
+│   └── cli/
+│       └── server_cli.py    # Interface CLI
+│
+├── client/                   # Client
+│   ├── core/
+│   │   ├── client.py        # Client principal
+│   │   ├── connection.py    # Connexion serveur
+│   │   └── processor.py     # Traitement local
+│   ├── utils/
+│   │   └── realesrgan_handler.py
+│   └── cli/
+│       └── client_cli.py    # Interface CLI
+│
+└── realesrgan-ncnn-vulkan-*/  # Exécutables Real-ESRGAN
+    ├── models/               # Modèles AI
+    └── realesrgan-ncnn-vulkan
 ```
 
+## 📚 Documentation
+
+- **[GUI_GUIDE.md](GUI_GUIDE.md)** - Guide complet des interfaces graphiques (PyQt5)
+- **[QUICKSTART.md](QUICKSTART.md)** - Guide de démarrage rapide (CLI)
+- **[TESTING.md](TESTING.md)** - Guide de test complet
+- **[DEVELOPMENT_SUMMARY.md](DEVELOPMENT_SUMMARY.md)** - Résumé du développement
+- **[CLAUDE.md](CLAUDE.md)** - Spécifications détaillées du projet
+- **Logs** - Consultez `logs/server.log` et `logs/client.log`
+
+## 🔒 Sécurité
+
+### Handshake
+
+1. Client génère une clé DH publique/privée
+2. Client envoie sa clé publique au serveur
+3. Serveur génère sa propre paire de clés
+4. Serveur envoie sa clé publique au client
+5. Les deux calculent la clé partagée (identique)
+6. Toutes les communications ultérieures utilisent AES-256-GCM
+
+### Authentification
+
+- Mot de passe hashé avec PBKDF2-SHA256 (100k itérations)
+- Transmission chiffrée avec la clé partagée
+- Rejet immédiat en cas d'échec
+
+### Communication
+
+- Tous les messages après handshake sont chiffrés
+- AES-256-GCM avec authentification
+- Protection contre replay attacks et tampering
+
+## 🐛 Résolution de problèmes
+
+### Le serveur ne démarre pas
+
+```bash
+# Vérifier le port
+lsof -i :8765  # Linux
+netstat -an | grep 8765  # Windows
+
+# Changer le port dans config/default_config.json
+{
+  "server": {
+    "port": 9876
+  }
+}
+```
+
+### Clients ne peuvent pas se connecter
+
+1. Vérifier le pare-feu:
+   ```bash
+   # Linux
+   sudo ufw allow 8765/tcp
+
+   # Windows
+   # Panneau de configuration > Pare-feu > Autoriser une app
+   ```
+
+2. Vérifier l'IP du serveur:
+   ```bash
+   # Linux/Mac
+   ip addr show
+   ifconfig
+
+   # Windows
+   ipconfig
+   ```
+
+3. Tester la connexion:
+   ```bash
+   telnet <server_ip> 8765
+   # ou
+   nc -zv <server_ip> 8765
+   ```
+
+### Erreur FFmpeg
+
+```bash
+# Installer/Réinstaller
+pip install --upgrade imageio-ffmpeg
+```
+
+### Erreur Real-ESRGAN
+
+Vérifier que les exécutables sont présents:
+```bash
+ls -la realesrgan-ncnn-vulkan-20220424-ubuntu/realesrgan-ncnn-vulkan
+ls -la realesrgan-ncnn-vulkan-20220424-windows/realesrgan-ncnn-vulkan.exe
+```
+
+## 🚧 Limitations connues
+
+- Une seule vidéo traitée à la fois (FIFO)
+- Nécessite Vulkan pour GPU (sinon CPU, plus lent)
+- Encodage AV1 très lent (désactivé par défaut)
+- Taille max message: 100 MB
+
+## 🎯 Roadmap
+
+- [ ] GUI (Tkinter/PyQt)
+- [ ] Support multi-vidéos simultanées
+- [ ] Compression réseau optimisée
+- [ ] Mode cluster (multi-serveurs)
+- [ ] Dashboard web temps réel
+- [ ] Support Docker
+- [ ] API REST
+
+## 📝 License
+
+Ce projet est développé pour un usage personnel/éducatif.
+
+## 🙏 Remerciements
+
+- **Real-ESRGAN** - xinntao et al.
+- **FFmpeg** - Équipe FFmpeg
+- **imageio-ffmpeg** - almarklein
+
+## 📧 Contact
+
+Pour questions ou bugs, ouvrir une issue sur GitHub.
+
 ---
 
-## Contributing
-
-Contributions welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes with tests
-4. Submit a pull request
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
-
----
-
-## License
-
-This project is licensed under the MIT License - see [LICENSE](LICENSE) for details.
-
----
-
-## Acknowledgments
-
-- **Real-ESRGAN**: [xinntao/Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN)
-- **FFmpeg**: [FFmpeg](https://ffmpeg.org/)
-- **PyQt5**: [Riverbank Computing](https://www.riverbankcomputing.com/software/pyqt/)
-
----
-
-## Support
-
-- Issues: [GitHub Issues](https://github.com/yourusername/UpscalingByNetwork/issues)
-- Discussions: [GitHub Discussions](https://github.com/yourusername/UpscalingByNetwork/discussions)
-
----
-
-**Made with ❤️ by the UpscalingByNetwork Team**
+**Développé avec ❤️ et Claude Code**

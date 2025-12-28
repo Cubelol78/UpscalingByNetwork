@@ -1,105 +1,349 @@
-# Python cache and bytecode
+# ============================================================================
+# Python
+# ============================================================================
+
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
+# C extensions
 *.so
-*.egg
-*.egg-info/
-dist/
+
+# Distribution / packaging
+.Python
 build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
 *.spec
 
-# Virtual environments
-venv/
-env/
-ENV/
-.venv
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# Logs
-*.log
-logs/
-server/logs/
-client/logs/
-
-# Working directories
-server_work/
-client_work/
-temp/
-upscaled/
-frames/
-output/
-work/
-input/
-batches/
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# OS files
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# Configuration (user-specific)
-config/local_*.json
-config/*_local.json
-
-# Old binary locations (deprecated - use assets/ instead)
-# Keep ignoring these to prevent accidental re-addition
-server/ffmpeg/
-server/realesrgan-ncnn-vulkan/
-client/ffmpeg/
-client/realesrgan-ncnn-vulkan/
-client/windows/ffmpeg/
-client/windows/realesrgan-ncnn-vulkan/
-client/linux/realesrgan-ncnn-vulkan/
-
-# Assets directory contains all binaries and models
-# These are now committed to the repository for easier deployment
-# Large files should be managed by Git LFS (see .gitattributes)
-# Explicitly allow assets directory
-!assets/
-!assets/**/
-
-# Still ignore loose executables and DLLs outside assets/
-*.exe
-*.dll
-# But allow them inside assets/
-!assets/**/*.exe
-!assets/**/*.dll
-!assets/**/*.bin
-!assets/**/*.param
-
-# Test coverage
-.coverage
+# Unit test / coverage reports
 htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
 .pytest_cache/
 
-# Documentation builds
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
 docs/_build/
 
-# Temporary files
-*.tmp
-*.bak
-*.swp
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# ============================================================================
+# Project specific
+# ============================================================================
+
+# Logs
+logs/
+*.log
+
+# Work directory (processing files)
+work/
+*/work/
 
 # Database files
 *.db
 *.sqlite
 *.sqlite3
 
-# Certificates and keys (security)
-*.pem
+# Temporary files
+temp/
+tmp/
+*.tmp
+
+# Configuration files (keep default, ignore custom)
+config/server_config.json
+config/client_config.json
+# Keep default_config.json
+!config/default_config.json
+
+# Client saved servers
+.upscaling_client/
+servers.json
+
+# Video files (too large for git)
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.flv
+*.wmv
+*.webm
+*.m4v
+
+# Image files (processing artifacts)
+work/**/*.png
+work/**/*.jpg
+work/**/*.jpeg
+
+# Audio files (extracted tracks)
+work/**/*.aac
+work/**/*.mp3
+work/**/*.wav
+work/**/*.flac
+
+# Subtitle files (extracted)
+work/**/*.srt
+work/**/*.ass
+work/**/*.vtt
+
+# ============================================================================
+# IDE & Editors
+# ============================================================================
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+
+# ============================================================================
+# OS
+# ============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+.directory
+.Trash-*
+.nfs*
+
+# ============================================================================
+# Documentation & Plans
+# ============================================================================
+
+# Keep public documentation
+!README.md
+!QUICKSTART.md
+!TESTING.md
+!DEVELOPMENT_SUMMARY.md
+!GUI_GUIDE.md
+!SPRINT_10_GUI.md
+!CHANGELOG_MAIN.md
+
+# Ignore CLAUDE.md (private instructions)
+CLAUDE.md
+
+# Ignore private notes
+notes.md
+TODO.md
+PRIVATE*.md
+
+# ============================================================================
+# Backup & Archive
+# ============================================================================
+
+# Backup files
+*.bak
+*.backup
+*.old
+*~
+
+# Archive files
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# ============================================================================
+# Security & Credentials
+# ============================================================================
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Credentials
+credentials.json
+secrets.json
 *.key
+*.pem
 *.crt
-*.p12
-server_work/encryption_keys/
+*.cert
+
+# SSH
+id_rsa
+id_rsa.pub
+known_hosts
+
+# ============================================================================
+# Build artifacts
+# ============================================================================
+
+# PyInstaller output
+build/
+dist/
+*.exe
+*.app
+*.dmg
+
+# ============================================================================
+# Testing
+# ============================================================================
+
+# Test outputs
+test_output/
+test_videos/
+test_results/
+
+# Coverage
+.coverage
+htmlcov/
+
+# ============================================================================
+# Docker
+# ============================================================================
+
+# Docker volumes
+docker-data/

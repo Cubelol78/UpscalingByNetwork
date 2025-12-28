@@ -1,434 +1,342 @@
-import asyncio
-import logging
-import json
-import time
-from typing import Dict, List, Optional, Tuple
-from pathlib import Path
-import websockets
-from websockets.server import WebSocketServerProtocol
+"""
+Serveur principal d'upscaling vidéo en réseau
+Gère les connexions clients et orchestre le traitement distribué
+"""
 
-from models.batch import Batch, BatchStatus
-from models.client import Client, ClientStatus
-from models.job import Job, JobStatus
-from utils.config import config
-from utils.logger import get_logger
+import asyncio
+import os
+from typing import Optional
+from pathlib import Path
+
+from server.core.client_manager import ClientManager
+from server.database.db_manager import DatabaseManager
+from shared.utils.logger import GetServerLogger
+from shared.utils.constants import NetworkConfig, PathConfig
+from shared.protocol.messages import MessageFactory, HeartbeatPong
+
 
 class UpscalingServer:
     """Serveur principal d'upscaling distribué"""
-    
-    def __init__(self):
-        self.logger = get_logger(__name__)
-        self.clients: Dict[str, Client] = {}  # MAC -> Client
-        self.websockets: Dict[str, WebSocketServerProtocol] = {}  # MAC -> WebSocket
-        self.jobs: Dict[str, Job] = {}  # Job ID -> Job
-        self.batches: Dict[str, Batch] = {}  # Batch ID -> Batch
-        self.current_job: Optional[str] = None
-        self.running = False  # Le serveur démarre à l'arrêt
-        self.server = None
-        self._start_time = time.time()
-        
-        # Managers
-        from core.batch_manager import BatchManager
-        from core.client_manager import ClientManager
-        from core.video_processor import VideoProcessor
-        from core.native_processor import NativeProcessor
-        
-        self.batch_manager = BatchManager(self)
-        self.client_manager = ClientManager(self)
-        self.video_processor = VideoProcessor(self)
-        self.native_processor = NativeProcessor(self)
-        
-        self.logger.info("Serveur d'upscaling initialisé (arrêté)")
-    
-    async def start(self):
-        """Démarre le serveur"""
-        if self.running:
-            self.logger.warning("Le serveur est déjà en cours d'exécution")
-            return
-            
-        self.running = True
-        self._start_time = time.time()
-        self.logger.info(f"Démarrage du serveur sur {config.HOST}:{config.PORT}")
-        
-        try:
-            # Démarrage des tâches de maintenance
-            asyncio.create_task(self._heartbeat_monitor())
-            asyncio.create_task(self._batch_assignment_loop())
-            
-            # Démarrage du processeur natif
-            asyncio.create_task(self.native_processor.start_native_processing())
-            
-            # Démarrage du serveur WebSocket
-            self.server = await websockets.serve(
-                self._handle_client,
-                config.HOST,
-                config.PORT,
-                max_size=10 * 1024 * 1024  # 10MB pour les images
-            )
-            
-            self.logger.info("Serveur démarré et en attente de connexions")
-            
-            # Boucle principale
-            try:
-                await self.server.wait_closed()
-            except asyncio.CancelledError:
-                pass
-                
-        except Exception as e:
-            self.logger.error(f"Erreur lors du démarrage du serveur: {e}")
-            self.running = False
-            raise
-    
-    async def stop(self):
-        """Arrête le serveur"""
-        if not self.running:
-            self.logger.warning("Le serveur est déjà arrêté")
-            return
-            
-        self.running = False
-        
-        # Fermeture de toutes les connexions clients
-        for websocket in list(self.websockets.values()):
-            try:
-                await websocket.close(code=1001, reason="Server shutting down")
-            except Exception as e:
-                self.logger.debug(f"Error closing websocket: {e}")
 
-        # Arrêt du serveur WebSocket
-        if self.server:
-            self.server.close()
-            try:
-                await self.server.wait_closed()
-            except Exception as e:
-                self.logger.debug(f"Error waiting for server close: {e}")
-            
-        # Nettoyage des données
-        self.clients.clear()
-        self.websockets.clear()
-        
-        self.logger.info("Serveur arrêté")
-    
-    def stop_sync(self):
-        """Arrête le serveur de manière synchrone (pour l'interface)"""
-        if not self.running:
-            return
-            
-        self.running = False
-        
-        # Arrêter le processeur natif
-        self.native_processor.stop_native_processing()
-        
-        # Fermer le serveur WebSocket si il existe
-        if self.server:
-            self.server.close()
-        
-        # Nettoyer les données
-        self.clients.clear()
-        self.websockets.clear()
-        
-        self.logger.info("Serveur arrêté (mode synchrone)")
-    
-    async def _batch_assignment_loop(self):
-        """Boucle d'assignation des lots"""
-        while self.running:
-            try:
-                await self.batch_manager.assign_pending_batches()
-                await asyncio.sleep(1)  # Vérification chaque seconde
-                
-            except Exception as e:
-                self.logger.error(f"Erreur dans batch_assignment_loop: {e}")
-                await asyncio.sleep(5)
-    
-    async def _handle_client(self, websocket: WebSocketServerProtocol, path: str):
-        """Gère une connexion client"""
-        client_ip = websocket.remote_address[0]
-        self.logger.info(f"Nouvelle connexion depuis {client_ip}")
-        
-        client_mac = None
+    def __init__(self, Config: dict):
+        """
+        Initialise le serveur
+
+        Args:
+            Config: Configuration du serveur (depuis JSON)
+        """
+        self.Config = Config
+        self.Logger = GetServerLogger()
+        self.Running = False
+        self.Server = None
+
+        # Configuration
+        self.Host = Config.get("server", {}).get("ip", NetworkConfig.DEFAULT_HOST)
+        self.Port = Config.get("server", {}).get("port", NetworkConfig.DEFAULT_PORT)
+        self.Password = Config.get("server", {}).get("password", "")
+        self.WorkDirectory = Config.get("server", {}).get("work_directory", PathConfig.WORK_DIR)
+
+        # Base de données
+        DbPath = os.path.join(self.WorkDirectory, PathConfig.DATABASE_NAME)
+        self.Database = DatabaseManager(DbPath)
+
+        # Gestionnaire de clients
+        self.ClientManager = None
+
+        self.Logger.info("Serveur initialisé")
+
+    def Initialize(self) -> bool:
+        """
+        Initialise le serveur (base de données, répertoires, etc.)
+
+        Returns:
+            True si succès
+        """
         try:
-            async for message in websocket:
-                data = json.loads(message)
-                
-                if data["type"] == "register":
-                    client_mac = await self._register_client(websocket, data)
-                    if client_mac:
-                        self.websockets[client_mac] = websocket
-                
-                elif data["type"] == "heartbeat":
-                    await self._handle_heartbeat(data)
-                
-                elif data["type"] == "batch_result":
-                    await self._handle_batch_result(data)
-                
-                elif data["type"] == "batch_progress":
-                    await self._handle_batch_progress(data)
-                
-                elif data["type"] == "client_status":
-                    await self._handle_client_status(data)
-        
-        except websockets.exceptions.ConnectionClosed:
-            self.logger.info(f"Client {client_ip} déconnecté")
-        except Exception as e:
-            self.logger.error(f"Erreur avec le client {client_ip}: {e}")
-        finally:
-            if client_mac and client_mac in self.clients:
-                self.clients[client_mac].disconnect()
-                if client_mac in self.websockets:
-                    del self.websockets[client_mac]
-    
-    async def _register_client(self, websocket: WebSocketServerProtocol, data: dict) -> Optional[str]:
-        """Enregistre un nouveau client"""
-        try:
-            client_info = data["client_info"]
-            mac_address = client_info["mac_address"]
-            
-            # Vérification de la limite de clients
-            if len(self.clients) >= config.MAX_CLIENTS and mac_address not in self.clients:
-                await websocket.send(json.dumps({
-                    "type": "registration_rejected",
-                    "reason": "Server full"
-                }))
-                return None
-            
-            # Création ou mise à jour du client
-            if mac_address in self.clients:
-                client = self.clients[mac_address]
-                client.ip_address = websocket.remote_address[0]
-                client.update_heartbeat()
-            else:
-                client = Client(
-                    mac_address=mac_address,
-                    ip_address=websocket.remote_address[0],
-                    hostname=client_info.get("hostname", ""),
-                    platform=client_info.get("platform", ""),
-                    gpu_info=client_info.get("gpu_info", {}),
-                    cpu_info=client_info.get("cpu_info", {}),
-                    capabilities=client_info.get("capabilities", {})
-                )
-                self.clients[mac_address] = client
-            
-            client.status = ClientStatus.CONNECTED
-            
-            # Confirmation d'enregistrement
-            await websocket.send(json.dumps({
-                "type": "registration_accepted",
-                "client_id": mac_address,
-                "server_info": {
-                    "batch_size": config.BATCH_SIZE,
-                    "model": config.REALESRGAN_MODEL,
-                    "tile_size": config.TILE_SIZE
-                }
-            }))
-            
-            self.logger.info(f"Client enregistré: {mac_address} ({client.hostname})")
-            return mac_address
-            
-        except Exception as e:
-            self.logger.error(f"Erreur lors de l'enregistrement du client: {e}")
-            return None
-    
-    async def _handle_heartbeat(self, data: dict):
-        """Traite un heartbeat client"""
-        mac_address = data.get("client_id")
-        if mac_address in self.clients:
-            self.clients[mac_address].update_heartbeat()
-    
-    async def _handle_batch_result(self, data: dict):
-        """Traite le résultat d'un lot"""
-        batch_id = data.get("batch_id")
-        success = data.get("success", False)
-        
-        if batch_id not in self.batches:
-            return
-        
-        batch = self.batches[batch_id]
-        client = self.clients.get(batch.assigned_client)
-        
-        if success:
-            batch.complete()
-            if client:
-                processing_time = batch.processing_time or 0
-                client.complete_batch(processing_time)
-            self.logger.info(f"Lot {batch_id} terminé avec succès")
-            
-            # Mise à jour du job
-            await self._update_job_progress(batch.job_id)
-            
-        else:
-            error_msg = data.get("error", "Erreur inconnue")
-            batch.fail(error_msg)
-            if client:
-                client.fail_batch()
-            self.logger.warning(f"Lot {batch_id} échoué: {error_msg}")
-            
-            # Remettre le lot en attente si sous le seuil de tentatives
-            if batch.retry_count < config.MAX_RETRIES:
-                batch.reset()
-                self.logger.info(f"Lot {batch_id} remis en attente (tentative {batch.retry_count + 1})")
-    
-    async def _handle_batch_progress(self, data: dict):
-        """Traite la progression d'un lot"""
-        batch_id = data.get("batch_id")
-        progress = data.get("progress", 0)
-        
-        if batch_id in self.batches:
-            self.batches[batch_id].progress = progress
-    
-    async def _handle_client_status(self, data: dict):
-        """Traite le statut d'un client"""
-        mac_address = data.get("client_id")
-        status_info = data.get("status", {})
-        
-        if mac_address in self.clients:
-            client = self.clients[mac_address]
-            # Mise à jour des informations du client
-            if "gpu_usage" in status_info:
-                client.gpu_info["usage"] = status_info["gpu_usage"]
-            if "cpu_usage" in status_info:
-                client.cpu_info["usage"] = status_info["cpu_usage"]
-    
-    async def _heartbeat_monitor(self):
-        """Surveille les heartbeats des clients"""
-        while self.running:
-            try:
-                current_time = time.time()
-                disconnected_clients = []
-                
-                for mac_address, client in self.clients.items():
-                    if not client.is_online:
-                        disconnected_clients.append(mac_address)
-                        self.logger.warning(f"Client {mac_address} timeout")
-                
-                # Traitement des clients déconnectés
-                for mac_address in disconnected_clients:
-                    client = self.clients[mac_address]
-                    client.disconnect()
-                    
-                    # Libération du lot en cours
-                    if client.current_batch:
-                        batch = self.batches.get(client.current_batch)
-                        if batch:
-                            batch.reset()
-                            self.logger.info(f"Lot {batch.id} libéré suite à déconnexion client")
-                
-                await asyncio.sleep(config.HEARTBEAT_INTERVAL)
-                
-            except Exception as e:
-                self.logger.error(f"Erreur dans heartbeat_monitor: {e}")
-                await asyncio.sleep(5)
-    
-    async def _update_job_progress(self, job_id: str):
-        """Met à jour la progression d'un job"""
-        if job_id not in self.jobs:
-            return
-        
-        job = self.jobs[job_id]
-        completed_count = sum(1 for batch_id in job.batches 
-                             if self.batches[batch_id].status == BatchStatus.COMPLETED)
-        
-        job.completed_batches = completed_count
-        
-        # Vérification si le job est terminé
-        if completed_count == len(job.batches):
-            self.logger.info(f"Job {job_id} - tous les lots terminés, assemblage de la vidéo")
-            job.status = JobStatus.ASSEMBLING
-            
-            # Lancement de l'assemblage en arrière-plan
-            asyncio.create_task(self._assemble_video(job_id))
-    
-    async def _assemble_video(self, job_id: str):
-        """Assemble la vidéo finale"""
-        try:
-            job = self.jobs[job_id]
-            success = await self.video_processor.assemble_video(job)
-            
-            if success:
-                job.complete()
-                self.logger.info(f"Job {job_id} terminé avec succès")
-            else:
-                job.fail("Erreur lors de l'assemblage de la vidéo")
-                self.logger.error(f"Job {job_id} échoué lors de l'assemblage")
-                
-        except Exception as e:
-            job.fail(f"Erreur d'assemblage: {str(e)}")
-            self.logger.error(f"Erreur lors de l'assemblage du job {job_id}: {e}")
-    
-    async def send_batch_to_client(self, client_mac: str, batch: Batch) -> bool:
-        """Envoie un lot à un client"""
-        if client_mac not in self.websockets:
-            return False
-        
-        try:
-            websocket = self.websockets[client_mac]
-            
-            message = {
-                "type": "batch_assignment",
-                "batch_id": batch.id,
-                "frame_paths": batch.frame_paths,
-                "model": config.REALESRGAN_MODEL,
-                "scale": config.REALESRGAN_SCALE,
-                "tile_size": config.TILE_SIZE
-            }
-            
-            await websocket.send(json.dumps(message))
-            
-            # Mise à jour du statut
-            batch.assign_to_client(client_mac)
-            self.clients[client_mac].assign_batch(batch.id)
-            
-            self.logger.info(f"Lot {batch.id} envoyé au client {client_mac}")
+            # Crée les répertoires de travail
+            self._CreateWorkDirectories()
+
+            # Connecte à la base de données
+            if not self.Database.Connect():
+                self.Logger.error("Impossible de se connecter à la base de données")
+                return False
+
+            # Initialise les paramètres par défaut
+            self._InitializeDefaultParameters()
+
+            # Crée le gestionnaire de clients
+            self.ClientManager = ClientManager(self.Password, self.Database)
+
+            self.Logger.info("Serveur initialisé avec succès")
             return True
-            
+
         except Exception as e:
-            self.logger.error(f"Erreur envoi lot au client {client_mac}: {e}")
+            self.Logger.error(f"Erreur lors de l'initialisation du serveur: {e}")
             return False
-    
-    def get_statistics(self) -> dict:
-        """Retourne les statistiques du serveur"""
-        total_clients = len(self.clients)
-        online_clients = sum(1 for client in self.clients.values() if client.is_online)
-        processing_clients = sum(1 for client in self.clients.values() 
-                               if client.status == ClientStatus.PROCESSING)
-        
-        total_batches = len(self.batches)
-        pending_batches = sum(1 for batch in self.batches.values() 
-                            if batch.status == BatchStatus.PENDING)
-        processing_batches = sum(1 for batch in self.batches.values() 
-                               if batch.status == BatchStatus.PROCESSING)
-        completed_batches = sum(1 for batch in self.batches.values() 
-                              if batch.status == BatchStatus.COMPLETED)
-        
-        current_job_info = {}
-        if self.current_job and self.current_job in self.jobs:
-            job = self.jobs[self.current_job]
-            current_job_info = {
-                "id": job.id,
-                "status": job.status.value,
-                "progress": job.progress,
-                "input_file": Path(job.input_video_path).name,
-                "total_frames": job.total_frames,
-                "estimated_remaining": job.estimated_remaining_time
-            }
-        
-        # Statistiques du processeur natif
-        native_status = self.native_processor.get_status()
-        
+
+    def _CreateWorkDirectories(self):
+        """Crée la structure des répertoires de travail"""
+        Directories = [
+            self.WorkDirectory,
+            os.path.join(self.WorkDirectory, PathConfig.INPUT_DIR),
+            os.path.join(self.WorkDirectory, PathConfig.FRAMES_DIR),
+            os.path.join(self.WorkDirectory, PathConfig.AUDIO_DIR),
+            os.path.join(self.WorkDirectory, PathConfig.SUBTITLES_DIR),
+            os.path.join(self.WorkDirectory, PathConfig.UPSCALED_DIR),
+            os.path.join(self.WorkDirectory, PathConfig.OUTPUT_DIR),
+            os.path.join(self.WorkDirectory, PathConfig.TEMP_DIR)
+        ]
+
+        for Directory in Directories:
+            os.makedirs(Directory, exist_ok=True)
+            self.Logger.debug(f"Répertoire créé/vérifié: {Directory}")
+
+    def _InitializeDefaultParameters(self):
+        """Initialise les paramètres par défaut dans la base de données"""
+        self.Database.SetParameter("server_version", "1.0.0", "Version du serveur")
+        self.Database.SetParameter("batch_size", str(self.Config.get("server", {}).get("batch_size", 100)), "Taille des paquets d'images")
+        self.Database.SetParameter("work_directory", self.WorkDirectory, "Répertoire de travail")
+
+    async def Start(self) -> bool:
+        """
+        Démarre le serveur
+
+        Returns:
+            True si succès
+        """
+        if self.Running:
+            self.Logger.warning("Le serveur est déjà en cours d'exécution")
+            return False
+
+        try:
+            self.Logger.info(f"Démarrage du serveur sur {self.Host}:{self.Port}...")
+
+            # Démarre le serveur TCP
+            self.Server = await asyncio.start_server(
+                self._HandleClientConnection,
+                self.Host,
+                self.Port
+            )
+
+            self.Running = True
+
+            # Démarre le monitoring des heartbeats
+            await self.ClientManager.StartHeartbeatMonitoring()
+
+            self.Logger.info(f"✓ Serveur démarré et en écoute sur {self.Host}:{self.Port}")
+
+            # Affiche les informations
+            self._PrintServerInfo()
+
+            return True
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors du démarrage du serveur: {e}")
+            return False
+
+    async def Stop(self):
+        """Arrête le serveur"""
+        if not self.Running:
+            self.Logger.warning("Le serveur n'est pas en cours d'exécution")
+            return
+
+        self.Logger.info("Arrêt du serveur...")
+
+        self.Running = False
+
+        # Arrête le monitoring des heartbeats
+        if self.ClientManager:
+            await self.ClientManager.StopHeartbeatMonitoring()
+
+        # Ferme le serveur
+        if self.Server:
+            self.Server.close()
+            await self.Server.wait_closed()
+
+        # Déconnecte tous les clients
+        if self.ClientManager:
+            ClientIds = self.ClientManager.GetConnectedClients()
+            for ClientId in ClientIds:
+                await self.ClientManager.RemoveClient(ClientId)
+
+        # Ferme la base de données
+        if self.Database:
+            self.Database.Close()
+
+        self.Logger.info("✓ Serveur arrêté")
+
+    async def _HandleClientConnection(self, Reader: asyncio.StreamReader,
+                                     Writer: asyncio.StreamWriter):
+        """
+        Gère une nouvelle connexion client
+
+        Args:
+            Reader: StreamReader asyncio
+            Writer: StreamWriter asyncio
+        """
+        ClientId = None
+
+        try:
+            # Handshake et authentification
+            ClientId = await self.ClientManager.HandleNewConnection(Reader, Writer)
+
+            if not ClientId:
+                self.Logger.warning("Échec de la connexion du client")
+                return
+
+            # Boucle de communication avec le client
+            await self._ClientCommunicationLoop(ClientId)
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la gestion du client: {e}")
+
+        finally:
+            # Nettoie la connexion
+            if ClientId:
+                await self.ClientManager.RemoveClient(ClientId)
+
+    async def _ClientCommunicationLoop(self, ClientId: str):
+        """
+        Boucle de communication avec un client
+
+        Args:
+            ClientId: ID du client
+        """
+        self.Logger.info(f"Début de la communication avec le client {ClientId}")
+
+        while self.Running:
+            try:
+                # Reçoit un message du client (avec timeout)
+                MessageData = await asyncio.wait_for(
+                    self.ClientManager.ReceiveMessage(ClientId, Decrypt=True),
+                    timeout=NetworkConfig.HEARTBEAT_TIMEOUT * 2
+                )
+
+                if not MessageData:
+                    self.Logger.warning(f"Message vide reçu du client {ClientId}")
+                    break
+
+                # Parse le message
+                Message = MessageFactory.CreateFromJson(MessageData)
+
+                # Traite le message
+                await self._HandleClientMessage(ClientId, Message)
+
+            except asyncio.TimeoutError:
+                self.Logger.warning(f"Timeout de communication avec le client {ClientId}")
+                break
+
+            except Exception as e:
+                self.Logger.error(f"Erreur dans la boucle de communication: {e}")
+                break
+
+    async def _HandleClientMessage(self, ClientId: str, Message):
+        """
+        Traite un message reçu d'un client
+
+        Args:
+            ClientId: ID du client
+            Message: Message parsé
+        """
+        MessageType = Message.MessageType
+
+        # Heartbeat pong
+        if isinstance(Message, HeartbeatPong):
+            await self.ClientManager.UpdateHeartbeat(ClientId)
+            self.Logger.debug(f"Heartbeat pong reçu du client {ClientId}")
+
+        # Autres types de messages seront ajoutés dans les prochains sprints
+        else:
+            self.Logger.debug(f"Message reçu du client {ClientId}: {MessageType}")
+
+    def _PrintServerInfo(self):
+        """Affiche les informations du serveur"""
+        self.Logger.info("="*60)
+        self.Logger.info("SERVEUR D'UPSCALING VIDÉO EN RÉSEAU")
+        self.Logger.info("="*60)
+        self.Logger.info(f"Adresse: {self.Host}:{self.Port}")
+        self.Logger.info(f"Répertoire de travail: {self.WorkDirectory}")
+        self.Logger.info(f"Mot de passe configuré: {'Oui' if self.Password else 'Non'}")
+        self.Logger.info(f"Base de données: {self.Database.DbPath}")
+        self.Logger.info("="*60)
+
+    def GetStatus(self) -> dict:
+        """
+        Récupère le statut du serveur
+
+        Returns:
+            Dictionnaire avec le statut
+        """
         return {
-            "clients": {
-                "total": total_clients,
-                "online": online_clients,
-                "processing": processing_clients
-            },
-            "batches": {
-                "total": total_batches,
-                "pending": pending_batches,
-                "processing": processing_batches,
-                "completed": completed_batches
-            },
-            "current_job": current_job_info,
-            "native_processor": native_status,
-            "server": {
-                "running": self.running,
-                "uptime": int(time.time() - self._start_time)
-            }
+            "running": self.Running,
+            "host": self.Host,
+            "port": self.Port,
+            "connected_clients": self.ClientManager.GetClientCount() if self.ClientManager else 0,
+            "work_directory": self.WorkDirectory,
+            "database": self.Database.DbPath if self.Database else None
         }
+
+    async def Serve(self):
+        """
+        Sert indéfiniment (bloque jusqu'à arrêt)
+        """
+        if not self.Server:
+            self.Logger.error("Serveur non démarré")
+            return
+
+        async with self.Server:
+            await self.Server.serve_forever()
+
+
+# ============================================================================
+# FONCTION D'AIDE POUR LANCER LE SERVEUR
+# ============================================================================
+
+async def RunServer(Config: dict):
+    """
+    Lance le serveur avec la configuration donnée
+
+    Args:
+        Config: Configuration du serveur
+    """
+    Server = UpscalingServer(Config)
+
+    if not Server.Initialize():
+        print("✗ Échec de l'initialisation du serveur")
+        return
+
+    if not await Server.Start():
+        print("✗ Échec du démarrage du serveur")
+        return
+
+    try:
+        # Sert indéfiniment
+        await Server.Serve()
+
+    except KeyboardInterrupt:
+        print("\n\nInterruption utilisateur")
+
+    finally:
+        await Server.Stop()
+
+
+# ============================================================================
+# EXEMPLE D'UTILISATION
+# ============================================================================
+
+if __name__ == "__main__":
+    import json
+
+    # Configuration de test
+    TestConfig = {
+        "server": {
+            "ip": "0.0.0.0",
+            "port": 8765,
+            "password": "test123",
+            "work_directory": "./test_work",
+            "batch_size": 100
+        }
+    }
+
+    # Lance le serveur
+    asyncio.run(RunServer(TestConfig))

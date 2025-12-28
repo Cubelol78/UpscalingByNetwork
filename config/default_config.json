@@ -1,0 +1,16 @@
+{
+  "server": {
+    "ip": "0.0.0.0",
+    "port": 8765,
+    "password": "",
+    "work_directory": "./work",
+    "batch_size": 100
+  },
+  "client": {
+    "saved_servers": []
+  },
+  "processing": {
+    "upscale_factor": 4,
+    "model": "realesr-animevideov3"
+  }
+}

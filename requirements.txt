@@ -1,24 +1,14 @@
-# UpscalingByNetwork - Dépendances Python
-# Installez avec: pip install -r requirements.txt
-# Python 3.8+ required
+# FFmpeg portable pour traitement vidéo
+imageio-ffmpeg>=0.4.9
 
-# Communication réseau
-websockets>=11.0.0,<13.0.0
-requests>=2.31.0,<3.0.0
+# Chiffrement et sécurité
+cryptography>=41.0.0
+
+# Interface CLI
+click>=8.1.7
+
+# Utilitaires
+pillow>=10.0.0
 
 # Interface graphique
-PyQt5>=5.15.9,<6.0.0
-qasync>=0.24.1,<1.0.0
-qdarkstyle>=3.1,<4.0.0
-
-# Sécurité et chiffrement
-cryptography>=42.0.0,<43.0.0
-
-# Monitoring système
-psutil>=5.9.5,<6.0.0
-
-# Traitement YAML (optionnel)
-pyyaml>=6.0.1,<7.0.0
-
-# Build (optionnel)
-pyinstaller>=5.13.0,<6.0.0
+PyQt5>=5.15.0

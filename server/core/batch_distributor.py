@@ -1,44 +1,496 @@
-# UpscalingByNetwork/server/core/batch_distributor.py
+"""
+Distributeur de paquets pour l'upscaling distribué
+Gère l'attribution, l'envoi et la réception des batches
+"""
 
+import asyncio
+import os
+import base64
 import time
+from typing import Optional, Dict, List
+from datetime import datetime
+from PIL import Image
+import io
+
+from server.core.client_manager import ClientManager
+from server.core.video_processor import VideoProcessor
+from server.database.db_manager import DatabaseManager
+from server.database.models import Batch, Video
+from shared.protocol.messages import BatchAssignment, BatchResult, MessageFactory
+from shared.utils.logger import GetModuleLogger
+from shared.utils.constants import BatchStatus, ClientStatus, NetworkConfig, Limits
 
 
-async def distribute_batches(self):
-    """Distribution intelligente des lots"""
-    
-    available_clients = self.get_available_clients()
-    pending_batches = self.get_pending_batches()
-    
-    # Gestion des doublons si plus de clients que de lots
-    if len(available_clients) > len(pending_batches) and len(pending_batches) < 5:
-        # Créer des doublons des lots les plus anciens
-        for i in range(len(pending_batches), len(available_clients)):
-            duplicate_batch = self.create_duplicate_batch(pending_batches[i % len(pending_batches)])
-            pending_batches.append(duplicate_batch)
-    
-    # Attribution des lots
-    for client_mac, batch in zip(available_clients, pending_batches):
-        await self.assign_batch_to_client(client_mac, batch)
+class BatchDistributor:
+    """Distributeur de paquets d'images pour traitement distribué"""
 
-async def assign_batch_to_client(self, client_mac: str, batch: dict):
-    """Assigne un lot à un client spécifique"""
-    
-    # 1. Génération clé de session
-    session_key = self.security_manager.generate_session_key()
-    
-    # 2. Chiffrement du lot
-    encrypted_batch = self.security_manager.encrypt_batch(
-        batch['zip_path'], 
-        session_key
-    )
-    
-    # 3. Handshake sécurisé avec le client
-    await self.security_manager.exchange_keys(client_mac, session_key)
-    
-    # 4. Envoi du lot chiffré
-    await self.send_encrypted_batch(client_mac, encrypted_batch, batch['id'])
-    
-    # 5. Mise à jour du statut
-    batch['status'] = 'assigned'
-    batch['assigned_to'] = client_mac
-    batch['assigned_at'] = time.time()
+    def __init__(self, ClientManager: ClientManager, VideoProcessor: VideoProcessor,
+                 Database: DatabaseManager):
+        """
+        Initialise le distributeur
+
+        Args:
+            ClientManager: Gestionnaire de clients
+            VideoProcessor: Processeur vidéo
+            Database: Gestionnaire de base de données
+        """
+        self.ClientManager = ClientManager
+        self.VideoProcessor = VideoProcessor
+        self.Database = Database
+        self.Logger = GetModuleLogger("BatchDistributor")
+
+        # Tracking des batches en cours
+        self.ActiveBatches: Dict[str, dict] = {}  # {batch_id: {client_id, start_time, retry_count}}
+        self.Running = False
+        self.DistributionTask = None
+
+    async def StartDistribution(self, VideoId: str):
+        """
+        Démarre la distribution des batches pour une vidéo
+
+        Args:
+            VideoId: ID de la vidéo
+        """
+        self.Running = True
+        self.Logger.info(f"Démarrage de la distribution pour la vidéo {VideoId}")
+
+        # Lance la boucle de distribution
+        self.DistributionTask = asyncio.create_task(
+            self._DistributionLoop(VideoId)
+        )
+
+    async def StopDistribution(self):
+        """Arrête la distribution"""
+        self.Running = False
+        if self.DistributionTask:
+            self.DistributionTask.cancel()
+            try:
+                await self.DistributionTask
+            except asyncio.CancelledError:
+                pass
+        self.Logger.info("Distribution arrêtée")
+
+    async def _DistributionLoop(self, VideoId: str):
+        """
+        Boucle principale de distribution
+
+        Args:
+            VideoId: ID de la vidéo
+        """
+        try:
+            while self.Running:
+                # Récupère les batches en attente
+                PendingBatches = self.Database.GetPendingBatches(VideoId)
+
+                if not PendingBatches:
+                    # Vérifie si tous les batches sont complétés
+                    AllBatches = self.Database.GetBatchesByVideo(VideoId)
+                    CompletedCount = sum(1 for b in AllBatches if b.Status == BatchStatus.COMPLETED)
+
+                    if CompletedCount == len(AllBatches):
+                        self.Logger.info(f"Tous les batches complétés pour {VideoId}")
+                        break
+
+                    # Attend un peu avant de revérifier
+                    await asyncio.sleep(5)
+                    continue
+
+                # Récupère les clients disponibles
+                AvailableClients = self._GetAvailableClients()
+
+                if not AvailableClients:
+                    self.Logger.debug("Aucun client disponible, attente...")
+                    await asyncio.sleep(2)
+                    continue
+
+                # Distribue les batches aux clients disponibles
+                for BatchObj in PendingBatches[:len(AvailableClients)]:
+                    ClientId = AvailableClients.pop(0)
+
+                    # Assigne le batch
+                    await self.AssignBatch(BatchObj.BatchId, ClientId, VideoId)
+
+                    if not AvailableClients:
+                        break
+
+                # Vérifie les timeouts
+                await self._CheckTimeouts()
+
+                await asyncio.sleep(1)
+
+        except asyncio.CancelledError:
+            self.Logger.info("Boucle de distribution annulée")
+        except Exception as e:
+            self.Logger.error(f"Erreur dans la boucle de distribution: {e}")
+
+    def _GetAvailableClients(self) -> List[str]:
+        """
+        Récupère les clients disponibles (idle)
+
+        Returns:
+            Liste des IDs des clients disponibles
+        """
+        AvailableClients = []
+
+        for ClientId in self.ClientManager.GetConnectedClients():
+            Status = self.ClientManager.GetClientStatus(ClientId)
+            if Status == ClientStatus.IDLE:
+                AvailableClients.append(ClientId)
+
+        return AvailableClients
+
+    async def AssignBatch(self, BatchId: str, ClientId: str, VideoId: str) -> bool:
+        """
+        Assigne un batch à un client
+
+        Args:
+            BatchId: ID du batch
+            ClientId: ID du client
+            VideoId: ID de la vidéo
+
+        Returns:
+            True si succès
+        """
+        try:
+            # Récupère le batch
+            BatchObj = self.Database.GetBatch(BatchId)
+            if not BatchObj:
+                self.Logger.error(f"Batch {BatchId} non trouvé")
+                return False
+
+            # Récupère la vidéo
+            VideoObj = self.Database.GetVideo(VideoId)
+            if not VideoObj:
+                self.Logger.error(f"Vidéo {VideoId} non trouvée")
+                return False
+
+            self.Logger.info(f"Attribution du batch {BatchId} au client {ClientId}")
+
+            # Met à jour le statut du batch
+            BatchObj.Status = BatchStatus.ASSIGNED
+            BatchObj.AssignedClientId = ClientId
+            BatchObj.AssignedAt = datetime.now()
+            self.Database.UpdateBatch(BatchObj)
+
+            # Met à jour le statut du client
+            self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.RECEIVING)
+
+            # Envoie le batch au client
+            Success = await self.SendBatchToClient(BatchObj, VideoObj, ClientId)
+
+            if Success:
+                # Marque comme processing
+                BatchObj.Status = BatchStatus.PROCESSING
+                self.Database.UpdateBatch(BatchObj)
+                self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.PROCESSING)
+
+                # Track le batch actif
+                self.ActiveBatches[BatchId] = {
+                    "client_id": ClientId,
+                    "start_time": time.time(),
+                    "retry_count": BatchObj.RetryCount
+                }
+
+                return True
+            else:
+                # Échec, remet en pending
+                BatchObj.Status = BatchStatus.PENDING
+                BatchObj.AssignedClientId = None
+                self.Database.UpdateBatch(BatchObj)
+                self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.IDLE)
+                return False
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de l'attribution du batch: {e}")
+            return False
+
+    async def SendBatchToClient(self, BatchObj: Batch, VideoObj: Video,
+                               ClientId: str) -> bool:
+        """
+        Envoie un batch d'images à un client
+
+        Args:
+            BatchObj: Objet Batch
+            VideoObj: Objet Video
+            ClientId: ID du client
+
+        Returns:
+            True si succès
+        """
+        try:
+            # Récupère les chemins des images du batch
+            FramePaths = self.VideoProcessor.GetBatchFrames(VideoObj.VideoId, BatchObj)
+
+            if not FramePaths:
+                self.Logger.error(f"Aucune image trouvée pour le batch {BatchObj.BatchId}")
+                return False
+
+            self.Logger.info(f"Envoi de {len(FramePaths)} images au client {ClientId}...")
+
+            # Charge et encode les images en base64
+            Images = []
+            for Index, FramePath in enumerate(FramePaths):
+                try:
+                    # Lit l'image
+                    with open(FramePath, 'rb') as f:
+                        ImageData = f.read()
+
+                    # Encode en base64
+                    ImageB64 = base64.b64encode(ImageData).decode('utf-8')
+
+                    # Numéro de frame absolu
+                    FrameNumber = BatchObj.StartFrame + Index
+
+                    Images.append({
+                        "id": str(FrameNumber),
+                        "number": FrameNumber,
+                        "data": ImageB64,
+                        "filename": os.path.basename(FramePath)
+                    })
+
+                except Exception as e:
+                    self.Logger.error(f"Erreur lors du chargement de {FramePath}: {e}")
+                    continue
+
+            # Crée le message BatchAssignment
+            Message = BatchAssignment(
+                BatchId=BatchObj.BatchId,
+                VideoId=VideoObj.VideoId,
+                Images=Images,
+                UpscaleFactor=VideoObj.UpscaleFactor,
+                Model=VideoObj.Model
+            )
+
+            # Envoie au client
+            Success = await self.ClientManager.SendMessage(
+                ClientId,
+                Message.ToJson(),
+                Encrypted=True
+            )
+
+            if Success:
+                self.Logger.info(f"✓ Batch {BatchObj.BatchId} envoyé au client {ClientId}")
+            else:
+                self.Logger.error(f"Échec de l'envoi du batch au client {ClientId}")
+
+            return Success
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de l'envoi du batch: {e}")
+            return False
+
+    async def ReceiveBatchResult(self, ClientId: str, ResultMessage: BatchResult) -> bool:
+        """
+        Reçoit un résultat de batch d'un client
+
+        Args:
+            ClientId: ID du client
+            ResultMessage: Message BatchResult
+
+        Returns:
+            True si succès
+        """
+        try:
+            BatchId = ResultMessage.Payload.get("batch_id")
+
+            if not BatchId:
+                self.Logger.error("BatchId manquant dans le résultat")
+                return False
+
+            self.Logger.info(f"Réception du résultat du batch {BatchId} depuis {ClientId}")
+
+            # Récupère le batch
+            BatchObj = self.Database.GetBatch(BatchId)
+            if not BatchObj:
+                self.Logger.error(f"Batch {BatchId} non trouvé")
+                return False
+
+            # Vérifie le succès
+            if not ResultMessage.IsSuccess():
+                ErrorMsg = ResultMessage.Payload.get("error_message", "Erreur inconnue")
+                self.Logger.error(f"Batch {BatchId} échoué: {ErrorMsg}")
+
+                # Marque comme failed et retry
+                BatchObj.Status = BatchStatus.FAILED
+                BatchObj.ErrorMessage = ErrorMsg
+                BatchObj.RetryCount += 1
+                self.Database.UpdateBatch(BatchObj)
+
+                # Retire du tracking
+                if BatchId in self.ActiveBatches:
+                    del self.ActiveBatches[BatchId]
+
+                # Retry si possible
+                if BatchObj.RetryCount < Limits.MAX_RETRY_ATTEMPTS:
+                    self.Logger.info(f"Retry du batch {BatchId} ({BatchObj.RetryCount}/{Limits.MAX_RETRY_ATTEMPTS})")
+                    BatchObj.Status = BatchStatus.PENDING
+                    BatchObj.AssignedClientId = None
+                    self.Database.UpdateBatch(BatchObj)
+
+                # Remet le client en idle
+                self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.IDLE)
+                return False
+
+            # Récupère les images upscalées
+            UpscaledImages = ResultMessage.GetUpscaledImages()
+
+            if not UpscaledImages:
+                self.Logger.error("Aucune image upscalée reçue")
+                return False
+
+            # Sauvegarde les images upscalées
+            VideoId = BatchObj.VideoId
+            UpscaledDir = self.VideoProcessor.GetUpscaledDir(VideoId)
+            os.makedirs(UpscaledDir, exist_ok=True)
+
+            SavedCount = 0
+            for ImageData in UpscaledImages:
+                try:
+                    FrameNumber = ImageData.get("number")
+                    ImageB64 = ImageData.get("data")
+                    Filename = ImageData.get("filename", f"frame_{FrameNumber:08d}.png")
+
+                    # Décode l'image
+                    ImageBytes = base64.b64decode(ImageB64)
+
+                    # Sauvegarde
+                    OutputPath = os.path.join(UpscaledDir, Filename)
+                    with open(OutputPath, 'wb') as f:
+                        f.write(ImageBytes)
+
+                    SavedCount += 1
+
+                except Exception as e:
+                    self.Logger.error(f"Erreur lors de la sauvegarde d'une image: {e}")
+                    continue
+
+            self.Logger.info(f"✓ {SavedCount} images upscalées sauvegardées")
+
+            # Marque le batch comme complété
+            BatchObj.Status = BatchStatus.COMPLETED
+            BatchObj.CompletedAt = datetime.now()
+            self.Database.UpdateBatch(BatchObj)
+
+            # Met à jour la progression de la vidéo
+            VideoObj = self.Database.GetVideo(VideoId)
+            if VideoObj:
+                VideoObj.CompletedBatches += 1
+                VideoObj.UpdateProgress()
+                self.Database.UpdateVideo(VideoObj)
+
+                self.Logger.info(f"Progression vidéo: {VideoObj.CompletedBatches}/{VideoObj.TotalBatches} ({VideoObj.Progress*100:.1f}%)")
+
+            # Retire du tracking
+            if BatchId in self.ActiveBatches:
+                del self.ActiveBatches[BatchId]
+
+            # Remet le client en idle
+            self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.IDLE)
+
+            return True
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la réception du résultat: {e}")
+            return False
+
+    async def _CheckTimeouts(self):
+        """Vérifie les batches en timeout"""
+        try:
+            CurrentTime = time.time()
+            TimeoutBatches = []
+
+            for BatchId, BatchInfo in self.ActiveBatches.items():
+                ElapsedTime = CurrentTime - BatchInfo["start_time"]
+
+                if ElapsedTime > NetworkConfig.BATCH_TIMEOUT:
+                    self.Logger.warning(f"Batch {BatchId} en timeout ({ElapsedTime:.0f}s)")
+                    TimeoutBatches.append(BatchId)
+
+            # Gère les timeouts
+            for BatchId in TimeoutBatches:
+                await self.HandleTimeout(BatchId)
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la vérification des timeouts: {e}")
+
+    async def HandleTimeout(self, BatchId: str):
+        """
+        Gère le timeout d'un batch
+
+        Args:
+            BatchId: ID du batch
+        """
+        try:
+            if BatchId not in self.ActiveBatches:
+                return
+
+            BatchInfo = self.ActiveBatches[BatchId]
+            ClientId = BatchInfo["client_id"]
+
+            self.Logger.warning(f"Timeout du batch {BatchId} (client {ClientId})")
+
+            # Récupère le batch
+            BatchObj = self.Database.GetBatch(BatchId)
+            if not BatchObj:
+                return
+
+            # Marque comme timeout
+            BatchObj.Status = BatchStatus.TIMEOUT
+            BatchObj.RetryCount += 1
+            self.Database.UpdateBatch(BatchObj)
+
+            # Retire du tracking
+            del self.ActiveBatches[BatchId]
+
+            # Déconnecte le client (probablement inactif)
+            await self.ClientManager.RemoveClient(ClientId)
+
+            # Retry si possible
+            if BatchObj.RetryCount < Limits.MAX_RETRY_ATTEMPTS:
+                self.Logger.info(f"Retry du batch {BatchId} ({BatchObj.RetryCount}/{Limits.MAX_RETRY_ATTEMPTS})")
+                await asyncio.sleep(Limits.RETRY_DELAY)
+                BatchObj.Status = BatchStatus.PENDING
+                BatchObj.AssignedClientId = None
+                self.Database.UpdateBatch(BatchObj)
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la gestion du timeout: {e}")
+
+    def GetDistributionStats(self, VideoId: str) -> dict:
+        """
+        Récupère les statistiques de distribution
+
+        Args:
+            VideoId: ID de la vidéo
+
+        Returns:
+            Dictionnaire de statistiques
+        """
+        try:
+            AllBatches = self.Database.GetBatchesByVideo(VideoId)
+
+            Stats = {
+                "total": len(AllBatches),
+                "pending": sum(1 for b in AllBatches if b.Status == BatchStatus.PENDING),
+                "assigned": sum(1 for b in AllBatches if b.Status == BatchStatus.ASSIGNED),
+                "processing": sum(1 for b in AllBatches if b.Status == BatchStatus.PROCESSING),
+                "completed": sum(1 for b in AllBatches if b.Status == BatchStatus.COMPLETED),
+                "failed": sum(1 for b in AllBatches if b.Status == BatchStatus.FAILED),
+                "timeout": sum(1 for b in AllBatches if b.Status == BatchStatus.TIMEOUT),
+                "active": len(self.ActiveBatches)
+            }
+
+            return Stats
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la récupération des statistiques: {e}")
+            return {}
+
+
+# ============================================================================
+# EXEMPLE D'UTILISATION
+# ============================================================================
+
+if __name__ == "__main__":
+    print("BatchDistributor - Composant serveur pour distribution de paquets")
+    print("Doit être utilisé dans le contexte du serveur complet")

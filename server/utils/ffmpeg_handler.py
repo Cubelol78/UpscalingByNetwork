@@ -1,486 +1,499 @@
-# UpscalingByNetwork/server/utils/ffmpeg_handler.py
 """
-Gestionnaire FFmpeg pour l'extraction et l'assemblage de vidéos
-Gère l'extraction des frames, la détection audio et le réassemblage final
+Gestionnaire FFmpeg pour le traitement vidéo
+Utilise imageio-ffmpeg pour la portabilité
 """
 
-import asyncio
-import logging
-import re
-import json
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+import os
 import subprocess
-import shutil
+import json
+import re
+from typing import Optional, List, Dict, Tuple
+from pathlib import Path
+
+from shared.utils.logger import GetModuleLogger
+
 
 class FFmpegHandler:
-    """Gestionnaire des opérations FFmpeg"""
-    
-    def __init__(self, ffmpeg_path: Path = None, ffprobe_path: Path = None):
-        self.logger = logging.getLogger(__name__)
-        
-        # Détection automatique des exécutables
-        self.ffmpeg_path = self._find_ffmpeg_executable(ffmpeg_path)
-        self.ffprobe_path = self._find_ffprobe_executable(ffprobe_path)
-        
-        # Configuration par défaut
-        self.default_fps = 30
-        self.default_quality = 'high'  # high, medium, low
-        self.temp_audio_format = 'aac'
-        
-        # Vérification de la disponibilité
-        if not self._verify_ffmpeg():
-            raise RuntimeError("FFmpeg non disponible ou non fonctionnel")
-        
-        self.logger.info(f"FFmpeg initialisé: {self.ffmpeg_path}")
-    
-    def _find_ffmpeg_executable(self, custom_path: Path = None) -> Path:
-        """Trouve l'exécutable FFmpeg"""
-        if custom_path and custom_path.exists():
-            return custom_path
-        
-        # Chercher dans le dossier du projet
-        project_paths = [
-            Path("ffmpeg/ffmpeg.exe"),  # Windows
-            Path("ffmpeg/ffmpeg"),      # Linux
-            Path("../ffmpeg/ffmpeg.exe"),
-            Path("../ffmpeg/ffmpeg")
-        ]
-        
-        for path in project_paths:
-            if path.exists():
-                return path.resolve()
-        
-        # Chercher dans le PATH système
-        system_ffmpeg = shutil.which("ffmpeg")
-        if system_ffmpeg:
-            return Path(system_ffmpeg)
-        
-        # Fallback - sera vérifié plus tard
-        return Path("ffmpeg.exe")
-    
-    def _find_ffprobe_executable(self, custom_path: Path = None) -> Path:
-        """Trouve l'exécutable FFprobe"""
-        if custom_path and custom_path.exists():
-            return custom_path
-        
-        # Dériver du chemin FFmpeg
-        ffprobe_path = self.ffmpeg_path.parent / "ffprobe.exe"
-        if ffprobe_path.exists():
-            return ffprobe_path
-        
-        ffprobe_path = self.ffmpeg_path.parent / "ffprobe"
-        if ffprobe_path.exists():
-            return ffprobe_path
-        
-        # Chercher dans le PATH système
-        system_ffprobe = shutil.which("ffprobe")
-        if system_ffprobe:
-            return Path(system_ffprobe)
-        
-        return Path("ffprobe.exe")
-    
-    def _verify_ffmpeg(self) -> bool:
-        """Vérifie que FFmpeg fonctionne"""
+    """Gestionnaire FFmpeg pour extraction et assemblage vidéo"""
+
+    def __init__(self):
+        """Initialise le gestionnaire FFmpeg"""
+        self.Logger = GetModuleLogger("FFmpegHandler")
+        self.FfmpegPath = None
+        self.FfprobePath = None
+
+        # Détecte les binaires FFmpeg
+        self._DetectFfmpegBinaries()
+
+    def _DetectFfmpegBinaries(self):
+        """Détecte les binaires FFmpeg (imageio-ffmpeg)"""
         try:
-            result = subprocess.run(
-                [str(self.ffmpeg_path), "-version"],
+            from imageio_ffmpeg import get_ffmpeg_exe
+            self.FfmpegPath = get_ffmpeg_exe()
+
+            # Dérive ffprobe depuis ffmpeg
+            FfmpegDir = os.path.dirname(self.FfmpegPath)
+            if os.name == 'nt':  # Windows
+                self.FfprobePath = os.path.join(FfmpegDir, 'ffprobe.exe')
+            else:  # Linux/Mac
+                self.FfprobePath = os.path.join(FfmpegDir, 'ffprobe')
+
+            # Vérifie que ffprobe existe, sinon utilise la commande système
+            if not os.path.exists(self.FfprobePath):
+                self.FfprobePath = 'ffprobe'
+
+            self.Logger.info(f"FFmpeg détecté: {self.FfmpegPath}")
+            self.Logger.info(f"FFprobe: {self.FfprobePath}")
+
+        except Exception as e:
+            self.Logger.error(f"Impossible de détecter FFmpeg: {e}")
+            raise
+
+    def ExtractFramerate(self, VideoPath: str) -> Optional[float]:
+        """
+        Extrait le framerate d'une vidéo
+
+        Args:
+            VideoPath: Chemin vers la vidéo
+
+        Returns:
+            Framerate (fps) ou None si erreur
+        """
+        try:
+            Command = [
+                self.FfprobePath,
+                '-v', 'error',
+                '-select_streams', 'v:0',
+                '-show_entries', 'stream=r_frame_rate',
+                '-of', 'json',
+                VideoPath
+            ]
+
+            Result = subprocess.run(
+                Command,
                 capture_output=True,
                 text=True,
-                timeout=10
+                check=True
             )
-            return result.returncode == 0
+
+            Data = json.loads(Result.stdout)
+            FrameRateStr = Data['streams'][0]['r_frame_rate']
+
+            # Parse la fraction (ex: "30000/1001" ou "30/1")
+            Num, Den = map(int, FrameRateStr.split('/'))
+            Fps = Num / Den
+
+            self.Logger.info(f"Framerate extrait: {Fps:.2f} fps")
+            return Fps
+
         except Exception as e:
-            self.logger.error(f"Erreur vérification FFmpeg: {e}")
-            return False
-    
-    async def get_video_info(self, video_path: Path) -> Dict[str, Any]:
-        """Récupère les informations d'une vidéo"""
+            self.Logger.error(f"Erreur lors de l'extraction du framerate: {e}")
+            return None
+
+    def ExtractVideoMetadata(self, VideoPath: str) -> Optional[Dict]:
+        """
+        Extrait les métadonnées complètes d'une vidéo
+
+        Args:
+            VideoPath: Chemin vers la vidéo
+
+        Returns:
+            Dictionnaire de métadonnées ou None
+        """
         try:
-            cmd = [
-                str(self.ffprobe_path),
-                "-v", "quiet",
-                "-print_format", "json",
-                "-show_format",
-                "-show_streams",
-                str(video_path)
+            Command = [
+                self.FfprobePath,
+                '-v', 'error',
+                '-show_format',
+                '-show_streams',
+                '-of', 'json',
+                VideoPath
             ]
-            
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+
+            Result = subprocess.run(
+                Command,
+                capture_output=True,
+                text=True,
+                check=True
             )
-            
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode != 0:
-                raise RuntimeError(f"Erreur FFprobe: {stderr.decode()}")
-            
-            info = json.loads(stdout.decode())
-            
-            # Extraction des informations utiles
-            video_info = {
-                'duration': 0,
-                'fps': self.default_fps,
-                'width': 0,
-                'height': 0,
-                'total_frames': 0,
-                'has_audio': False,
-                'audio_streams': [],
-                'video_streams': [],
-                'format': info.get('format', {})
-            }
-            
-            # Analyse des streams
-            for stream in info.get('streams', []):
-                if stream['codec_type'] == 'video':
-                    video_info['video_streams'].append(stream)
-                    if video_info['width'] == 0:  # Premier stream vidéo
-                        video_info['width'] = stream.get('width', 0)
-                        video_info['height'] = stream.get('height', 0)
-                        
-                        # Calcul du FPS
-                        fps_str = stream.get('r_frame_rate', '30/1')
-                        if '/' in fps_str:
-                            num, den = fps_str.split('/')
-                            video_info['fps'] = float(num) / float(den) if float(den) != 0 else self.default_fps
-                        else:
-                            video_info['fps'] = float(fps_str)
-                
-                elif stream['codec_type'] == 'audio':
-                    video_info['has_audio'] = True
-                    video_info['audio_streams'].append(stream)
-            
-            # Durée et nombre total de frames
-            format_info = info.get('format', {})
-            if 'duration' in format_info:
-                video_info['duration'] = float(format_info['duration'])
-                video_info['total_frames'] = int(video_info['duration'] * video_info['fps'])
-            
-            self.logger.info(f"Infos vidéo {video_path.name}: {video_info['total_frames']} frames, {video_info['fps']:.2f} fps")
-            
-            return video_info
-            
+
+            Metadata = json.loads(Result.stdout)
+            self.Logger.info(f"Métadonnées extraites de {os.path.basename(VideoPath)}")
+            return Metadata
+
         except Exception as e:
-            self.logger.error(f"Erreur analyse vidéo {video_path}: {e}")
-            raise
-    
-    async def extract_frames(self, video_path: Path, output_dir: Path, 
-                           start_time: float = 0, duration: float = None) -> int:
-        """Extrait les frames d'une vidéo"""
+            self.Logger.error(f"Erreur lors de l'extraction des métadonnées: {e}")
+            return None
+
+    def GetTotalFrames(self, VideoPath: str) -> Optional[int]:
+        """
+        Récupère le nombre total de frames
+
+        Args:
+            VideoPath: Chemin vers la vidéo
+
+        Returns:
+            Nombre de frames ou None
+        """
         try:
-            output_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Construction de la commande
-            cmd = [
-                str(self.ffmpeg_path),
-                "-i", str(video_path),
-                "-y",  # Overwrite files
-                "-v", "warning",  # Reduce verbosity
+            Command = [
+                self.FfprobePath,
+                '-v', 'error',
+                '-select_streams', 'v:0',
+                '-count_frames',
+                '-show_entries', 'stream=nb_read_frames',
+                '-of', 'json',
+                VideoPath
             ]
-            
-            # Gestion du temps de début
-            if start_time > 0:
-                cmd.extend(["-ss", str(start_time)])
-            
-            # Gestion de la durée
-            if duration:
-                cmd.extend(["-t", str(duration)])
-            
-            # Format de sortie
-            cmd.extend([
-                "-f", "image2",
-                "-vf", "format=rgb24",  # Format pour Real-ESRGAN
-                str(output_dir / "frame_%06d.png")
-            ])
-            
-            self.logger.info(f"Extraction frames: {video_path.name} -> {output_dir}")
-            
-            # Exécution
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+
+            Result = subprocess.run(
+                Command,
+                capture_output=True,
+                text=True,
+                check=True
             )
-            
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode != 0:
-                error_msg = stderr.decode() if stderr else "Erreur inconnue"
-                raise RuntimeError(f"Erreur extraction frames: {error_msg}")
-            
-            # Comptage des frames extraites
-            extracted_frames = len(list(output_dir.glob("frame_*.png")))
-            
-            self.logger.info(f"Extraction terminée: {extracted_frames} frames")
-            
-            return extracted_frames
-            
+
+            Data = json.loads(Result.stdout)
+
+            if 'streams' in Data and len(Data['streams']) > 0:
+                Frames = int(Data['streams'][0].get('nb_read_frames', 0))
+                self.Logger.info(f"Nombre total de frames: {Frames}")
+                return Frames
+
+            return None
+
         except Exception as e:
-            self.logger.error(f"Erreur extraction frames de {video_path}: {e}")
-            raise
-    
-    async def extract_audio(self, video_path: Path, output_path: Path) -> bool:
-        """Extrait l'audio d'une vidéo"""
+            self.Logger.error(f"Erreur lors du comptage des frames: {e}")
+            return None
+
+    def ExtractAudioTracks(self, VideoPath: str, OutputDir: str) -> List[str]:
+        """
+        Extrait toutes les pistes audio d'une vidéo
+
+        Args:
+            VideoPath: Chemin vers la vidéo
+            OutputDir: Répertoire de sortie
+
+        Returns:
+            Liste des chemins vers les pistes audio extraites
+        """
         try:
-            # Vérifier s'il y a de l'audio
-            video_info = await self.get_video_info(video_path)
-            if not video_info['has_audio']:
-                self.logger.info(f"Pas d'audio dans {video_path.name}")
-                return False
-            
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            cmd = [
-                str(self.ffmpeg_path),
-                "-i", str(video_path),
-                "-y",
-                "-v", "warning",
-                "-vn",  # No video
-                "-acodec", self.temp_audio_format,
-                "-q:a", "2",  # High quality
-                str(output_path)
-            ]
-            
-            self.logger.info(f"Extraction audio: {video_path.name} -> {output_path.name}")
-            
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode != 0:
-                error_msg = stderr.decode() if stderr else "Erreur inconnue"
-                self.logger.warning(f"Échec extraction audio: {error_msg}")
-                return False
-            
-            self.logger.info("Extraction audio terminée")
-            return True
-            
+            os.makedirs(OutputDir, exist_ok=True)
+
+            # Récupère le nombre de pistes audio
+            Metadata = self.ExtractVideoMetadata(VideoPath)
+            if not Metadata:
+                return []
+
+            AudioTracks = []
+            TrackIndex = 0
+
+            for Stream in Metadata.get('streams', []):
+                if Stream.get('codec_type') == 'audio':
+                    OutputPath = os.path.join(OutputDir, f'audio_track_{TrackIndex}.aac')
+
+                    Command = [
+                        self.FfmpegPath,
+                        '-i', VideoPath,
+                        '-map', f'0:a:{TrackIndex}',
+                        '-c:a', 'copy',
+                        '-y',
+                        OutputPath
+                    ]
+
+                    subprocess.run(Command, capture_output=True, check=True)
+                    AudioTracks.append(OutputPath)
+                    self.Logger.info(f"Piste audio {TrackIndex} extraite: {OutputPath}")
+                    TrackIndex += 1
+
+            return AudioTracks
+
         except Exception as e:
-            self.logger.error(f"Erreur extraction audio de {video_path}: {e}")
-            return False
-    
-    async def assemble_video(self, frames_dir: Path, original_video_path: Path, 
-                           output_path: Path, fps: float = None) -> bool:
-        """Assemble les frames en vidéo avec l'audio original"""
-        try:
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Obtenir les infos de la vidéo originale
-            original_info = await self.get_video_info(original_video_path)
-            target_fps = fps or original_info['fps']
-            
-            # Vérifier la présence des frames
-            frame_files = sorted(frames_dir.glob("frame_*.png"))
-            if not frame_files:
-                raise RuntimeError(f"Aucune frame trouvée dans {frames_dir}")
-            
-            self.logger.info(f"Assemblage vidéo: {len(frame_files)} frames à {target_fps:.2f} fps")
-            
-            # Extraction de l'audio temporaire
-            temp_audio_path = frames_dir.parent / "temp_audio.aac"
-            has_audio = await self.extract_audio(original_video_path, temp_audio_path)
-            
-            # Construction de la commande d'assemblage
-            cmd = [
-                str(self.ffmpeg_path),
-                "-y",
-                "-v", "warning",
-                "-framerate", str(target_fps),
-                "-i", str(frames_dir / "frame_%06d.png"),
-            ]
-            
-            # Ajout de l'audio si disponible
-            if has_audio and temp_audio_path.exists():
-                cmd.extend(["-i", str(temp_audio_path)])
-                cmd.extend(["-c:a", "copy"])  # Copy audio without re-encoding
-                cmd.extend(["-shortest"])     # Match shortest stream
-            
-            # Configuration vidéo selon la qualité
-            quality_settings = self._get_quality_settings(self.default_quality)
-            cmd.extend(quality_settings)
-            
-            # Sortie
-            cmd.append(str(output_path))
-            
-            self.logger.info(f"Commande assemblage: {' '.join(cmd[:10])}...")
-            
-            # Exécution avec monitoring de la progression
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode != 0:
-                error_msg = stderr.decode() if stderr else "Erreur inconnue"
-                raise RuntimeError(f"Erreur assemblage vidéo: {error_msg}")
-            
-            # Nettoyage
-            if temp_audio_path.exists():
-                temp_audio_path.unlink()
-            
-            # Vérification du fichier de sortie
-            if not output_path.exists():
-                raise RuntimeError("Fichier de sortie non créé")
-            
-            file_size_mb = output_path.stat().st_size / (1024 * 1024)
-            self.logger.info(f"Assemblage terminé: {output_path.name} ({file_size_mb:.1f} MB)")
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Erreur assemblage vidéo: {e}")
-            return False
-    
-    def _get_quality_settings(self, quality: str) -> List[str]:
-        """Retourne les paramètres de qualité pour l'encodage"""
-        settings = {
-            'high': [
-                "-c:v", "libx264",
-                "-preset", "medium",
-                "-crf", "18",
-                "-pix_fmt", "yuv420p"
-            ],
-            'medium': [
-                "-c:v", "libx264",
-                "-preset", "fast",
-                "-crf", "23",
-                "-pix_fmt", "yuv420p"
-            ],
-            'low': [
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-crf", "28",
-                "-pix_fmt", "yuv420p"
-            ]
-        }
-        
-        return settings.get(quality, settings['medium'])
-    
-    async def split_video_by_time(self, video_path: Path, output_dir: Path, 
-                                segment_duration: float = 60.0) -> List[Path]:
-        """Divise une vidéo en segments temporels"""
-        try:
-            output_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Obtenir la durée totale
-            video_info = await self.get_video_info(video_path)
-            total_duration = video_info['duration']
-            
-            segments = []
-            current_time = 0.0
-            segment_num = 0
-            
-            while current_time < total_duration:
-                segment_path = output_dir / f"segment_{segment_num:03d}.mp4"
-                remaining_duration = total_duration - current_time
-                actual_duration = min(segment_duration, remaining_duration)
-                
-                cmd = [
-                    str(self.ffmpeg_path),
-                    "-i", str(video_path),
-                    "-y",
-                    "-v", "warning",
-                    "-ss", str(current_time),
-                    "-t", str(actual_duration),
-                    "-c", "copy",  # Stream copy for speed
-                    str(segment_path)
-                ]
-                
-                process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                
-                stdout, stderr = await process.communicate()
-                
-                if process.returncode == 0 and segment_path.exists():
-                    segments.append(segment_path)
-                    self.logger.debug(f"Segment créé: {segment_path.name}")
-                
-                current_time += segment_duration
-                segment_num += 1
-            
-            self.logger.info(f"Vidéo divisée en {len(segments)} segments")
-            return segments
-            
-        except Exception as e:
-            self.logger.error(f"Erreur division vidéo {video_path}: {e}")
+            self.Logger.error(f"Erreur lors de l'extraction des pistes audio: {e}")
             return []
-    
-    async def get_frame_at_time(self, video_path: Path, timestamp: float, 
-                              output_path: Path) -> bool:
-        """Extrait une frame à un timestamp donné"""
+
+    def ExtractSubtitles(self, VideoPath: str, OutputDir: str) -> List[str]:
+        """
+        Extrait tous les sous-titres d'une vidéo
+
+        Args:
+            VideoPath: Chemin vers la vidéo
+            OutputDir: Répertoire de sortie
+
+        Returns:
+            Liste des chemins vers les sous-titres extraits
+        """
         try:
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            cmd = [
-                str(self.ffmpeg_path),
-                "-i", str(video_path),
-                "-y",
-                "-v", "warning",
-                "-ss", str(timestamp),
-                "-vframes", "1",
-                "-f", "image2",
-                str(output_path)
-            ]
-            
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            stdout, stderr = await process.communicate()
-            
-            return process.returncode == 0 and output_path.exists()
-            
+            os.makedirs(OutputDir, exist_ok=True)
+
+            # Récupère le nombre de pistes de sous-titres
+            Metadata = self.ExtractVideoMetadata(VideoPath)
+            if not Metadata:
+                return []
+
+            Subtitles = []
+            SubIndex = 0
+
+            for Stream in Metadata.get('streams', []):
+                if Stream.get('codec_type') == 'subtitle':
+                    CodecName = Stream.get('codec_name', 'srt')
+                    Extension = 'srt' if CodecName == 'subrip' else CodecName
+                    OutputPath = os.path.join(OutputDir, f'subtitle_{SubIndex}.{Extension}')
+
+                    Command = [
+                        self.FfmpegPath,
+                        '-i', VideoPath,
+                        '-map', f'0:s:{SubIndex}',
+                        '-c:s', 'copy',
+                        '-y',
+                        OutputPath
+                    ]
+
+                    subprocess.run(Command, capture_output=True, check=True)
+                    Subtitles.append(OutputPath)
+                    self.Logger.info(f"Sous-titre {SubIndex} extrait: {OutputPath}")
+                    SubIndex += 1
+
+            return Subtitles
+
         except Exception as e:
-            self.logger.error(f"Erreur extraction frame à {timestamp}s: {e}")
+            self.Logger.error(f"Erreur lors de l'extraction des sous-titres: {e}")
+            return []
+
+    def VideoToFrames(self, VideoPath: str, OutputDir: str, Quality: int = 2) -> bool:
+        """
+        Découpe une vidéo en images individuelles
+
+        Args:
+            VideoPath: Chemin vers la vidéo
+            OutputDir: Répertoire de sortie
+            Quality: Qualité JPEG (1-31, 1=meilleur, 31=pire)
+
+        Returns:
+            True si succès
+        """
+        try:
+            os.makedirs(OutputDir, exist_ok=True)
+
+            # Nom du pattern pour les images
+            OutputPattern = os.path.join(OutputDir, 'frame_%08d.png')
+
+            Command = [
+                self.FfmpegPath,
+                '-i', VideoPath,
+                '-qscale:v', str(Quality),
+                '-start_number', '0',
+                OutputPattern
+            ]
+
+            self.Logger.info(f"Découpage de la vidéo en images...")
+            Result = subprocess.run(Command, capture_output=True, text=True)
+
+            if Result.returncode == 0:
+                # Compte le nombre d'images créées
+                FrameCount = len([f for f in os.listdir(OutputDir) if f.endswith('.png')])
+                self.Logger.info(f"✓ {FrameCount} images extraites dans {OutputDir}")
+                return True
+            else:
+                self.Logger.error(f"Erreur FFmpeg: {Result.stderr}")
+                return False
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors du découpage en images: {e}")
             return False
-    
-    def estimate_processing_time(self, total_frames: int, fps: float) -> Dict[str, float]:
-        """Estime les temps de traitement"""
-        # Estimations basées sur des benchmarks moyens
-        extraction_time_per_frame = 0.05  # 50ms par frame
-        assembly_time_base = 30  # 30 secondes de base
-        assembly_time_per_frame = 0.02  # 20ms par frame
-        
-        extraction_time = total_frames * extraction_time_per_frame
-        assembly_time = assembly_time_base + (total_frames * assembly_time_per_frame)
-        
-        return {
-            'extraction_seconds': extraction_time,
-            'assembly_seconds': assembly_time,
-            'total_seconds': extraction_time + assembly_time,
-            'total_minutes': (extraction_time + assembly_time) / 60
-        }
-    
-    def get_supported_formats(self) -> Dict[str, List[str]]:
-        """Retourne les formats supportés"""
-        return {
-            'input': ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v'],
-            'output': ['.mp4', '.avi', '.mkv', '.mov']
-        }
-    
-    def validate_video_file(self, video_path: Path) -> Tuple[bool, str]:
-        """Valide un fichier vidéo"""
-        if not video_path.exists():
-            return False, "Fichier inexistant"
-        
-        if video_path.suffix.lower() not in self.get_supported_formats()['input']:
-            return False, f"Format non supporté: {video_path.suffix}"
-        
-        if video_path.stat().st_size == 0:
-            return False, "Fichier vide"
-        
-        return True, "Fichier valide"
+
+    def FramesToVideo(self, FramesDir: str, OutputPath: str, Fps: float,
+                     Quality: int = 18) -> bool:
+        """
+        Réassemble des images en vidéo
+
+        Args:
+            FramesDir: Répertoire contenant les images
+            OutputPath: Chemin de la vidéo de sortie
+            Fps: Framerate de la vidéo
+            Quality: CRF pour x264 (0-51, 18=défaut)
+
+        Returns:
+            True si succès
+        """
+        try:
+            # Pattern pour les images
+            InputPattern = os.path.join(FramesDir, 'frame_%08d.png')
+
+            Command = [
+                self.FfmpegPath,
+                '-framerate', str(Fps),
+                '-i', InputPattern,
+                '-c:v', 'libx264',
+                '-crf', str(Quality),
+                '-preset', 'medium',
+                '-pix_fmt', 'yuv420p',
+                '-y',
+                OutputPath
+            ]
+
+            self.Logger.info(f"Réassemblage des images en vidéo...")
+            Result = subprocess.run(Command, capture_output=True, text=True)
+
+            if Result.returncode == 0:
+                self.Logger.info(f"✓ Vidéo créée: {OutputPath}")
+                return True
+            else:
+                self.Logger.error(f"Erreur FFmpeg: {Result.stderr}")
+                return False
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors du réassemblage: {e}")
+            return False
+
+    def MergeAudioSubtitles(self, VideoPath: str, AudioTracks: List[str],
+                           Subtitles: List[str], OutputPath: str) -> bool:
+        """
+        Réintègre les pistes audio et sous-titres dans une vidéo
+
+        Args:
+            VideoPath: Chemin vers la vidéo (sans audio/sous-titres)
+            AudioTracks: Liste des pistes audio
+            Subtitles: Liste des sous-titres
+            OutputPath: Chemin de sortie
+
+        Returns:
+            True si succès
+        """
+        try:
+            Command = [self.FfmpegPath, '-i', VideoPath]
+
+            # Ajoute les pistes audio
+            for AudioTrack in AudioTracks:
+                Command.extend(['-i', AudioTrack])
+
+            # Ajoute les sous-titres
+            for Subtitle in Subtitles:
+                Command.extend(['-i', Subtitle])
+
+            # Map la vidéo
+            Command.extend(['-map', '0:v:0'])
+
+            # Map toutes les pistes audio
+            for i in range(len(AudioTracks)):
+                Command.extend(['-map', f'{i+1}:a:0'])
+
+            # Map tous les sous-titres
+            for i in range(len(Subtitles)):
+                Command.extend(['-map', f'{i+1+len(AudioTracks)}:s:0'])
+
+            # Options de copie
+            Command.extend([
+                '-c:v', 'copy',
+                '-c:a', 'copy',
+                '-c:s', 'copy',
+                '-y',
+                OutputPath
+            ])
+
+            self.Logger.info(f"Réintégration audio/sous-titres...")
+            Result = subprocess.run(Command, capture_output=True, text=True)
+
+            if Result.returncode == 0:
+                self.Logger.info(f"✓ Audio/sous-titres réintégrés: {OutputPath}")
+                return True
+            else:
+                self.Logger.error(f"Erreur FFmpeg: {Result.stderr}")
+                return False
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la réintégration: {e}")
+            return False
+
+    def EncodeToAV1(self, InputPath: str, OutputPath: str, Crf: int = 35) -> bool:
+        """
+        Encode une vidéo en AV1
+
+        Args:
+            InputPath: Chemin de la vidéo d'entrée
+            OutputPath: Chemin de sortie
+            Crf: Qualité (0-63, 35=défaut, plus élevé=plus compressé)
+
+        Returns:
+            True si succès
+        """
+        try:
+            Command = [
+                self.FfmpegPath,
+                '-i', InputPath,
+                '-c:v', 'libaom-av1',
+                '-crf', str(Crf),
+                '-b:v', '0',
+                '-c:a', 'copy',
+                '-c:s', 'copy',
+                '-strict', 'experimental',
+                '-y',
+                OutputPath
+            ]
+
+            self.Logger.info(f"Encodage en AV1 (CRF={Crf})...")
+            self.Logger.warning("⚠ L'encodage AV1 peut être très lent!")
+
+            Result = subprocess.run(Command, capture_output=True, text=True)
+
+            if Result.returncode == 0:
+                self.Logger.info(f"✓ Vidéo encodée en AV1: {OutputPath}")
+                return True
+            else:
+                self.Logger.error(f"Erreur FFmpeg: {Result.stderr}")
+                return False
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de l'encodage AV1: {e}")
+            return False
+
+    def GetVideoDuration(self, VideoPath: str) -> Optional[float]:
+        """
+        Récupère la durée d'une vidéo en secondes
+
+        Args:
+            VideoPath: Chemin vers la vidéo
+
+        Returns:
+            Durée en secondes ou None
+        """
+        try:
+            Metadata = self.ExtractVideoMetadata(VideoPath)
+            if Metadata and 'format' in Metadata:
+                Duration = float(Metadata['format'].get('duration', 0))
+                self.Logger.info(f"Durée: {Duration:.2f}s")
+                return Duration
+            return None
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de l'extraction de la durée: {e}")
+            return None
+
+
+# ============================================================================
+# EXEMPLE D'UTILISATION
+# ============================================================================
+
+if __name__ == "__main__":
+    # Test du gestionnaire FFmpeg
+    Handler = FFmpegHandler()
+
+    print("\n=== Test FFmpegHandler ===")
+    print(f"FFmpeg: {Handler.FfmpegPath}")
+    print(f"FFprobe: {Handler.FfprobePath}")
+
+    # Test avec une vidéo (si disponible)
+    TestVideo = "test.mp4"
+    if os.path.exists(TestVideo):
+        print(f"\nTest avec {TestVideo}")
+
+        Fps = Handler.ExtractFramerate(TestVideo)
+        print(f"Framerate: {Fps} fps")
+
+        Duration = Handler.GetVideoDuration(TestVideo)
+        print(f"Durée: {Duration}s")
+
+        Frames = Handler.GetTotalFrames(TestVideo)
+        print(f"Frames: {Frames}")
+    else:
+        print(f"\n⚠ Fichier de test {TestVideo} non trouvé")
