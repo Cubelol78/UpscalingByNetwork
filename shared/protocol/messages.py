@@ -48,7 +48,10 @@ class BaseMessage:
         Payload = Data.get("payload", {})
         Timestamp = Data.get("timestamp", "")
 
-        Message = cls(MessageTypeStr, Payload)
+        # Crée une instance vide sans appeler __init__ des sous-classes
+        Message = object.__new__(cls)
+        Message.MessageType = MessageTypeStr
+        Message.Payload = Payload
         Message.Timestamp = Timestamp
         return Message
 
