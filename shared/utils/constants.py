@@ -135,7 +135,7 @@ class NetworkConfig:
 
     DEFAULT_PORT = 8765
     DEFAULT_HOST = "0.0.0.0"
-    MAX_MESSAGE_SIZE = 100 * 1024 * 1024  # 100 MB
+    MAX_MESSAGE_SIZE = 5 * 1024 * 1024 * 1024  # 5 GB - Les batches d'images upscalées peuvent être très lourds
     HEARTBEAT_INTERVAL = 10  # secondes
     HEARTBEAT_TIMEOUT = 30  # secondes
     CONNECTION_TIMEOUT = 60  # secondes
