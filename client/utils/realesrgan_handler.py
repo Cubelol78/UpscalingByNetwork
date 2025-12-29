@@ -117,14 +117,18 @@ class RealESRGANHandler:
             '-n', Model
         ]
 
-        # Tile size (-t)
-        TileSize = self.PerformanceConfig.get('tile_size')
-        if TileSize and TileSize > 0:
-            # Supporte le format string pour multi-GPU (ex: "256,256")
+        # Tile size (-t) - seulement si valeur valide > 0
+        TileSize = self.PerformanceConfig.get('tile_size', 0)
+        try:
+            # Convertit en int si c'est une chaîne
             if isinstance(TileSize, str):
-                Command.extend(['-t', TileSize])
-            else:
+                TileSize = int(TileSize) if TileSize.strip() else 0
+            # Valide que c'est un entier positif
+            if isinstance(TileSize, int) and TileSize > 0:
                 Command.extend(['-t', str(TileSize)])
+        except (ValueError, TypeError):
+            # Ignore les valeurs invalides
+            self.Logger.warning(f"Tile size invalide ignoré: {TileSize}")
 
         # GPU selection (-g)
         GpuIds = self.PerformanceConfig.get('gpu_ids')
@@ -138,15 +142,18 @@ class RealESRGANHandler:
         # Threads (-j) format: "load:proc:save" ou "1:2,2:2" pour multi-GPU
         Threads = self.PerformanceConfig.get('threads')
         if Threads:
-            if isinstance(Threads, str):
-                # Format déjà prêt (ex: "1:2:2")
-                Command.extend(['-j', Threads])
-            elif isinstance(Threads, dict):
-                # Format dictionnaire
-                Load = Threads.get('load', 1)
-                Process = Threads.get('process', 2)
-                Save = Threads.get('save', 2)
-                Command.extend(['-j', f"{Load}:{Process}:{Save}"])
+            try:
+                if isinstance(Threads, str) and Threads.strip():
+                    # Format déjà prêt (ex: "1:2:2")
+                    Command.extend(['-j', Threads.strip()])
+                elif isinstance(Threads, dict):
+                    # Format dictionnaire - valide les valeurs
+                    Load = int(Threads.get('load', 1)) or 1
+                    Process = int(Threads.get('process', 2)) or 2
+                    Save = int(Threads.get('save', 2)) or 2
+                    Command.extend(['-j', f"{Load}:{Process}:{Save}"])
+            except (ValueError, TypeError) as e:
+                self.Logger.warning(f"Configuration threads invalide ignorée: {Threads} - {e}")
 
         # TTA mode (-x) - meilleure qualité mais plus lent
         if self.PerformanceConfig.get('tta_mode', False):
@@ -285,7 +292,8 @@ class RealESRGANHandler:
             # Construit la commande en mode dossier
             Command = self._BuildCommand(InputDir, OutputDir, ScaleFactor, Model)
 
-            self.Logger.debug(f"Commande: {' '.join(Command)}")
+            # Log la commande complète pour diagnostic
+            self.Logger.info(f"Commande Real-ESRGAN: {' '.join(Command)}")
 
             # Exécute Real-ESRGAN
             Result = subprocess.run(
