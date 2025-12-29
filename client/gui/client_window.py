@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTabWidget, QStatusBar, QMessageBox, QApplication
 )
-from PyQt5.QtCore import QTimer, Qt
+from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont
 
 from .connection_tab import ConnectionTab
@@ -19,10 +19,24 @@ from .performance_tab import PerformanceTab
 from client.core.client import UpscalingClient
 from client.core.connection import ConnectionManager
 from client.core.processor import LocalProcessor
+from client.utils.hardware_detector import HardwareDetector
 from shared.utils.logger import GetClientLogger
 from shared.utils.firewall import (
     IsWindows, RequestFirewallPermission, ShowFirewallDialog, RunAsAdmin
 )
+
+
+class HardwareDetectionThread(QThread):
+    """Thread de détection matériel au démarrage (non-bloquant)"""
+    Finished = pyqtSignal(dict)
+
+    def run(self):
+        try:
+            Detector = HardwareDetector()
+            Hardware = Detector.DetectAll()
+            self.Finished.emit(Hardware)
+        except Exception:
+            self.Finished.emit({})
 
 
 class ClientWindow(QMainWindow):
@@ -40,8 +54,15 @@ class ClientWindow(QMainWindow):
         self.BatchesProcessed = 0
         self.ImagesProcessed = 0
 
+        # Cache matériel (pré-chargé au démarrage)
+        self.CachedHardware = None
+        self.HardwareDetectionThread = None
+
         # Configuration de l'interface
         self.SetupUI()
+
+        # Lance la détection matériel en arrière-plan dès le démarrage
+        self.StartHardwareDetection()
 
         # Timer pour rafraîchir l'interface
         self.RefreshTimer = QTimer()
@@ -173,6 +194,42 @@ class ClientWindow(QMainWindow):
     def IsClientRunning(self) -> bool:
         """Retourne True si le client est connecté"""
         return self.IsRunning
+
+    def StartHardwareDetection(self):
+        """Lance la détection matériel en arrière-plan"""
+        self.Logger.info("Lancement de la détection matériel en arrière-plan...")
+        self.HardwareDetectionThread = HardwareDetectionThread()
+        self.HardwareDetectionThread.Finished.connect(self.OnHardwareDetected)
+        self.HardwareDetectionThread.start()
+
+    def OnHardwareDetected(self, Hardware: dict):
+        """Appelé quand la détection matériel est terminée"""
+        self.CachedHardware = Hardware
+        self.Logger.info("Détection matériel terminée et mise en cache")
+
+        # Notifie l'onglet Performance que le matériel est disponible
+        if hasattr(self, 'PerformanceTab') and self.PerformanceTab:
+            self.PerformanceTab.OnHardwareCacheReady(Hardware)
+
+    def GetCachedHardware(self) -> dict:
+        """Retourne le matériel détecté en cache (ou None si pas encore prêt)"""
+        return self.CachedHardware
+
+    def ReloadPerformanceConfig(self):
+        """
+        Recharge la configuration de performance et la propage au processeur actif.
+        Appelé automatiquement quand les paramètres changent.
+        """
+        try:
+            # Recharge la config dans le client/processeur s'il est actif
+            if self.Client and hasattr(self.Client, 'Processor') and self.Client.Processor:
+                self.Client.Processor.ReloadPerformanceConfig()
+                self.Logger.info("Configuration de performance rechargée dans le processeur")
+
+            return True
+        except Exception as e:
+            self.Logger.error(f"Erreur lors du rechargement de la configuration: {e}")
+            return False
 
     def closeEvent(self, event):
         """Gère la fermeture de la fenêtre"""

@@ -36,9 +36,8 @@ class UpscalingServer:
         self.Password = Config.get("server", {}).get("password", "")
         self.WorkDirectory = Config.get("server", {}).get("work_directory", PathConfig.WORK_DIR)
 
-        # Base de données
-        DbPath = os.path.join(self.WorkDirectory, PathConfig.DATABASE_NAME)
-        self.Database = DatabaseManager(DbPath)
+        # Base de données - utilise le chemin par défaut (indépendant du work_directory)
+        self.Database = DatabaseManager()  # Utilise GetDefaultDbPath()
 
         # Gestionnaire de clients
         self.ClientManager = None
@@ -105,9 +104,10 @@ class UpscalingServer:
 
     def _InitializeDefaultParameters(self):
         """Initialise les paramètres par défaut dans la base de données"""
+        # Utilise InitializeDefaultParameters() qui ne remplace pas les valeurs existantes
+        self.Database.InitializeDefaultParameters()
+        # Ajoute/met à jour la version du serveur
         self.Database.SetParameter("server_version", "1.0.0", "Version du serveur")
-        self.Database.SetParameter("batch_size", str(self.Config.get("server", {}).get("batch_size", 100)), "Taille des paquets d'images")
-        self.Database.SetParameter("work_directory", self.WorkDirectory, "Répertoire de travail")
 
     async def Start(self) -> bool:
         """

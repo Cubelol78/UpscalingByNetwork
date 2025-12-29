@@ -2,7 +2,6 @@
 Fenêtre principale de l'interface graphique du serveur
 """
 
-import os
 import sys
 import asyncio
 from PyQt5.QtWidgets import (
@@ -24,7 +23,6 @@ from server.core.video_processor import VideoProcessor
 from server.core.batch_distributor import BatchDistributor
 from server.database.db_manager import DatabaseManager
 from shared.utils.logger import GetServerLogger
-from shared.utils.constants import PathConfig
 from shared.utils.firewall import (
     IsWindows, RequestFirewallPermission, ShowFirewallDialog, RunAsAdmin
 )
@@ -43,9 +41,11 @@ class ServerWindow(QMainWindow):
         self.Logger.info("Initialisation de l'interface graphique du serveur")
 
         # Composants serveur
-        DbPath = os.path.join(PathConfig.WORK_DIR, PathConfig.DATABASE_NAME)
-        self.Database = DatabaseManager(DbPath)
+        # Utilise le chemin par défaut de la DB (indépendant du work_directory)
+        self.Database = DatabaseManager()  # Utilise GetDefaultDbPath()
         self.Database.Connect()
+        self.Database.InitializeDefaultParameters()  # Initialise les paramètres par défaut
+
         self.Server = None
         self.JobManager = None
         self.IsRunning = False

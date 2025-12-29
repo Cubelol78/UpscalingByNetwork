@@ -1,25 +1,41 @@
 """
 Onglet Configuration - Paramètres du serveur
+Configuration stockée dans la base de données SQLite (table parameters)
+Auto-save pour batch_size, bouton Sauvegarder pour les paramètres réseau
 """
 
-import json
-import os
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QGroupBox, QFormLayout,
     QSpinBox, QFileDialog, QMessageBox
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
 
 
 class ConfigTab(QWidget):
     """Onglet de configuration du serveur"""
 
+    # Délai de debounce pour l'auto-save du batch_size (en ms)
+    AUTOSAVE_DELAY_MS = 500
+
     def __init__(self, ParentWindow):
         super().__init__()
         self.ParentWindow = ParentWindow
-        self.ConfigFile = "/DATA-2T/UpscalingByNetwork/config/default_config.json"
+
+        # Flag pour bloquer l'auto-save pendant le chargement
+        self.IsLoading = False
+
+        # Timer pour debounce de l'auto-save du batch_size
+        self.BatchSizeAutoSaveTimer = QTimer()
+        self.BatchSizeAutoSaveTimer.setSingleShot(True)
+        self.BatchSizeAutoSaveTimer.timeout.connect(self.AutoSaveBatchSize)
+
+        # Timer pour masquer l'indicateur "Sauvegardé"
+        self.SavedIndicatorTimer = QTimer()
+        self.SavedIndicatorTimer.setSingleShot(True)
+        self.SavedIndicatorTimer.timeout.connect(self.HideSavedIndicator)
+
         self.SetupUI()
         self.LoadConfiguration()
 
@@ -27,15 +43,26 @@ class ConfigTab(QWidget):
         """Configure l'interface utilisateur"""
         Layout = QVBoxLayout(self)
 
-        # Titre
+        # En-tête avec titre et indicateur de sauvegarde
+        HeaderLayout = QHBoxLayout()
+
         Title = QLabel("Configuration du serveur")
         TitleFont = QFont()
         TitleFont.setPointSize(16)
         TitleFont.setBold(True)
         Title.setFont(TitleFont)
-        Layout.addWidget(Title)
+        HeaderLayout.addWidget(Title)
 
-        # Groupe réseau
+        HeaderLayout.addStretch()
+
+        # Indicateur de sauvegarde (discret)
+        self.SavedIndicator = QLabel("")
+        self.SavedIndicator.setStyleSheet("color: #4CAF50; font-style: italic;")
+        HeaderLayout.addWidget(self.SavedIndicator)
+
+        Layout.addLayout(HeaderLayout)
+
+        # Groupe réseau (nécessite redémarrage)
         NetworkGroup = self.CreateNetworkGroup()
         Layout.addWidget(NetworkGroup)
 
@@ -50,8 +77,8 @@ class ConfigTab(QWidget):
         Layout.addWidget(ActionBar)
 
     def CreateNetworkGroup(self) -> QGroupBox:
-        """Crée le groupe de configuration réseau"""
-        Group = QGroupBox("Configuration réseau")
+        """Crée le groupe de configuration réseau (nécessite redémarrage)"""
+        Group = QGroupBox("Configuration reseau (necessite redemarrage)")
         Group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
@@ -84,31 +111,8 @@ class ConfigTab(QWidget):
         # Mot de passe
         self.PasswordInput = QLineEdit()
         self.PasswordInput.setEchoMode(QLineEdit.Password)
-        self.PasswordInput.setPlaceholderText("Laisser vide pour désactiver")
+        self.PasswordInput.setPlaceholderText("Laisser vide pour desactiver")
         FormLayout.addRow("Mot de passe:", self.PasswordInput)
-
-        Group.setLayout(FormLayout)
-        return Group
-
-    def CreateProcessingGroup(self) -> QGroupBox:
-        """Crée le groupe de configuration du traitement"""
-        Group = QGroupBox("Configuration du traitement")
-        Group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 2px solid #cccccc;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
-
-        FormLayout = QFormLayout()
 
         # Répertoire de travail
         WorkDirLayout = QHBoxLayout()
@@ -120,15 +124,49 @@ class ConfigTab(QWidget):
         BrowseButton.clicked.connect(self.BrowseWorkDirectory)
         WorkDirLayout.addWidget(BrowseButton)
 
-        FormLayout.addRow("Répertoire de travail:", WorkDirLayout)
+        FormLayout.addRow("Repertoire de travail:", WorkDirLayout)
 
-        # Taille des batchs
+        Group.setLayout(FormLayout)
+        return Group
+
+    def CreateProcessingGroup(self) -> QGroupBox:
+        """Crée le groupe de configuration du traitement (dynamique)"""
+        Group = QGroupBox("Configuration du traitement (appliquee immediatement)")
+        Group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                border: 2px solid #4CAF50;
+                border-radius: 5px;
+                margin-top: 10px;
+                padding-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+                color: #4CAF50;
+            }
+        """)
+
+        FormLayout = QFormLayout()
+
+        # Taille des batchs (dynamique, auto-save)
+        BatchSizeLayout = QHBoxLayout()
         self.BatchSizeInput = QSpinBox()
         self.BatchSizeInput.setMinimum(10)
         self.BatchSizeInput.setMaximum(1000)
         self.BatchSizeInput.setValue(100)
         self.BatchSizeInput.setSuffix(" images")
-        FormLayout.addRow("Taille des batchs:", self.BatchSizeInput)
+        self.BatchSizeInput.valueChanged.connect(self.OnBatchSizeChanged)
+        BatchSizeLayout.addWidget(self.BatchSizeInput)
+
+        # Note
+        BatchSizeNote = QLabel("(sauvegarde automatique)")
+        BatchSizeNote.setStyleSheet("color: gray; font-style: italic; font-size: 10px;")
+        BatchSizeLayout.addWidget(BatchSizeNote)
+        BatchSizeLayout.addStretch()
+
+        FormLayout.addRow("Taille des batchs:", BatchSizeLayout)
 
         Group.setLayout(FormLayout)
         return Group
@@ -138,6 +176,11 @@ class ConfigTab(QWidget):
         ActionWidget = QWidget()
         ActionLayout = QHBoxLayout(ActionWidget)
 
+        # Note explicative
+        NoteLabel = QLabel("Les parametres reseau necessitent un redemarrage du serveur")
+        NoteLabel.setStyleSheet("color: #FF9800; font-size: 11px;")
+        ActionLayout.addWidget(NoteLabel)
+
         ActionLayout.addStretch()
 
         # Bouton Annuler
@@ -145,8 +188,8 @@ class ConfigTab(QWidget):
         self.CancelButton.clicked.connect(self.LoadConfiguration)
         ActionLayout.addWidget(self.CancelButton)
 
-        # Bouton Enregistrer
-        self.SaveButton = QPushButton("💾 Enregistrer")
+        # Bouton Enregistrer (pour les paramètres réseau)
+        self.SaveButton = QPushButton("Enregistrer parametres reseau")
         self.SaveButton.setStyleSheet("""
             QPushButton {
                 background-color: #2196F3;
@@ -160,7 +203,7 @@ class ConfigTab(QWidget):
                 background-color: #0b7dda;
             }
         """)
-        self.SaveButton.clicked.connect(self.SaveConfiguration)
+        self.SaveButton.clicked.connect(self.SaveNetworkConfiguration)
         ActionLayout.addWidget(self.SaveButton)
 
         return ActionWidget
@@ -169,7 +212,7 @@ class ConfigTab(QWidget):
         """Ouvre le dialogue de sélection du répertoire de travail"""
         Directory = QFileDialog.getExistingDirectory(
             self,
-            "Sélectionner le répertoire de travail",
+            "Selectionner le repertoire de travail",
             self.WorkDirInput.text() or "./work"
         )
 
@@ -177,61 +220,124 @@ class ConfigTab(QWidget):
             self.WorkDirInput.setText(Directory)
 
     def LoadConfiguration(self):
-        """Charge la configuration depuis le fichier"""
+        """Charge la configuration depuis la base de données"""
+        self.IsLoading = True
+
         try:
-            if os.path.exists(self.ConfigFile):
-                with open(self.ConfigFile, 'r') as f:
-                    Config = json.load(f)
+            # Récupère la base de données depuis le parent
+            Database = self.ParentWindow.GetDatabase()
 
-                # Charger les valeurs réseau
-                ServerConfig = Config.get('server', {})
-                self.IpInput.setText(ServerConfig.get('ip', '0.0.0.0'))
-                self.PortInput.setValue(ServerConfig.get('port', 8765))
-                self.PasswordInput.setText(ServerConfig.get('password', ''))
+            if Database:
+                # Charger les valeurs depuis la DB
+                Config = Database.GetServerConfig()
 
-                # Charger les valeurs de traitement
-                self.WorkDirInput.setText(ServerConfig.get('work_directory', './work'))
-                self.BatchSizeInput.setValue(ServerConfig.get('batch_size', 100))
+                self.IpInput.setText(Config.get('ip', '0.0.0.0'))
+                self.PortInput.setValue(Config.get('port', 8765))
+                self.PasswordInput.setText(Config.get('password', ''))
+                self.WorkDirInput.setText(Config.get('work_directory', './work'))
+                self.BatchSizeInput.setValue(Config.get('batch_size', 100))
 
-                self.ParentWindow.Logger.info("Configuration chargée depuis le fichier")
+                self.ParentWindow.Logger.info("Configuration chargee depuis la base de donnees")
+            else:
+                # Valeurs par défaut si pas de DB
+                self.IpInput.setText('0.0.0.0')
+                self.PortInput.setValue(8765)
+                self.PasswordInput.setText('')
+                self.WorkDirInput.setText('./work')
+                self.BatchSizeInput.setValue(100)
 
         except Exception as e:
             self.ParentWindow.Logger.error(f"Erreur lors du chargement de la configuration: {e}")
             QMessageBox.warning(
                 self,
                 "Avertissement",
-                f"Impossible de charger la configuration:\n{str(e)}\n\nValeurs par défaut utilisées."
+                f"Impossible de charger la configuration:\n{str(e)}\n\nValeurs par defaut utilisees."
             )
 
-    def SaveConfiguration(self):
-        """Enregistre la configuration dans le fichier"""
+        finally:
+            self.IsLoading = False
+
+    def OnBatchSizeChanged(self, Value: int):
+        """Appelé quand le batch_size change - déclenche l'auto-save"""
+        if self.IsLoading:
+            return
+
+        # Redémarre le timer de debounce
+        self.BatchSizeAutoSaveTimer.stop()
+        self.BatchSizeAutoSaveTimer.start(self.AUTOSAVE_DELAY_MS)
+
+    def AutoSaveBatchSize(self):
+        """Sauvegarde automatique du batch_size et propagation au serveur actif"""
         try:
-            # Lire la configuration existante
-            if os.path.exists(self.ConfigFile):
-                with open(self.ConfigFile, 'r') as f:
-                    Config = json.load(f)
-            else:
-                Config = {}
+            Database = self.ParentWindow.GetDatabase()
+            NewBatchSize = self.BatchSizeInput.value()
 
-            # Mettre à jour les valeurs serveur
-            if 'server' not in Config:
-                Config['server'] = {}
+            if Database:
+                # Sauvegarder dans la base de données
+                Database.SetParameter('batch_size', str(NewBatchSize), "Nombre d'images par batch")
 
-            Config['server']['ip'] = self.IpInput.text() or '0.0.0.0'
-            Config['server']['port'] = self.PortInput.value()
-            Config['server']['password'] = self.PasswordInput.text()
-            Config['server']['work_directory'] = self.WorkDirInput.text() or './work'
-            Config['server']['batch_size'] = self.BatchSizeInput.value()
+            # Propager au serveur actif s'il existe
+            self.PropageBatchSizeToServer(NewBatchSize)
 
-            # Sauvegarder dans le fichier
-            with open(self.ConfigFile, 'w') as f:
-                json.dump(Config, f, indent=2)
+            # Affiche l'indicateur "Sauvegardé"
+            self.ShowSavedIndicator()
 
-            self.ParentWindow.Logger.info("Configuration sauvegardée")
+            self.ParentWindow.Logger.info(f"Batch size mis a jour: {NewBatchSize}")
+
+        except Exception as e:
+            self.ParentWindow.Logger.error(f"Erreur lors de l'auto-save du batch_size: {e}")
+
+    def PropageBatchSizeToServer(self, BatchSize: int):
+        """Propage le batch_size au serveur actif"""
+        try:
+            # Vérifie si le serveur est actif
+            if hasattr(self.ParentWindow, 'Server') and self.ParentWindow.Server:
+                Server = self.ParentWindow.Server
+
+                # Met à jour dans le serveur
+                Server.BatchSize = BatchSize
+
+                # Met à jour dans la base de données
+                if hasattr(Server, 'DbManager') and Server.DbManager:
+                    Server.DbManager.SetParameter("batch_size", str(BatchSize))
+
+                # Met à jour dans le BatchDistributor si actif
+                if hasattr(Server, 'BatchDistributor') and Server.BatchDistributor:
+                    Server.BatchDistributor.BatchSize = BatchSize
+
+                self.ParentWindow.Logger.info(f"Batch size propag au serveur actif: {BatchSize}")
+
+        except Exception as e:
+            self.ParentWindow.Logger.error(f"Erreur lors de la propagation du batch_size: {e}")
+
+    def ShowSavedIndicator(self):
+        """Affiche brièvement l'indicateur de sauvegarde"""
+        self.SavedIndicator.setText("Sauvegarde")
+        self.SavedIndicatorTimer.start(2000)  # Masque après 2 secondes
+
+    def HideSavedIndicator(self):
+        """Masque l'indicateur de sauvegarde"""
+        self.SavedIndicator.setText("")
+
+    def SaveNetworkConfiguration(self):
+        """Enregistre les paramètres réseau (nécessite redémarrage)"""
+        try:
+            Database = self.ParentWindow.GetDatabase()
+
+            if Database:
+                # Sauvegarder dans la base de données
+                Database.SetParameter('server_ip', self.IpInput.text() or '0.0.0.0', "Adresse IP d'écoute du serveur")
+                Database.SetParameter('server_port', str(self.PortInput.value()), "Port d'écoute du serveur")
+                Database.SetParameter('server_password', self.PasswordInput.text(), "Mot de passe du serveur")
+                Database.SetParameter('work_directory', self.WorkDirInput.text() or './work', "Répertoire de travail")
+                # Note: batch_size est déjà sauvegardé via auto-save
+
+            self.ParentWindow.Logger.info("Configuration reseau sauvegardee")
             QMessageBox.information(
                 self,
-                "Succès",
-                "Configuration sauvegardée avec succès!\n\nRedémarrez le serveur pour appliquer les changements."
+                "Succes",
+                "Configuration reseau sauvegardee!\n\n"
+                "Redemarrez le serveur pour appliquer les changements."
             )
 
         except Exception as e:
@@ -241,6 +347,10 @@ class ConfigTab(QWidget):
                 "Erreur",
                 f"Impossible de sauvegarder la configuration:\n{str(e)}"
             )
+
+    def SaveConfiguration(self):
+        """Enregistre toute la configuration (compatibilité)"""
+        self.SaveNetworkConfiguration()
 
     def GetConfiguration(self) -> dict:
         """Retourne la configuration actuelle"""

@@ -1,6 +1,7 @@
 """
 Onglet Performances - Configuration des performances Real-ESRGAN
 Détection matériel et optimisation automatique
+Auto-save avec debounce et indicateur visuel
 """
 
 from PyQt5.QtWidgets import (
@@ -9,7 +10,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QComboBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QMessageBox, QProgressDialog
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont
 
 from client.utils.hardware_detector import HardwareDetector
@@ -34,7 +35,10 @@ class HardwareDetectionThread(QThread):
 
 
 class PerformanceTab(QWidget):
-    """Onglet de configuration des performances"""
+    """Onglet de configuration des performances avec auto-save"""
+
+    # Délai de debounce pour l'auto-save (en ms)
+    AUTOSAVE_DELAY_MS = 500
 
     def __init__(self, ParentWindow):
         super().__init__()
@@ -44,24 +48,47 @@ class PerformanceTab(QWidget):
         self.DetectedHardware = None
         self.DetectionThread = None
 
+        # Flag pour bloquer l'auto-save pendant le chargement
+        self.IsLoading = False
+
+        # Timer pour debounce de l'auto-save
+        self.AutoSaveTimer = QTimer()
+        self.AutoSaveTimer.setSingleShot(True)
+        self.AutoSaveTimer.timeout.connect(self.DoAutoSave)
+
+        # Timer pour masquer l'indicateur "Sauvegardé"
+        self.SavedIndicatorTimer = QTimer()
+        self.SavedIndicatorTimer.setSingleShot(True)
+        self.SavedIndicatorTimer.timeout.connect(self.HideSavedIndicator)
+
         self.SetupUI()
         self.LoadConfig()
 
-        # Détection automatique au premier lancement
-        if self.ConfigManager.IsFirstRun():
-            self.DetectHardware()
+        # Essaie d'utiliser le cache hardware du parent s'il existe
+        self.TryUseCachedHardware()
 
     def SetupUI(self):
         """Configure l'interface utilisateur"""
         Layout = QVBoxLayout(self)
 
-        # Titre
+        # En-tête avec titre et indicateur de sauvegarde
+        HeaderLayout = QHBoxLayout()
+
         Title = QLabel("Configuration des performances")
         TitleFont = QFont()
         TitleFont.setPointSize(16)
         TitleFont.setBold(True)
         Title.setFont(TitleFont)
-        Layout.addWidget(Title)
+        HeaderLayout.addWidget(Title)
+
+        HeaderLayout.addStretch()
+
+        # Indicateur de sauvegarde (discret)
+        self.SavedIndicator = QLabel("")
+        self.SavedIndicator.setStyleSheet("color: #4CAF50; font-style: italic;")
+        HeaderLayout.addWidget(self.SavedIndicator)
+
+        Layout.addLayout(HeaderLayout)
 
         # Section Matériel détecté
         HardwareGroup = self.CreateHardwareGroup()
@@ -83,16 +110,21 @@ class PerformanceTab(QWidget):
 
     def CreateHardwareGroup(self) -> QGroupBox:
         """Crée le groupe d'affichage du matériel détecté"""
-        Group = QGroupBox("Matériel détecté")
+        Group = QGroupBox("Materiel detecte")
         Layout = QVBoxLayout(Group)
+
+        # Indicateur de chargement
+        self.HardwareLoadingLabel = QLabel("Detection en cours...")
+        self.HardwareLoadingLabel.setStyleSheet("color: #FF9800; font-style: italic;")
+        Layout.addWidget(self.HardwareLoadingLabel)
 
         # Informations CPU/RAM
         InfoLayout = QFormLayout()
 
-        self.CpuLabel = QLabel("Non détecté")
+        self.CpuLabel = QLabel("--")
         InfoLayout.addRow("CPU:", self.CpuLabel)
 
-        self.RamLabel = QLabel("Non détecté")
+        self.RamLabel = QLabel("--")
         InfoLayout.addRow("RAM:", self.RamLabel)
 
         Layout.addLayout(InfoLayout)
@@ -111,8 +143,8 @@ class PerformanceTab(QWidget):
 
         Layout.addWidget(self.GpuTable)
 
-        # Bouton détection
-        DetectButton = QPushButton("Detecter le materiel")
+        # Bouton re-détection (au cas où le matériel change)
+        DetectButton = QPushButton("Re-detecter le materiel")
         DetectButton.clicked.connect(self.DetectHardware)
         Layout.addWidget(DetectButton)
 
@@ -130,7 +162,7 @@ class PerformanceTab(QWidget):
             "GPU unique",
             "Multi-GPU (tous)"
         ])
-        self.GpuModeCombo.currentIndexChanged.connect(self.OnGpuModeChanged)
+        self.GpuModeCombo.currentIndexChanged.connect(self.OnConfigChanged)
         Layout.addRow("Mode:", self.GpuModeCombo)
 
         # Tile size
@@ -185,8 +217,10 @@ class PerformanceTab(QWidget):
         ThreadsWidget.setLayout(ThreadsLayout)
         Layout.addRow("Threads:", ThreadsWidget)
 
-        # Note: Le mode TTA est configuré côté serveur pour garantir
-        # une qualité uniforme sur tous les paquets d'une vidéo
+        # Note TTA
+        TtaNote = QLabel("Note: Le mode TTA est configure cote serveur")
+        TtaNote.setStyleSheet("color: gray; font-size: 10px;")
+        Layout.addRow("", TtaNote)
 
         return Group
 
@@ -220,35 +254,32 @@ class PerformanceTab(QWidget):
         self.ResetButton.clicked.connect(self.ResetConfig)
         ActionLayout.addWidget(self.ResetButton)
 
-        # Sauvegarder
-        self.SaveButton = QPushButton("Sauvegarder")
-        self.SaveButton.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                padding: 8px 16px;
-                border: none;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-        """)
-        self.SaveButton.clicked.connect(self.SaveConfig)
-        ActionLayout.addWidget(self.SaveButton)
+        # Note: Plus de bouton "Sauvegarder" - auto-save actif
 
         return ActionWidget
 
+    def TryUseCachedHardware(self):
+        """Essaie d'utiliser le cache hardware du parent"""
+        if hasattr(self.ParentWindow, 'GetCachedHardware'):
+            CachedHardware = self.ParentWindow.GetCachedHardware()
+            if CachedHardware:
+                self.OnHardwareCacheReady(CachedHardware)
+            # Sinon, attend que OnHardwareCacheReady soit appelé par le parent
+
+    def OnHardwareCacheReady(self, Hardware: dict):
+        """Appelé quand le cache hardware du parent est prêt"""
+        if Hardware and not self.DetectedHardware:
+            self.DetectedHardware = Hardware
+            self.UpdateHardwareDisplay()
+
+            # Auto-configure au premier lancement si nécessaire
+            if self.ConfigManager.IsFirstRun():
+                self.AutoConfigureQuiet()
+
     def DetectHardware(self):
-        """Lance la détection du matériel"""
-        # Affiche un dialog de progression
-        self.ProgressDialog = QProgressDialog(
-            "Detection du materiel en cours...",
-            None, 0, 0, self
-        )
-        self.ProgressDialog.setWindowModality(Qt.WindowModal)
-        self.ProgressDialog.show()
+        """Lance la re-détection du matériel"""
+        self.HardwareLoadingLabel.setText("Detection en cours...")
+        self.HardwareLoadingLabel.setVisible(True)
 
         # Lance la détection dans un thread
         self.DetectionThread = HardwareDetectionThread()
@@ -258,35 +289,21 @@ class PerformanceTab(QWidget):
 
     def OnHardwareDetected(self, Hardware: dict):
         """Appelé quand la détection est terminée"""
-        self.ProgressDialog.close()
+        self.HardwareLoadingLabel.setVisible(False)
         self.DetectedHardware = Hardware
         self.UpdateHardwareDisplay()
 
-        # Propose l'auto-configuration si première exécution
-        if self.ConfigManager.IsFirstRun():
-            Reply = QMessageBox.question(
-                self,
-                "Configuration automatique",
-                "Voulez-vous appliquer la configuration optimale basee sur votre materiel?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes
-            )
-            if Reply == QMessageBox.Yes:
-                self.AutoConfigure()
-
     def OnHardwareError(self, ErrorMsg: str):
         """Appelé si une erreur survient pendant la détection"""
-        self.ProgressDialog.close()
-        QMessageBox.warning(
-            self,
-            "Erreur de detection",
-            f"Impossible de detecter le materiel: {ErrorMsg}"
-        )
+        self.HardwareLoadingLabel.setText(f"Erreur: {ErrorMsg}")
+        self.HardwareLoadingLabel.setStyleSheet("color: #F44336; font-style: italic;")
 
     def UpdateHardwareDisplay(self):
         """Met à jour l'affichage du matériel détecté"""
         if not self.DetectedHardware:
             return
+
+        self.HardwareLoadingLabel.setVisible(False)
 
         # CPU
         Cpu = self.DetectedHardware.get("cpu", {})
@@ -302,6 +319,10 @@ class PerformanceTab(QWidget):
         Gpus = self.DetectedHardware.get("gpu", [])
         self.GpuTable.setRowCount(len(Gpus))
 
+        # Bloque les signaux pendant la mise à jour
+        WasLoading = self.IsLoading
+        self.IsLoading = True
+
         for Row, Gpu in enumerate(Gpus):
             # Checkbox
             CheckBox = QCheckBox()
@@ -314,8 +335,11 @@ class PerformanceTab(QWidget):
             IdItem.setFlags(IdItem.flags() & ~Qt.ItemIsEditable)
             self.GpuTable.setItem(Row, 1, IdItem)
 
-            # Nom
-            NameItem = QTableWidgetItem(Gpu.get("name", "Inconnu"))
+            # Nom (avec indication dédié/intégré)
+            GpuName = Gpu.get("name", "Inconnu")
+            IsIntegrated = self.ConfigManager._IsIntegratedGpu(GpuName)
+            TypeSuffix = " (integre)" if IsIntegrated else ""
+            NameItem = QTableWidgetItem(f"{GpuName}{TypeSuffix}")
             NameItem.setFlags(NameItem.flags() & ~Qt.ItemIsEditable)
             self.GpuTable.setItem(Row, 2, NameItem)
 
@@ -325,6 +349,8 @@ class PerformanceTab(QWidget):
             VramItem = QTableWidgetItem(VramText)
             VramItem.setFlags(VramItem.flags() & ~Qt.ItemIsEditable)
             self.GpuTable.setItem(Row, 3, VramItem)
+
+        self.IsLoading = WasLoading
 
         # Met à jour la recommandation de tile size
         self.UpdateTileSizeRecommendation()
@@ -356,48 +382,68 @@ class PerformanceTab(QWidget):
 
     def LoadConfig(self):
         """Charge la configuration actuelle"""
-        Config = self.ConfigManager.Load()
+        # Bloque l'auto-save pendant le chargement
+        self.IsLoading = True
 
-        # Tile size
-        TileSize = Config.get("tile_size", 0)
-        self.TileSizeSpinBox.setValue(TileSize)
+        try:
+            Config = self.ConfigManager.Load()
 
-        # GPU mode
-        GpuIds = Config.get("gpu_ids", [])
-        if not GpuIds:
-            self.GpuModeCombo.setCurrentIndex(0)  # Auto
-        elif len(GpuIds) == 1:
-            self.GpuModeCombo.setCurrentIndex(1)  # GPU unique
-        else:
-            self.GpuModeCombo.setCurrentIndex(2)  # Multi-GPU
+            # Tile size
+            TileSize = Config.get("tile_size", 0)
+            self.TileSizeSpinBox.setValue(TileSize)
 
-        # Threads
-        Threads = Config.get("threads", {})
-        self.LoadThreadsSpinBox.setValue(Threads.get("load", 1))
-        self.ProcessThreadsSpinBox.setValue(Threads.get("process", 2))
-        self.SaveThreadsSpinBox.setValue(Threads.get("save", 2))
+            # GPU mode
+            GpuIds = Config.get("gpu_ids", [])
+            if not GpuIds:
+                self.GpuModeCombo.setCurrentIndex(0)  # Auto
+            elif len(GpuIds) == 1:
+                self.GpuModeCombo.setCurrentIndex(1)  # GPU unique
+            else:
+                self.GpuModeCombo.setCurrentIndex(2)  # Multi-GPU
 
-    def SaveConfig(self):
-        """Sauvegarde la configuration"""
+            # Threads
+            Threads = Config.get("threads", {})
+            self.LoadThreadsSpinBox.setValue(Threads.get("load", 1))
+            self.ProcessThreadsSpinBox.setValue(Threads.get("process", 2))
+            self.SaveThreadsSpinBox.setValue(Threads.get("save", 2))
+
+        finally:
+            # Réactive l'auto-save
+            self.IsLoading = False
+
+    def OnConfigChanged(self):
+        """Appelé quand une valeur de configuration change - déclenche l'auto-save"""
+        if self.IsLoading:
+            return
+
+        # Redémarre le timer de debounce
+        self.AutoSaveTimer.stop()
+        self.AutoSaveTimer.start(self.AUTOSAVE_DELAY_MS)
+
+    def OnGpuSelectionChanged(self, State):
+        """Appelé quand la sélection GPU change"""
+        self.OnConfigChanged()
+
+    def DoAutoSave(self):
+        """Effectue la sauvegarde automatique"""
         Config = self.BuildConfigFromUI()
 
         if self.ConfigManager.Save(Config):
-            QMessageBox.information(
-                self,
-                "Configuration sauvegardee",
-                "La configuration de performance a ete sauvegardee.\n"
-                "Elle sera appliquee au prochain traitement."
-            )
+            # Affiche l'indicateur "Sauvegardé"
+            self.ShowSavedIndicator()
 
-            # Notifie le parent pour recharger la config
+            # Propage la config au processeur actif
             if hasattr(self.ParentWindow, 'ReloadPerformanceConfig'):
                 self.ParentWindow.ReloadPerformanceConfig()
-        else:
-            QMessageBox.warning(
-                self,
-                "Erreur",
-                "Impossible de sauvegarder la configuration."
-            )
+
+    def ShowSavedIndicator(self):
+        """Affiche brièvement l'indicateur de sauvegarde"""
+        self.SavedIndicator.setText("Sauvegarde")
+        self.SavedIndicatorTimer.start(2000)  # Masque après 2 secondes
+
+    def HideSavedIndicator(self):
+        """Masque l'indicateur de sauvegarde"""
+        self.SavedIndicator.setText("")
 
     def BuildConfigFromUI(self) -> dict:
         """Construit la configuration depuis l'UI"""
@@ -428,6 +474,15 @@ class PerformanceTab(QWidget):
             "first_run": False
         }
 
+    def AutoConfigureQuiet(self):
+        """Auto-configure sans afficher de message (pour le premier lancement)"""
+        if not self.DetectedHardware:
+            return
+
+        UseMultiGpu = False
+        Config = self.ConfigManager.AutoConfigure(self.DetectedHardware, UseMultiGpu=UseMultiGpu)
+        self.ApplyConfigToUI(Config)
+
     def AutoConfigure(self):
         """Applique la configuration automatique avec sélection intelligente des GPU"""
         if not self.DetectedHardware:
@@ -441,39 +496,12 @@ class PerformanceTab(QWidget):
         # Auto-configure avec sélection intelligente (préfère les GPU dédiés)
         Config = self.ConfigManager.AutoConfigure(self.DetectedHardware, UseMultiGpu=UseMultiGpu)
 
-        # Met à jour l'UI
-        self.TileSizeSpinBox.setValue(Config.get("tile_size", 0))
-
-        Threads = Config.get("threads", {})
-        self.LoadThreadsSpinBox.setValue(Threads.get("load", 1))
-        self.ProcessThreadsSpinBox.setValue(Threads.get("process", 2))
-        self.SaveThreadsSpinBox.setValue(Threads.get("save", 2))
-
-        # Sélectionne uniquement les GPU choisis par l'auto-configuration
-        SelectedGpuIds = Config.get("gpu_ids", [])
-        Gpus = self.DetectedHardware.get("gpu", [])
-
-        for Row in range(self.GpuTable.rowCount()):
-            CheckBox = self.GpuTable.cellWidget(Row, 0)
-            if CheckBox:
-                IdItem = self.GpuTable.item(Row, 1)
-                if IdItem:
-                    try:
-                        GpuId = int(IdItem.text())
-                        # Coche seulement les GPU sélectionnés par l'auto-config
-                        CheckBox.setChecked(GpuId in SelectedGpuIds)
-                    except ValueError:
-                        CheckBox.setChecked(False)
-
-        # Met à jour le mode GPU
-        if len(SelectedGpuIds) > 1:
-            self.GpuModeCombo.setCurrentIndex(2)  # Multi-GPU
-        elif len(SelectedGpuIds) == 1:
-            self.GpuModeCombo.setCurrentIndex(1)  # GPU unique
-        else:
-            self.GpuModeCombo.setCurrentIndex(0)  # Auto
+        # Applique à l'UI (déclenchera auto-save)
+        self.ApplyConfigToUI(Config)
 
         # Affiche les GPU sélectionnés dans le message
+        SelectedGpuIds = Config.get("gpu_ids", [])
+        Gpus = self.DetectedHardware.get("gpu", [])
         SelectedNames = []
         for Gpu in Gpus:
             if Gpu.get("id") in SelectedGpuIds:
@@ -484,10 +512,52 @@ class PerformanceTab(QWidget):
         QMessageBox.information(
             self,
             "Configuration automatique",
-            f"Configuration optimale appliquee.\n\n"
-            f"GPU selectionnes (prefere les GPU dedies):\n{GpuInfo}\n\n"
-            f"N'oubliez pas de sauvegarder si vous souhaitez la conserver."
+            f"Configuration optimale appliquee et sauvegardee.\n\n"
+            f"GPU selectionnes (prefere les GPU dedies):\n{GpuInfo}"
         )
+
+    def ApplyConfigToUI(self, Config: dict):
+        """Applique une configuration à l'UI"""
+        # Bloque temporairement pour éviter multiple saves
+        WasLoading = self.IsLoading
+        self.IsLoading = True
+
+        try:
+            # Met à jour l'UI
+            self.TileSizeSpinBox.setValue(Config.get("tile_size", 0))
+
+            Threads = Config.get("threads", {})
+            self.LoadThreadsSpinBox.setValue(Threads.get("load", 1))
+            self.ProcessThreadsSpinBox.setValue(Threads.get("process", 2))
+            self.SaveThreadsSpinBox.setValue(Threads.get("save", 2))
+
+            # Sélectionne uniquement les GPU choisis par l'auto-configuration
+            SelectedGpuIds = Config.get("gpu_ids", [])
+
+            for Row in range(self.GpuTable.rowCount()):
+                CheckBox = self.GpuTable.cellWidget(Row, 0)
+                if CheckBox:
+                    IdItem = self.GpuTable.item(Row, 1)
+                    if IdItem:
+                        try:
+                            GpuId = int(IdItem.text())
+                            CheckBox.setChecked(GpuId in SelectedGpuIds)
+                        except ValueError:
+                            CheckBox.setChecked(False)
+
+            # Met à jour le mode GPU
+            if len(SelectedGpuIds) > 1:
+                self.GpuModeCombo.setCurrentIndex(2)  # Multi-GPU
+            elif len(SelectedGpuIds) == 1:
+                self.GpuModeCombo.setCurrentIndex(1)  # GPU unique
+            else:
+                self.GpuModeCombo.setCurrentIndex(0)  # Auto
+
+        finally:
+            self.IsLoading = WasLoading
+
+        # Déclenche une sauvegarde manuelle (car IsLoading était True)
+        self.DoAutoSave()
 
     def ResetConfig(self):
         """Réinitialise la configuration"""
@@ -502,27 +572,14 @@ class PerformanceTab(QWidget):
         if Reply == QMessageBox.Yes:
             self.ConfigManager.Reset()
             self.LoadConfig()
-            QMessageBox.information(
-                self,
-                "Configuration reinitialisee",
-                "La configuration a ete reinitialisee aux valeurs par defaut."
-            )
+            self.ShowSavedIndicator()
 
-    def OnGpuModeChanged(self, Index: int):
-        """Appelé quand le mode GPU change"""
-        self.OnConfigChanged()
-
-    def OnGpuSelectionChanged(self, State):
-        """Appelé quand la sélection GPU change"""
-        self.OnConfigChanged()
-
-    def OnConfigChanged(self):
-        """Appelé quand une valeur de configuration change"""
-        # On pourrait ajouter une indication visuelle ici
-        pass
+            # Propage la config
+            if hasattr(self.ParentWindow, 'ReloadPerformanceConfig'):
+                self.ParentWindow.ReloadPerformanceConfig()
 
     def Refresh(self):
         """Rafraîchit l'onglet"""
-        self.LoadConfig()
+        # Ne recharge pas la config pour éviter de perdre les changements non sauvés
         if self.DetectedHardware:
             self.UpdateHardwareDisplay()

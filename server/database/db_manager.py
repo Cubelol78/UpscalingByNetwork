@@ -1,5 +1,6 @@
 """
 Gestionnaire de base de données SQLite pour le serveur
+Configuration stockée dans la table parameters au lieu d'un fichier JSON
 """
 
 import sqlite3
@@ -18,22 +19,48 @@ from shared.utils.logger import GetModuleLogger
 from shared.utils.constants import JobStatus, BatchStatus
 
 
+# Paramètres par défaut du serveur
+DEFAULT_PARAMETERS = {
+    "server_ip": ("0.0.0.0", "Adresse IP d'écoute du serveur"),
+    "server_port": ("8765", "Port d'écoute du serveur"),
+    "server_password": ("", "Mot de passe du serveur (vide = désactivé)"),
+    "work_directory": ("./work", "Répertoire de travail pour les fichiers"),
+    "batch_size": ("100", "Nombre d'images par batch"),
+}
+
+
 class DatabaseManager:
     """Gestionnaire de base de données SQLite"""
 
-    def __init__(self, DbPath: str):
+    @staticmethod
+    def GetDefaultDbPath() -> str:
+        """
+        Retourne le chemin par défaut de la base de données.
+        Stockée dans ~/.upscaling_server/server.db pour éviter le problème
+        chicken-and-egg avec work_directory.
+
+        Returns:
+            Chemin absolu vers la base de données
+        """
+        HomeDir = Path.home()
+        DbDir = HomeDir / ".upscaling_server"
+        return str(DbDir / "server.db")
+
+    def __init__(self, DbPath: str = None):
         """
         Initialise le gestionnaire de base de données
 
         Args:
-            DbPath: Chemin vers le fichier de base de données
+            DbPath: Chemin vers le fichier de base de données (optionnel, utilise le chemin par défaut si non spécifié)
         """
-        self.DbPath = DbPath
+        self.DbPath = DbPath if DbPath else self.GetDefaultDbPath()
         self.Connection = None
         self.Logger = GetModuleLogger("DatabaseManager")
 
         # Crée le répertoire si nécessaire
-        os.makedirs(os.path.dirname(DbPath), exist_ok=True)
+        DbDir = os.path.dirname(self.DbPath)
+        if DbDir:
+            os.makedirs(DbDir, exist_ok=True)
 
     def Connect(self) -> bool:
         """
@@ -169,6 +196,98 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la récupération des paramètres: {e}")
             return []
+
+    def GetParameterInt(self, Key: str, Default: int = 0) -> int:
+        """
+        Récupère un paramètre comme entier
+
+        Args:
+            Key: Clé du paramètre
+            Default: Valeur par défaut si non trouvé ou invalide
+
+        Returns:
+            Valeur entière du paramètre
+        """
+        try:
+            Value = self.GetParameter(Key)
+            if Value is None:
+                return Default
+            return int(Value)
+        except (ValueError, TypeError):
+            return Default
+
+    def GetParameterBool(self, Key: str, Default: bool = False) -> bool:
+        """
+        Récupère un paramètre comme booléen
+
+        Args:
+            Key: Clé du paramètre
+            Default: Valeur par défaut si non trouvé
+
+        Returns:
+            Valeur booléenne du paramètre
+        """
+        Value = self.GetParameter(Key)
+        if Value is None:
+            return Default
+        return Value.lower() in ('true', '1', 'yes', 'oui')
+
+    def InitializeDefaultParameters(self):
+        """
+        Initialise les paramètres par défaut s'ils n'existent pas.
+        Appelée après Connect() pour s'assurer que tous les paramètres
+        nécessaires sont présents dans la base de données.
+        """
+        try:
+            for Key, (DefaultValue, Description) in DEFAULT_PARAMETERS.items():
+                # Ne remplace pas les valeurs existantes
+                if self.GetParameter(Key) is None:
+                    self.SetParameter(Key, DefaultValue, Description)
+                    self.Logger.info(f"Paramètre initialisé: {Key} = {DefaultValue}")
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de l'initialisation des paramètres: {e}")
+
+    def GetServerConfig(self) -> Dict[str, Any]:
+        """
+        Récupère la configuration complète du serveur depuis la base de données.
+
+        Returns:
+            Dictionnaire avec les paramètres serveur
+        """
+        return {
+            'ip': self.GetParameter('server_ip', '0.0.0.0'),
+            'port': self.GetParameterInt('server_port', 8765),
+            'password': self.GetParameter('server_password', ''),
+            'work_directory': self.GetParameter('work_directory', './work'),
+            'batch_size': self.GetParameterInt('batch_size', 100)
+        }
+
+    def SaveServerConfig(self, Config: Dict[str, Any]) -> bool:
+        """
+        Sauvegarde la configuration serveur dans la base de données.
+
+        Args:
+            Config: Dictionnaire avec ip, port, password, work_directory, batch_size
+
+        Returns:
+            True si succès
+        """
+        try:
+            if 'ip' in Config:
+                self.SetParameter('server_ip', Config['ip'], "Adresse IP d'écoute du serveur")
+            if 'port' in Config:
+                self.SetParameter('server_port', str(Config['port']), "Port d'écoute du serveur")
+            if 'password' in Config:
+                self.SetParameter('server_password', Config['password'], "Mot de passe du serveur")
+            if 'work_directory' in Config:
+                self.SetParameter('work_directory', Config['work_directory'], "Répertoire de travail")
+            if 'batch_size' in Config:
+                self.SetParameter('batch_size', str(Config['batch_size']), "Nombre d'images par batch")
+            return True
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la sauvegarde de la configuration: {e}")
+            return False
 
     # ========================================================================
     # VIDÉOS

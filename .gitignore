@@ -148,11 +148,9 @@ temp/
 tmp/
 *.tmp
 
-# Configuration files (keep default, ignore custom)
-config/server_config.json
-config/client_config.json
-# Keep default_config.json
-!config/default_config.json
+# Server database (stored in user's home directory)
+# Note: Configuration is now stored in SQLite database at ~/.upscaling_server/
+.upscaling_server/
 
 # Client saved servers
 .upscaling_client/

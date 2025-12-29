@@ -1,11 +1,11 @@
 """
 Interface CLI pour le serveur d'upscaling vidéo
+Configuration stockée dans la base de données SQLite
 """
 
 import asyncio
 import os
 import sys
-import json
 import click
 from pathlib import Path
 
@@ -17,57 +17,40 @@ from server.core.batch_distributor import BatchDistributor
 from server.core.job_manager import JobManager
 from server.core.video_processor import VideoProcessor
 from server.database.db_manager import DatabaseManager
-from shared.utils.constants import PathConfig
 
 
 class ServerCLI:
     """Interface CLI du serveur"""
 
-    def __init__(self, ConfigPath: str = None):
+    def __init__(self):
         """
         Initialise l'interface CLI
-
-        Args:
-            ConfigPath: Chemin vers le fichier de configuration
+        Charge la configuration depuis la base de données
         """
-        # Charge la configuration
-        if ConfigPath and os.path.exists(ConfigPath):
-            with open(ConfigPath, 'r') as f:
-                self.Config = json.load(f)
-        else:
-            # Configuration par défaut
-            DefaultConfigPath = os.path.join(
-                os.path.dirname(__file__),
-                '../../config/default_config.json'
-            )
-            if os.path.exists(DefaultConfigPath):
-                with open(DefaultConfigPath, 'r') as f:
-                    self.Config = json.load(f)
-            else:
-                self.Config = self._GetDefaultConfig()
+        # Initialise la base de données pour charger la configuration
+        self.Database = DatabaseManager()  # Utilise le chemin par défaut
+        self.Database.Connect()
+        self.Database.InitializeDefaultParameters()
 
-        self.Server = None
-        self.JobManager = None
-        self.Running = False
-
-    def _GetDefaultConfig(self) -> dict:
-        """Retourne la configuration par défaut"""
-        return {
+        # Charge la configuration depuis la DB
+        DbConfig = self.Database.GetServerConfig()
+        self.Config = {
             "server": {
-                "ip": "0.0.0.0",
-                "port": 8765,
-                "password": "",
-                "work_directory": "./work",
-                "batch_size": 100
-            },
-            "client": {
-                "saved_servers": []
+                "ip": DbConfig['ip'],
+                "port": DbConfig['port'],
+                "password": DbConfig['password'],
+                "work_directory": DbConfig['work_directory'],
+                "batch_size": DbConfig['batch_size']
             },
             "processing": {
                 "upscale_factor": 4,
                 "model": "realesr-animevideov3"
             }
         }
+
+        self.Server = None
+        self.JobManager = None
+        self.Running = False
 
     async def StartServer(self):
         """Démarre le serveur"""
@@ -349,23 +332,21 @@ class ServerCLI:
         click.echo(f"  Connectés actuellement: {self.Server.ClientManager.GetClientCount()}")
 
     def ShowConfiguration(self):
-        """Affiche la configuration"""
+        """Affiche la configuration (depuis la base de données)"""
         click.echo("\n" + "="*60)
-        click.echo("CONFIGURATION")
+        click.echo("CONFIGURATION (stockee dans la base de donnees)")
         click.echo("="*60)
 
-        click.echo("\n📡 SERVEUR:")
-        ServerConfig = self.Config.get('server', {})
-        click.echo(f"  IP: {ServerConfig.get('ip', 'N/A')}")
-        click.echo(f"  Port: {ServerConfig.get('port', 'N/A')}")
-        click.echo(f"  Mot de passe: {'Défini' if ServerConfig.get('password') else 'Non défini'}")
-        click.echo(f"  Répertoire de travail: {ServerConfig.get('work_directory', 'N/A')}")
-        click.echo(f"  Taille batch: {ServerConfig.get('batch_size', 'N/A')}")
+        # Relit la config depuis la DB pour avoir les valeurs actuelles
+        DbConfig = self.Database.GetServerConfig()
 
-        click.echo("\n🎬 TRAITEMENT:")
-        ProcessingConfig = self.Config.get('processing', {})
-        click.echo(f"  Facteur d'upscaling: {ProcessingConfig.get('upscale_factor', 'N/A')}")
-        click.echo(f"  Modèle: {ProcessingConfig.get('model', 'N/A')}")
+        click.echo("\n📡 SERVEUR:")
+        click.echo(f"  IP: {DbConfig.get('ip', 'N/A')}")
+        click.echo(f"  Port: {DbConfig.get('port', 'N/A')}")
+        click.echo(f"  Mot de passe: {'Defini' if DbConfig.get('password') else 'Non defini'}")
+        click.echo(f"  Repertoire de travail: {DbConfig.get('work_directory', 'N/A')}")
+        click.echo(f"  Taille batch: {DbConfig.get('batch_size', 'N/A')}")
+        click.echo(f"\n  Base de donnees: {self.Database.DbPath}")
 
 
 # ============================================================================

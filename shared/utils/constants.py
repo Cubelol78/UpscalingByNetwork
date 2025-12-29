@@ -226,10 +226,8 @@ class PathConfig:
     # Base de données
     DATABASE_NAME = "upscaling_server.db"
 
-    # Configuration
-    CONFIG_DIR = "config"
-    DEFAULT_CONFIG = "default_config.json"
-    USER_CONFIG = "user_config.json"
+    # Note: La configuration est maintenant stockée dans la base de données SQLite
+    # au lieu d'un fichier JSON. La DB est située dans ~/.upscaling_server/server.db
 
     # Logs
     LOG_DIR = "logs"
