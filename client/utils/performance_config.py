@@ -14,20 +14,31 @@ from shared.utils.logger import GetModuleLogger
 class PerformancePresets:
     """Presets de performance selon le matériel"""
 
-    # Tile size selon la VRAM (en MB)
+    # Tile size selon la VRAM (en MB) - optimisé pour meilleure utilisation GPU
+    # Ces valeurs sont plus agressives pour les architectures modernes
     TILE_SIZE_MAP = {
         2048: 128,
-        4096: 256,
-        6144: 384,
-        8192: 512,
-        12288: 768,
+        4096: 320,    # Augmenté de 256
+        6144: 448,    # Augmenté de 384
+        8192: 640,    # Augmenté de 512 - RTX 4060/3070/3060Ti
+        12288: 896,   # Augmenté de 768
         16384: 1024,
-        24576: 1024
+        24576: 1280   # Augmenté de 1024
     }
 
-    # Threads par défaut
-    DEFAULT_LOAD_THREADS = 1
-    DEFAULT_PROCESS_THREADS = 2
+    # Multiplicateurs de tile size par génération GPU (architecture plus efficace)
+    GPU_GENERATION_MULTIPLIER = {
+        "rtx40": 1.25,   # Ada Lovelace - très efficace
+        "rtx30": 1.15,   # Ampere
+        "rtx20": 1.0,    # Turing
+        "gtx16": 1.0,    # Turing
+        "gtx10": 0.9,    # Pascal
+        "default": 1.0
+    }
+
+    # Threads par défaut - augmentés pour meilleure utilisation
+    DEFAULT_LOAD_THREADS = 2
+    DEFAULT_PROCESS_THREADS = 4   # Augmenté de 2 à 4
     DEFAULT_SAVE_THREADS = 2
 
     # Valeurs min/max
@@ -215,6 +226,36 @@ class PerformanceConfigManager:
 
         return self.Config.get("first_run", True)
 
+    def _GetGpuGeneration(self, GpuName: str) -> str:
+        """
+        Détecte la génération du GPU NVIDIA
+
+        Args:
+            GpuName: Nom du GPU
+
+        Returns:
+            Clé de génération (rtx40, rtx30, rtx20, gtx16, gtx10, default)
+        """
+        GpuNameLower = GpuName.lower()
+
+        # RTX 40 series (Ada Lovelace)
+        if any(x in GpuNameLower for x in ["4090", "4080", "4070", "4060", "4050"]):
+            return "rtx40"
+        # RTX 30 series (Ampere)
+        elif any(x in GpuNameLower for x in ["3090", "3080", "3070", "3060", "3050"]):
+            return "rtx30"
+        # RTX 20 series (Turing)
+        elif any(x in GpuNameLower for x in ["2080", "2070", "2060"]):
+            return "rtx20"
+        # GTX 16 series (Turing)
+        elif any(x in GpuNameLower for x in ["1660", "1650"]):
+            return "gtx16"
+        # GTX 10 series (Pascal)
+        elif any(x in GpuNameLower for x in ["1080", "1070", "1060", "1050"]):
+            return "gtx10"
+        else:
+            return "default"
+
     def _IsIntegratedGpu(self, GpuName: str) -> bool:
         """
         Détermine si un GPU est intégré (pas dédié)
@@ -327,6 +368,7 @@ class PerformanceConfigManager:
             # Configuration des GPU avec sélection intelligente
             Gpus = HardwareInfo.get("gpu", [])
             SelectedGpuIds = self._SelectBestGpus(Gpus, UseMultiGpu=UseMultiGpu)
+            SelectedGpus = []  # Initialise pour éviter erreur de référence
 
             if SelectedGpuIds:
                 Config["gpu_ids"] = SelectedGpuIds
@@ -334,26 +376,36 @@ class PerformanceConfigManager:
                 # Trouve les GPU sélectionnés pour calculer le tile size
                 SelectedGpus = [g for g in Gpus if g.get("id") in SelectedGpuIds]
 
-                # Utilise la VRAM minimale parmi les GPU sélectionnés
-                MinVram = min(g.get("vram_mb", 2048) for g in SelectedGpus) if SelectedGpus else 2048
-                Config["tile_size"] = self.GetTileSizeForVram(MinVram)
+                # Utilise la VRAM minimale et le nom du GPU le plus faible
+                if SelectedGpus:
+                    MinVramGpu = min(SelectedGpus, key=lambda g: g.get("vram_mb", 2048))
+                    MinVram = MinVramGpu.get("vram_mb", 2048)
+                    GpuName = MinVramGpu.get("name", "")
+                else:
+                    MinVram = 2048
+                    GpuName = ""
+
+                # Calcule le tile size avec le multiplicateur de génération
+                Config["tile_size"] = self.GetTileSizeForVram(MinVram, GpuName)
 
                 # Log les GPU sélectionnés
                 for Gpu in SelectedGpus:
                     IsIntegrated = self._IsIntegratedGpu(Gpu.get("name", ""))
                     GpuType = "(intégré)" if IsIntegrated else "(dédié)"
-                    self.Logger.info(f"GPU sélectionné: {Gpu['name']} {GpuType}")
+                    Generation = self._GetGpuGeneration(Gpu.get("name", ""))
+                    self.Logger.info(f"GPU sélectionné: {Gpu['name']} {GpuType} [génération: {Generation}]")
 
-                self.Logger.info(f"Tile size auto: {Config['tile_size']} (basé sur {MinVram} MB VRAM)")
+                self.Logger.info(f"Tile size auto: {Config['tile_size']} (basé sur {MinVram} MB VRAM, GPU: {GpuName})")
             else:
                 # Pas de GPU, utilise CPU
                 Config["gpu_ids"] = []
                 Config["tile_size"] = 32  # Petit tile size pour CPU
                 self.Logger.warning("Pas de GPU détecté, utilisation du CPU")
 
-            # Configuration des threads
+            # Configuration des threads (utilise le nom du GPU pour ajuster)
             CpuCores = HardwareInfo.get("cpu", {}).get("physical_cores", 4)
-            Config["threads"] = self.GetThreadConfig(CpuCores, len(SelectedGpuIds))
+            BestGpuName = SelectedGpus[0].get("name", "") if SelectedGpus else ""
+            Config["threads"] = self.GetThreadConfig(CpuCores, len(SelectedGpuIds), BestGpuName)
 
             self.Config = Config
             return Config
@@ -362,17 +414,18 @@ class PerformanceConfigManager:
             self.Logger.error(f"Erreur lors de l'auto-configuration: {e}")
             return self.DEFAULT_CONFIG.copy()
 
-    def GetTileSizeForVram(self, VramMb: int) -> int:
+    def GetTileSizeForVram(self, VramMb: int, GpuName: str = "") -> int:
         """
-        Calcule le tile size optimal pour une quantité de VRAM
+        Calcule le tile size optimal pour une quantité de VRAM et génération GPU
 
         Args:
             VramMb: VRAM en MB
+            GpuName: Nom du GPU (optionnel, pour appliquer le multiplicateur de génération)
 
         Returns:
             Tile size recommandé
         """
-        # Trouve le tile size approprié
+        # Trouve le tile size de base
         TileSize = PerformancePresets.MIN_TILE_SIZE
 
         for VramThreshold, Size in sorted(PerformancePresets.TILE_SIZE_MAP.items()):
@@ -381,27 +434,51 @@ class PerformanceConfigManager:
             else:
                 break
 
+        # Applique le multiplicateur de génération si le nom du GPU est fourni
+        if GpuName:
+            Generation = self._GetGpuGeneration(GpuName)
+            Multiplier = PerformancePresets.GPU_GENERATION_MULTIPLIER.get(Generation, 1.0)
+            TileSize = int(TileSize * Multiplier)
+
+            # Arrondit à un multiple de 32 (meilleur pour le GPU)
+            TileSize = (TileSize // 32) * 32
+
+            # Limite au maximum
+            TileSize = min(TileSize, PerformancePresets.MAX_TILE_SIZE)
+
+            self.Logger.debug(f"Tile size pour {GpuName}: base={TileSize//Multiplier:.0f}, "
+                            f"multiplier={Multiplier}x ({Generation}), final={TileSize}")
+
         return TileSize
 
-    def GetThreadConfig(self, CpuCores: int, GpuCount: int) -> Dict:
+    def GetThreadConfig(self, CpuCores: int, GpuCount: int, GpuName: str = "") -> Dict:
         """
         Calcule la configuration des threads optimale
 
         Args:
             CpuCores: Nombre de coeurs CPU
             GpuCount: Nombre de GPU
+            GpuName: Nom du GPU principal (pour ajuster selon la génération)
 
         Returns:
             Configuration des threads
         """
-        # Load threads: I/O bound, peu de parallélisme nécessaire
-        LoadThreads = min(2, max(1, CpuCores // 4))
+        # Détermine si c'est un GPU moderne (RTX 30/40)
+        Generation = self._GetGpuGeneration(GpuName) if GpuName else "default"
+        IsModernGpu = Generation in ["rtx40", "rtx30"]
 
-        # Process threads: dépend du GPU
-        ProcessThreads = min(4, max(2, CpuCores // 2))
+        # Load threads: I/O bound, un peu plus pour les GPU modernes
+        LoadThreads = min(3 if IsModernGpu else 2, max(1, CpuCores // 3))
 
-        # Save threads: I/O bound
-        SaveThreads = min(2, max(1, CpuCores // 4))
+        # Process threads: plus élevé pour les GPU modernes qui sont rapides
+        # Les GPU modernes peuvent traiter plus vite, donc on augmente le parallelisme
+        if IsModernGpu:
+            ProcessThreads = min(6, max(4, CpuCores // 2))
+        else:
+            ProcessThreads = min(4, max(2, CpuCores // 2))
+
+        # Save threads: I/O bound, similaire à load
+        SaveThreads = min(3 if IsModernGpu else 2, max(1, CpuCores // 3))
 
         return {
             "load": LoadThreads,

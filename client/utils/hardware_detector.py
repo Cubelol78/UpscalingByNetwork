@@ -799,10 +799,16 @@ class HardwareDetector:
         # Trouve le GPU avec le moins de VRAM parmi les sélectionnés
         # (pour le tile size, on prend le minimum pour éviter les problèmes)
         SelectedGpus = [g for g in Gpus if g.get("id") in SelectedGpuIds]
-        MinVram = min(g.get("vram_mb", 2048) for g in SelectedGpus) if SelectedGpus else 2048
+        if SelectedGpus:
+            MinVramGpu = min(SelectedGpus, key=lambda g: g.get("vram_mb", 2048))
+            MinVram = MinVramGpu.get("vram_mb", 2048)
+            GpuName = MinVramGpu.get("name", "")
+        else:
+            MinVram = 2048
+            GpuName = ""
 
-        # Calcule le tile size optimal basé sur la VRAM minimum
-        TileSize = self.GetRecommendedTileSize(MinVram)
+        # Calcule le tile size optimal basé sur la VRAM et génération GPU
+        TileSize = self.GetRecommendedTileSize(MinVram, GpuName)
 
         # Calcule les threads recommandés
         Threads = self.GetRecommendedThreads(CpuCores, len(SelectedGpuIds))
@@ -816,30 +822,57 @@ class HardwareDetector:
         self.Logger.info(f"Configuration recommandée: GPU={SelectedGpuIds}, tile={TileSize}, threads={Threads}")
         return Config
 
-    def GetRecommendedTileSize(self, VramMb: int) -> int:
+    def GetRecommendedTileSize(self, VramMb: int, GpuName: str = "") -> int:
         """
-        Calcule le tile size recommandé basé sur la VRAM
+        Calcule le tile size recommandé basé sur la VRAM et génération GPU
 
         Args:
             VramMb: VRAM en MB
+            GpuName: Nom du GPU (optionnel, pour ajuster selon la génération)
 
         Returns:
             Tile size recommandé
         """
-        if VramMb >= 16384:
-            return 1024
+        # Tile size de base selon la VRAM (valeurs optimisées)
+        if VramMb >= 24576:
+            BaseTileSize = 1280
+        elif VramMb >= 16384:
+            BaseTileSize = 1024
         elif VramMb >= 12288:
-            return 768
+            BaseTileSize = 896
         elif VramMb >= 8192:
-            return 512
+            BaseTileSize = 640
         elif VramMb >= 6144:
-            return 384
+            BaseTileSize = 448
         elif VramMb >= 4096:
-            return 256
+            BaseTileSize = 320
         elif VramMb >= 2048:
-            return 128
+            BaseTileSize = 128
         else:
-            return 64
+            BaseTileSize = 64
+
+        # Applique multiplicateur de génération si le nom est fourni
+        if GpuName:
+            GpuNameLower = GpuName.lower()
+            Multiplier = 1.0
+
+            # RTX 40 series (Ada Lovelace) - très efficace
+            if any(x in GpuNameLower for x in ["4090", "4080", "4070", "4060", "4050"]):
+                Multiplier = 1.25
+            # RTX 30 series (Ampere)
+            elif any(x in GpuNameLower for x in ["3090", "3080", "3070", "3060", "3050"]):
+                Multiplier = 1.15
+            # GTX 10 series (Pascal) - un peu moins efficace
+            elif any(x in GpuNameLower for x in ["1080", "1070", "1060", "1050"]):
+                Multiplier = 0.9
+
+            BaseTileSize = int(BaseTileSize * Multiplier)
+            # Arrondit à un multiple de 32
+            BaseTileSize = (BaseTileSize // 32) * 32
+            # Limite max
+            BaseTileSize = min(BaseTileSize, 2048)
+
+        return BaseTileSize
 
     def GetRecommendedThreads(self, CpuCores: int, GpuCount: int) -> Dict:
         """
@@ -897,7 +930,7 @@ if __name__ == "__main__":
         print(f"[{Gpu['id']}] {Gpu['name']}{VramStr} {TypeStr} - Score: {Score}")
 
         if Gpu['id'] >= 0 and Gpu.get('vram_mb'):
-            TileSize = Detector.GetRecommendedTileSize(Gpu['vram_mb'])
+            TileSize = Detector.GetRecommendedTileSize(Gpu['vram_mb'], Gpu.get('name', ''))
             print(f"    Tile size recommandé: {TileSize}")
 
     print("\n--- Sélection GPU intelligente ---")
