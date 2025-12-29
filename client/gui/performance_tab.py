@@ -429,13 +429,17 @@ class PerformanceTab(QWidget):
         }
 
     def AutoConfigure(self):
-        """Applique la configuration automatique"""
+        """Applique la configuration automatique avec sélection intelligente des GPU"""
         if not self.DetectedHardware:
             # Détecte d'abord le matériel
             self.DetectHardware()
             return
 
-        Config = self.ConfigManager.AutoConfigure(self.DetectedHardware)
+        # Détermine si on utilise le multi-GPU basé sur la sélection actuelle
+        UseMultiGpu = self.GpuModeCombo.currentIndex() == 2  # "Multi-GPU (tous)"
+
+        # Auto-configure avec sélection intelligente (préfère les GPU dédiés)
+        Config = self.ConfigManager.AutoConfigure(self.DetectedHardware, UseMultiGpu=UseMultiGpu)
 
         # Met à jour l'UI
         self.TileSizeSpinBox.setValue(Config.get("tile_size", 0))
@@ -445,7 +449,10 @@ class PerformanceTab(QWidget):
         self.ProcessThreadsSpinBox.setValue(Threads.get("process", 2))
         self.SaveThreadsSpinBox.setValue(Threads.get("save", 2))
 
-        # Sélectionne tous les GPU valides
+        # Sélectionne uniquement les GPU choisis par l'auto-configuration
+        SelectedGpuIds = Config.get("gpu_ids", [])
+        Gpus = self.DetectedHardware.get("gpu", [])
+
         for Row in range(self.GpuTable.rowCount()):
             CheckBox = self.GpuTable.cellWidget(Row, 0)
             if CheckBox:
@@ -453,15 +460,33 @@ class PerformanceTab(QWidget):
                 if IdItem:
                     try:
                         GpuId = int(IdItem.text())
-                        CheckBox.setChecked(GpuId >= 0)
+                        # Coche seulement les GPU sélectionnés par l'auto-config
+                        CheckBox.setChecked(GpuId in SelectedGpuIds)
                     except ValueError:
                         CheckBox.setChecked(False)
+
+        # Met à jour le mode GPU
+        if len(SelectedGpuIds) > 1:
+            self.GpuModeCombo.setCurrentIndex(2)  # Multi-GPU
+        elif len(SelectedGpuIds) == 1:
+            self.GpuModeCombo.setCurrentIndex(1)  # GPU unique
+        else:
+            self.GpuModeCombo.setCurrentIndex(0)  # Auto
+
+        # Affiche les GPU sélectionnés dans le message
+        SelectedNames = []
+        for Gpu in Gpus:
+            if Gpu.get("id") in SelectedGpuIds:
+                SelectedNames.append(Gpu.get("name", f"GPU {Gpu.get('id')}"))
+
+        GpuInfo = "\n".join(f"  - {name}" for name in SelectedNames) if SelectedNames else "  - Aucun (mode CPU)"
 
         QMessageBox.information(
             self,
             "Configuration automatique",
-            "La configuration optimale a ete appliquee.\n"
-            "N'oubliez pas de sauvegarder si vous souhaitez la conserver."
+            f"Configuration optimale appliquee.\n\n"
+            f"GPU selectionnes (prefere les GPU dedies):\n{GpuInfo}\n\n"
+            f"N'oubliez pas de sauvegarder si vous souhaitez la conserver."
         )
 
     def ResetConfig(self):

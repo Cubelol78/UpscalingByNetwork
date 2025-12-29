@@ -320,7 +320,7 @@ class ClientCLI:
             click.echo(f"\n✗ Erreur lors de la détection: {e}")
 
     def _AutoConfigure(self):
-        """Configuration automatique basée sur le matériel"""
+        """Configuration automatique basée sur le matériel (préfère les GPU dédiés)"""
         click.echo("\n" + "="*60)
         click.echo("CONFIGURATION AUTOMATIQUE")
         click.echo("="*60)
@@ -331,13 +331,40 @@ class ClientCLI:
             Detector = HardwareDetector()
             HardwareInfo = Detector.DetectAll()
 
-            # Génère la configuration optimale
-            Config = self.PerformanceManager.AutoConfigure(HardwareInfo)
+            # Affiche les GPU détectés
+            Gpus = HardwareInfo.get('gpu', [])
+            if Gpus:
+                click.echo("\nGPU détectés:")
+                for Gpu in Gpus:
+                    VramMb = Gpu.get('vram_mb', 0)
+                    VramStr = f"{VramMb} MB" if VramMb else "VRAM inconnue"
+                    IsIntegrated = self.PerformanceManager._IsIntegratedGpu(Gpu.get('name', ''))
+                    TypeStr = "(intégré)" if IsIntegrated else "(dédié)"
+                    click.echo(f"  [{Gpu.get('id', '?')}] {Gpu.get('name', 'Inconnu')} - {VramStr} {TypeStr}")
+
+            # Demande si multi-GPU souhaité
+            UseMultiGpu = False
+            DedicatedCount = sum(1 for g in Gpus if not self.PerformanceManager._IsIntegratedGpu(g.get('name', '')))
+            if DedicatedCount > 1:
+                UseMultiGpu = click.confirm(f"\nUtiliser les {DedicatedCount} GPU dédiés en parallèle?", default=False)
+
+            # Génère la configuration optimale (préfère les GPU dédiés)
+            click.echo("\nGénération de la configuration optimale...")
+            click.echo("(Les GPU dédiés NVIDIA/AMD sont préférés aux GPU intégrés Intel)")
+            Config = self.PerformanceManager.AutoConfigure(HardwareInfo, UseMultiGpu=UseMultiGpu)
+
+            # Affiche les GPU sélectionnés
+            SelectedIds = Config.get('gpu_ids', [])
+            SelectedNames = []
+            for Gpu in Gpus:
+                if Gpu.get('id') in SelectedIds:
+                    SelectedNames.append(Gpu.get('name', f"GPU {Gpu.get('id')}"))
 
             # Affiche la configuration proposée
             click.echo("\nConfiguration proposée:")
+            click.echo(f"  GPU sélectionnés: {', '.join(SelectedNames) if SelectedNames else 'Aucun (mode CPU)'}")
+            click.echo(f"  GPU IDs: {','.join(map(str, SelectedIds)) if SelectedIds else '-'}")
             click.echo(f"  Tile size: {Config.get('tile_size', 0)}")
-            click.echo(f"  GPU: {','.join(map(str, Config.get('gpu_ids', [])))}")
             Threads = Config.get('threads', {})
             click.echo(f"  Threads: {Threads.get('load', 1)}:{Threads.get('process', 2)}:{Threads.get('save', 2)}")
 

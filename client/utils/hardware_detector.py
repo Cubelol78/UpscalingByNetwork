@@ -341,29 +341,42 @@ class HardwareDetector:
     def _ParseGpuList(self, Output: str) -> List[Dict]:
         """Parse la sortie de Real-ESRGAN pour extraire la liste des GPU"""
         Gpus = []
+        SeenIds = set()  # Pour éviter les doublons
 
-        # Pattern: [0] NVIDIA GeForce RTX 3080
-        # ou: [0 NVIDIA GeForce RTX 3080]
-        Patterns = [
-            r'\[(\d+)\]\s+(.+?)(?:\n|$)',  # [0] GPU Name
-            r'gpu\s*(\d+)\s*[:=]\s*(.+?)(?:\n|$)',  # gpu 0: GPU Name
-            r'device\s*(\d+)\s*[:=]\s*(.+?)(?:\n|$)',  # device 0: GPU Name
-        ]
+        # Format Real-ESRGAN ncnn-vulkan:
+        # [0 NVIDIA GeForce GTX 970]  queueC=0[16]  queueG=0[16]  queueT=1[2]
+        # [1 Intel(R) HD Graphics 530]  queueC=0[1]  queueG=0[1]  queueT=0[1]
+        #
+        # Le pattern doit matcher [ID NOM_GPU] au début de ligne
+        # et ignorer les [N] dans queueC=0[16] etc.
 
-        for Pattern in Patterns:
-            Matches = re.findall(Pattern, Output, re.IGNORECASE)
-            if Matches:
-                for Match in Matches:
-                    GpuId = int(Match[0])
-                    GpuName = Match[1].strip()
-                    # Ignore les lignes qui ne ressemblent pas à un nom de GPU
-                    if len(GpuName) > 3 and not GpuName.startswith('-'):
-                        Gpus.append({
-                            "id": GpuId,
-                            "name": GpuName,
-                            "vram_mb": self._EstimateVram(GpuName)
-                        })
-                break
+        Lines = Output.split('\n')
+        for Line in Lines:
+            Line = Line.strip()
+            if not Line:
+                continue
+
+            # Pattern principal: [0 GPU Name] au début de ligne
+            Match = re.match(r'^\[(\d+)\s+([^\]]+)\]', Line)
+            if Match:
+                GpuId = int(Match.group(1))
+                GpuName = Match.group(2).strip()
+
+                # Évite les doublons
+                if GpuId in SeenIds:
+                    continue
+
+                # Vérifie que c'est un nom de GPU valide (contient des mots clés GPU)
+                GpuKeywords = ['nvidia', 'geforce', 'rtx', 'gtx', 'quadro',
+                              'amd', 'radeon', 'intel', 'graphics', 'gpu', 'hd']
+                NameLower = GpuName.lower()
+                if any(kw in NameLower for kw in GpuKeywords):
+                    SeenIds.add(GpuId)
+                    Gpus.append({
+                        "id": GpuId,
+                        "name": GpuName,
+                        "vram_mb": self._EstimateVram(GpuName)
+                    })
 
         return Gpus
 
@@ -461,6 +474,8 @@ class HardwareDetector:
             return 8192
         elif "4060" in GpuNameLower:
             return 8192
+        elif "4050" in GpuNameLower:
+            return 6144  # Laptop
 
         # NVIDIA RTX 30 series
         elif "3090" in GpuNameLower:
@@ -477,6 +492,10 @@ class HardwareDetector:
             return 8192
         elif "3060" in GpuNameLower:
             return 12288
+        elif "3050 ti" in GpuNameLower:
+            return 4096
+        elif "3050" in GpuNameLower:
+            return 4096  # Desktop 8GB ou Laptop 4GB
 
         # NVIDIA RTX 20 series
         elif "2080 ti" in GpuNameLower:
@@ -499,12 +518,52 @@ class HardwareDetector:
             return 11264
         elif "1080" in GpuNameLower:
             return 8192
+        elif "1070 ti" in GpuNameLower:
+            return 8192
         elif "1070" in GpuNameLower:
             return 8192
         elif "1060" in GpuNameLower:
             return 6144
-        elif "1050" in GpuNameLower:
+        elif "1050 ti" in GpuNameLower:
             return 4096
+        elif "1050" in GpuNameLower:
+            return 2048  # Version 2GB ou 4GB
+
+        # NVIDIA GTX 9 series (Maxwell)
+        elif "980 ti" in GpuNameLower:
+            return 6144
+        elif "980" in GpuNameLower:
+            return 4096
+        elif "970" in GpuNameLower:
+            return 4096  # 3.5GB effectifs mais 4GB affichés
+        elif "960" in GpuNameLower:
+            return 4096  # Version 2GB ou 4GB
+        elif "950" in GpuNameLower:
+            return 2048
+
+        # NVIDIA GTX 7 series (Kepler)
+        elif "780 ti" in GpuNameLower:
+            return 3072
+        elif "780" in GpuNameLower:
+            return 3072
+        elif "770" in GpuNameLower:
+            return 2048  # Version 2GB ou 4GB
+        elif "760" in GpuNameLower:
+            return 2048
+        elif "750 ti" in GpuNameLower:
+            return 2048
+        elif "750" in GpuNameLower:
+            return 1024
+
+        # NVIDIA Titan series
+        elif "titan rtx" in GpuNameLower:
+            return 24576
+        elif "titan v" in GpuNameLower:
+            return 12288
+        elif "titan xp" in GpuNameLower or "titan x pascal" in GpuNameLower:
+            return 12288
+        elif "titan x" in GpuNameLower:
+            return 12288
 
         # AMD RX 7000 series
         elif "7900 xtx" in GpuNameLower:
@@ -527,17 +586,235 @@ class HardwareDetector:
             return 12288
         elif "6600" in GpuNameLower:
             return 8192
+        elif "6500" in GpuNameLower:
+            return 4096
+        elif "6400" in GpuNameLower:
+            return 4096
+
+        # AMD RX 5000 series (Navi)
+        elif "5700 xt" in GpuNameLower:
+            return 8192
+        elif "5700" in GpuNameLower:
+            return 8192
+        elif "5600 xt" in GpuNameLower:
+            return 6144
+        elif "5600" in GpuNameLower:
+            return 6144
+        elif "5500 xt" in GpuNameLower:
+            return 8192  # Version 4GB ou 8GB
+
+        # AMD RX 500 series (Polaris)
+        elif "590" in GpuNameLower and "rx" in GpuNameLower:
+            return 8192
+        elif "580" in GpuNameLower and "rx" in GpuNameLower:
+            return 8192  # Version 4GB ou 8GB
+        elif "570" in GpuNameLower and "rx" in GpuNameLower:
+            return 4096  # Version 4GB ou 8GB
+        elif "560" in GpuNameLower and "rx" in GpuNameLower:
+            return 4096
+        elif "550" in GpuNameLower and "rx" in GpuNameLower:
+            return 2048
+
+        # AMD RX 400 series (Polaris)
+        elif "480" in GpuNameLower and "rx" in GpuNameLower:
+            return 8192  # Version 4GB ou 8GB
+        elif "470" in GpuNameLower and "rx" in GpuNameLower:
+            return 4096  # Version 4GB ou 8GB
+        elif "460" in GpuNameLower and "rx" in GpuNameLower:
+            return 4096
+
+        # AMD Vega
+        elif "vega 64" in GpuNameLower:
+            return 8192
+        elif "vega 56" in GpuNameLower:
+            return 8192
 
         # Intel Arc
         elif "a770" in GpuNameLower:
             return 16384
         elif "a750" in GpuNameLower:
             return 8192
+        elif "a580" in GpuNameLower:
+            return 8192
         elif "a380" in GpuNameLower:
             return 6144
+        elif "a310" in GpuNameLower:
+            return 4096
 
-        # Valeur par défaut
-        return 4096
+        # Intel Integrated Graphics (valeurs basses car VRAM partagée)
+        elif "iris xe" in GpuNameLower:
+            return 1024  # Dépend de la RAM système allouée
+        elif "iris plus" in GpuNameLower:
+            return 512
+        elif "uhd" in GpuNameLower and "intel" in GpuNameLower:
+            return 512
+        elif "hd graphics" in GpuNameLower or "hd 530" in GpuNameLower:
+            return 512
+        elif "intel" in GpuNameLower and ("graphics" in GpuNameLower or "hd" in GpuNameLower):
+            return 512  # Intel intégré générique
+
+        # NVIDIA Quadro (workstation)
+        elif "quadro rtx" in GpuNameLower:
+            return 16384  # Varie selon modèle
+        elif "quadro" in GpuNameLower:
+            return 8192  # Estimation moyenne
+
+        # Valeur par défaut pour GPU inconnu
+        # On suppose un GPU dédié avec au moins 2GB
+        return 2048
+
+    def IsIntegratedGpu(self, GpuName: str) -> bool:
+        """
+        Détermine si un GPU est intégré (pas dédié)
+
+        Args:
+            GpuName: Nom du GPU
+
+        Returns:
+            True si le GPU est intégré
+        """
+        GpuNameLower = GpuName.lower()
+
+        # Patterns pour les GPU intégrés
+        IntegratedPatterns = [
+            "intel" in GpuNameLower and ("hd graphics" in GpuNameLower or
+                                         "uhd" in GpuNameLower or
+                                         "iris" in GpuNameLower or
+                                         "hd 530" in GpuNameLower or
+                                         "hd 630" in GpuNameLower or
+                                         "hd 4" in GpuNameLower or
+                                         "hd 5" in GpuNameLower or
+                                         "hd 6" in GpuNameLower),
+            "amd" in GpuNameLower and "vega" in GpuNameLower and "radeon" not in GpuNameLower,  # APU AMD
+            "apu" in GpuNameLower,
+        ]
+
+        return any(IntegratedPatterns)
+
+    def GetGpuScore(self, Gpu: Dict) -> int:
+        """
+        Calcule un score pour un GPU (plus haut = meilleur)
+
+        Le score est basé sur:
+        - La VRAM (principal facteur)
+        - Le type de GPU (dédié vs intégré)
+        - Le fabricant (NVIDIA > AMD > Intel pour le support Vulkan)
+
+        Args:
+            Gpu: Dictionnaire GPU avec 'name' et 'vram_mb'
+
+        Returns:
+            Score du GPU
+        """
+        GpuName = Gpu.get("name", "").lower()
+        VramMb = Gpu.get("vram_mb", 0)
+
+        # Score de base = VRAM
+        Score = VramMb
+
+        # Pénalité pour GPU intégré
+        if self.IsIntegratedGpu(Gpu.get("name", "")):
+            Score = Score // 4  # Divise par 4
+
+        # Bonus pour GPU dédié NVIDIA (meilleur support Vulkan)
+        if "nvidia" in GpuName or "geforce" in GpuName or "gtx" in GpuName or "rtx" in GpuName:
+            Score += 500
+        # Bonus moindre pour AMD dédié
+        elif "radeon" in GpuName or "rx" in GpuName:
+            Score += 300
+        # Intel Arc (dédié, bon support Vulkan récent)
+        elif "arc" in GpuName and ("a7" in GpuName or "a5" in GpuName or "a3" in GpuName):
+            Score += 200
+
+        return Score
+
+    def SelectBestGpus(self, Gpus: List[Dict], MaxGpus: int = 1,
+                       PreferDedicated: bool = True) -> List[int]:
+        """
+        Sélectionne les meilleurs GPU pour Real-ESRGAN
+
+        Args:
+            Gpus: Liste des GPU détectés
+            MaxGpus: Nombre maximum de GPU à sélectionner (1 = mono-GPU, >1 = multi-GPU)
+            PreferDedicated: Si True, préfère les GPU dédiés aux intégrés
+
+        Returns:
+            Liste des IDs des GPU sélectionnés (triés par score décroissant)
+        """
+        if not Gpus:
+            return []
+
+        # Filtre les GPU valides (id >= 0)
+        ValidGpus = [g for g in Gpus if g.get("id", -1) >= 0]
+
+        if not ValidGpus:
+            return []
+
+        # Si on préfère les GPU dédiés, filtre d'abord
+        if PreferDedicated:
+            DedicatedGpus = [g for g in ValidGpus if not self.IsIntegratedGpu(g.get("name", ""))]
+            # Si on a des GPU dédiés, on les utilise en priorité
+            if DedicatedGpus:
+                ValidGpus = DedicatedGpus
+
+        # Trie par score décroissant
+        SortedGpus = sorted(ValidGpus, key=lambda g: self.GetGpuScore(g), reverse=True)
+
+        # Retourne les N meilleurs IDs
+        SelectedIds = [g["id"] for g in SortedGpus[:MaxGpus]]
+
+        self.Logger.info(f"GPU sélectionnés: {SelectedIds}")
+        return SelectedIds
+
+    def GetRecommendedConfig(self, Hardware: Optional[Dict] = None,
+                             UseMultiGpu: bool = False) -> Dict:
+        """
+        Génère une configuration de performance recommandée
+
+        Args:
+            Hardware: Matériel détecté (ou None pour détecter)
+            UseMultiGpu: Si True, utilise tous les GPU dédiés disponibles
+
+        Returns:
+            Configuration de performance recommandée
+        """
+        if Hardware is None:
+            Hardware = self.DetectAll()
+
+        Gpus = Hardware.get("gpu", [])
+        CpuCores = Hardware.get("cpu", {}).get("physical_cores", 1)
+
+        # Sélectionne le(s) meilleur(s) GPU
+        MaxGpus = 99 if UseMultiGpu else 1  # 99 = tous les GPU dédiés
+        SelectedGpuIds = self.SelectBestGpus(Gpus, MaxGpus=MaxGpus, PreferDedicated=True)
+
+        if not SelectedGpuIds:
+            # Pas de GPU, mode CPU
+            return {
+                "gpu_ids": [],
+                "tile_size": 32,
+                "threads": {"load": 1, "process": 1, "save": 1}
+            }
+
+        # Trouve le GPU avec le moins de VRAM parmi les sélectionnés
+        # (pour le tile size, on prend le minimum pour éviter les problèmes)
+        SelectedGpus = [g for g in Gpus if g.get("id") in SelectedGpuIds]
+        MinVram = min(g.get("vram_mb", 2048) for g in SelectedGpus) if SelectedGpus else 2048
+
+        # Calcule le tile size optimal basé sur la VRAM minimum
+        TileSize = self.GetRecommendedTileSize(MinVram)
+
+        # Calcule les threads recommandés
+        Threads = self.GetRecommendedThreads(CpuCores, len(SelectedGpuIds))
+
+        Config = {
+            "gpu_ids": SelectedGpuIds,
+            "tile_size": TileSize,
+            "threads": Threads
+        }
+
+        self.Logger.info(f"Configuration recommandée: GPU={SelectedGpuIds}, tile={TileSize}, threads={Threads}")
+        return Config
 
     def GetRecommendedTileSize(self, VramMb: int) -> int:
         """
@@ -614,11 +891,30 @@ if __name__ == "__main__":
     print("\n--- GPU ---")
     for Gpu in Hardware['gpu']:
         VramStr = f" ({Gpu.get('vram_mb', '?')} MB)" if Gpu.get('vram_mb') else ""
-        print(f"[{Gpu['id']}] {Gpu['name']}{VramStr}")
+        IsIntegrated = Detector.IsIntegratedGpu(Gpu.get('name', ''))
+        TypeStr = "(intégré)" if IsIntegrated else "(dédié)"
+        Score = Detector.GetGpuScore(Gpu)
+        print(f"[{Gpu['id']}] {Gpu['name']}{VramStr} {TypeStr} - Score: {Score}")
 
         if Gpu['id'] >= 0 and Gpu.get('vram_mb'):
             TileSize = Detector.GetRecommendedTileSize(Gpu['vram_mb'])
             print(f"    Tile size recommandé: {TileSize}")
+
+    print("\n--- Sélection GPU intelligente ---")
+    # Sélection du meilleur GPU (mono-GPU)
+    BestGpuIds = Detector.SelectBestGpus(Hardware['gpu'], MaxGpus=1)
+    print(f"Meilleur GPU: {BestGpuIds}")
+
+    # Sélection multi-GPU (tous les GPU dédiés)
+    AllDedicatedIds = Detector.SelectBestGpus(Hardware['gpu'], MaxGpus=99)
+    print(f"Tous les GPU dédiés: {AllDedicatedIds}")
+
+    print("\n--- Configuration recommandée ---")
+    Config = Detector.GetRecommendedConfig(Hardware, UseMultiGpu=False)
+    print(f"Mode mono-GPU: GPU={Config['gpu_ids']}, tile={Config['tile_size']}")
+
+    ConfigMulti = Detector.GetRecommendedConfig(Hardware, UseMultiGpu=True)
+    print(f"Mode multi-GPU: GPU={ConfigMulti['gpu_ids']}, tile={ConfigMulti['tile_size']}")
 
     print("\n--- Threads recommandés ---")
     GpuCount = len([g for g in Hardware['gpu'] if g['id'] >= 0])

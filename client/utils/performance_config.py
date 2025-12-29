@@ -215,12 +215,107 @@ class PerformanceConfigManager:
 
         return self.Config.get("first_run", True)
 
-    def AutoConfigure(self, HardwareInfo: Dict) -> Dict:
+    def _IsIntegratedGpu(self, GpuName: str) -> bool:
+        """
+        Détermine si un GPU est intégré (pas dédié)
+
+        Args:
+            GpuName: Nom du GPU
+
+        Returns:
+            True si le GPU est intégré
+        """
+        GpuNameLower = GpuName.lower()
+
+        # Patterns pour les GPU intégrés
+        IntegratedPatterns = [
+            "intel" in GpuNameLower and ("hd graphics" in GpuNameLower or
+                                         "uhd" in GpuNameLower or
+                                         "iris" in GpuNameLower or
+                                         "hd 4" in GpuNameLower or
+                                         "hd 5" in GpuNameLower or
+                                         "hd 6" in GpuNameLower),
+            "amd" in GpuNameLower and "vega" in GpuNameLower and "radeon" not in GpuNameLower,
+            "apu" in GpuNameLower,
+        ]
+
+        return any(IntegratedPatterns)
+
+    def _GetGpuScore(self, Gpu: Dict) -> int:
+        """
+        Calcule un score pour un GPU (plus haut = meilleur)
+
+        Args:
+            Gpu: Dictionnaire GPU avec 'name' et 'vram_mb'
+
+        Returns:
+            Score du GPU
+        """
+        GpuName = Gpu.get("name", "").lower()
+        VramMb = Gpu.get("vram_mb", 0)
+
+        # Score de base = VRAM
+        Score = VramMb
+
+        # Pénalité pour GPU intégré
+        if self._IsIntegratedGpu(Gpu.get("name", "")):
+            Score = Score // 4
+
+        # Bonus pour GPU dédié NVIDIA
+        if "nvidia" in GpuName or "geforce" in GpuName or "gtx" in GpuName or "rtx" in GpuName:
+            Score += 500
+        elif "radeon" in GpuName or "rx" in GpuName:
+            Score += 300
+        elif "arc" in GpuName:
+            Score += 200
+
+        return Score
+
+    def _SelectBestGpus(self, Gpus: List[Dict], UseMultiGpu: bool = False) -> List[int]:
+        """
+        Sélectionne les meilleurs GPU pour Real-ESRGAN
+
+        Args:
+            Gpus: Liste des GPU détectés
+            UseMultiGpu: Si True, sélectionne tous les GPU dédiés
+
+        Returns:
+            Liste des IDs des GPU sélectionnés
+        """
+        if not Gpus:
+            return []
+
+        # Filtre les GPU valides (id >= 0)
+        ValidGpus = [g for g in Gpus if g.get("id", -1) >= 0]
+
+        if not ValidGpus:
+            return []
+
+        # Filtre les GPU dédiés
+        DedicatedGpus = [g for g in ValidGpus if not self._IsIntegratedGpu(g.get("name", ""))]
+
+        # Si on a des GPU dédiés, on les utilise en priorité
+        if DedicatedGpus:
+            ValidGpus = DedicatedGpus
+
+        # Trie par score décroissant
+        SortedGpus = sorted(ValidGpus, key=lambda g: self._GetGpuScore(g), reverse=True)
+
+        if UseMultiGpu:
+            # Retourne tous les GPU dédiés
+            return [g["id"] for g in SortedGpus]
+        else:
+            # Retourne uniquement le meilleur GPU
+            return [SortedGpus[0]["id"]] if SortedGpus else []
+
+    def AutoConfigure(self, HardwareInfo: Dict, UseMultiGpu: bool = False) -> Dict:
         """
         Configure automatiquement basé sur le matériel détecté
+        Utilise une sélection intelligente des GPU (préfère les dédiés)
 
         Args:
             HardwareInfo: Informations matérielles de HardwareDetector
+            UseMultiGpu: Si True, utilise tous les GPU dédiés disponibles
 
         Returns:
             Configuration optimale
@@ -229,35 +324,36 @@ class PerformanceConfigManager:
             Config = self.DEFAULT_CONFIG.copy()
             Config["auto_detect"] = True
 
-            # Configuration des GPU
+            # Configuration des GPU avec sélection intelligente
             Gpus = HardwareInfo.get("gpu", [])
-            ValidGpus = [g for g in Gpus if g.get("id", -1) >= 0]
+            SelectedGpuIds = self._SelectBestGpus(Gpus, UseMultiGpu=UseMultiGpu)
 
-            if ValidGpus:
-                # Utilise le premier GPU par défaut
-                PrimaryGpu = ValidGpus[0]
-                VramMb = PrimaryGpu.get("vram_mb", 4096)
+            if SelectedGpuIds:
+                Config["gpu_ids"] = SelectedGpuIds
 
-                # Calcule le tile size optimal
-                Config["tile_size"] = self.GetTileSizeForVram(VramMb)
+                # Trouve les GPU sélectionnés pour calculer le tile size
+                SelectedGpus = [g for g in Gpus if g.get("id") in SelectedGpuIds]
 
-                # Par défaut, utilise tous les GPU disponibles
-                if len(ValidGpus) > 1:
-                    Config["gpu_ids"] = [g["id"] for g in ValidGpus]
-                else:
-                    Config["gpu_ids"] = [PrimaryGpu["id"]]
+                # Utilise la VRAM minimale parmi les GPU sélectionnés
+                MinVram = min(g.get("vram_mb", 2048) for g in SelectedGpus) if SelectedGpus else 2048
+                Config["tile_size"] = self.GetTileSizeForVram(MinVram)
 
-                self.Logger.info(f"GPU configuré: {PrimaryGpu['name']}")
-                self.Logger.info(f"Tile size auto: {Config['tile_size']}")
+                # Log les GPU sélectionnés
+                for Gpu in SelectedGpus:
+                    IsIntegrated = self._IsIntegratedGpu(Gpu.get("name", ""))
+                    GpuType = "(intégré)" if IsIntegrated else "(dédié)"
+                    self.Logger.info(f"GPU sélectionné: {Gpu['name']} {GpuType}")
+
+                self.Logger.info(f"Tile size auto: {Config['tile_size']} (basé sur {MinVram} MB VRAM)")
             else:
                 # Pas de GPU, utilise CPU
-                Config["gpu_ids"] = [-1]
-                Config["tile_size"] = 128  # Petit tile size pour CPU
+                Config["gpu_ids"] = []
+                Config["tile_size"] = 32  # Petit tile size pour CPU
                 self.Logger.warning("Pas de GPU détecté, utilisation du CPU")
 
             # Configuration des threads
             CpuCores = HardwareInfo.get("cpu", {}).get("physical_cores", 4)
-            Config["threads"] = self.GetThreadConfig(CpuCores, len(ValidGpus))
+            Config["threads"] = self.GetThreadConfig(CpuCores, len(SelectedGpuIds))
 
             self.Config = Config
             return Config
