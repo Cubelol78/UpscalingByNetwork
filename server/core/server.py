@@ -9,6 +9,7 @@ from typing import Optional
 from pathlib import Path
 
 from server.core.client_manager import ClientManager
+from server.core.network_manager import NetworkManager
 from server.database.db_manager import DatabaseManager
 from shared.utils.logger import GetServerLogger
 from shared.utils.constants import NetworkConfig, PathConfig
@@ -28,7 +29,6 @@ class UpscalingServer:
         self.Config = Config
         self.Logger = GetServerLogger()
         self.Running = False
-        self.Server = None
 
         # Configuration
         self.Host = Config.get("server", {}).get("ip", NetworkConfig.DEFAULT_HOST)
@@ -38,6 +38,9 @@ class UpscalingServer:
 
         # Base de données - utilise le chemin par défaut (indépendant du work_directory)
         self.Database = DatabaseManager()  # Utilise GetDefaultDbPath()
+
+        # Gestionnaire de réseau (permet le rebind dynamique IP/Port)
+        self.NetworkManager = NetworkManager(self.Host, self.Port)
 
         # Gestionnaire de clients
         self.ClientManager = None
@@ -123,12 +126,10 @@ class UpscalingServer:
         try:
             self.Logger.info(f"Démarrage du serveur sur {self.Host}:{self.Port}...")
 
-            # Démarre le serveur TCP
-            self.Server = await asyncio.start_server(
-                self._HandleClientConnection,
-                self.Host,
-                self.Port
-            )
+            # Démarre le serveur TCP via NetworkManager
+            if not await self.NetworkManager.Start(self._HandleClientConnection):
+                self.Logger.error("Échec du démarrage du listener TCP")
+                return False
 
             self.Running = True
 
@@ -160,10 +161,9 @@ class UpscalingServer:
         if self.ClientManager:
             await self.ClientManager.StopHeartbeatMonitoring()
 
-        # Ferme le serveur
-        if self.Server:
-            self.Server.close()
-            await self.Server.wait_closed()
+        # Ferme le listener TCP via NetworkManager
+        if self.NetworkManager:
+            await self.NetworkManager.Stop()
 
         # Déconnecte tous les clients
         if self.ClientManager:
@@ -279,10 +279,11 @@ class UpscalingServer:
 
     def _PrintServerInfo(self):
         """Affiche les informations du serveur"""
+        Host, Port = self.NetworkManager.GetAddress()
         self.Logger.info("="*60)
         self.Logger.info("SERVEUR D'UPSCALING VIDÉO EN RÉSEAU")
         self.Logger.info("="*60)
-        self.Logger.info(f"Adresse: {self.Host}:{self.Port}")
+        self.Logger.info(f"Adresse: {Host}:{Port}")
         self.Logger.info(f"Répertoire de travail: {self.WorkDirectory}")
         self.Logger.info(f"Mot de passe configuré: {'Oui' if self.Password else 'Non'}")
         self.Logger.info(f"Base de données: {self.Database.DbPath}")
@@ -295,25 +296,56 @@ class UpscalingServer:
         Returns:
             Dictionnaire avec le statut
         """
+        Host, Port = self.NetworkManager.GetAddress() if self.NetworkManager else (self.Host, self.Port)
         return {
             "running": self.Running,
-            "host": self.Host,
-            "port": self.Port,
+            "host": Host,
+            "port": Port,
             "connected_clients": self.ClientManager.GetClientCount() if self.ClientManager else 0,
             "work_directory": self.WorkDirectory,
             "database": self.Database.DbPath if self.Database else None
         }
 
+    async def RebindNetwork(self, NewHost: str, NewPort: int) -> bool:
+        """
+        Change l'adresse IP/Port du serveur à chaud sans perdre les clients connectés.
+
+        Args:
+            NewHost: Nouvelle adresse IP
+            NewPort: Nouveau port
+
+        Returns:
+            True si succès
+        """
+        if not self.Running:
+            self.Logger.warning("Le serveur n'est pas en cours d'exécution")
+            return False
+
+        self.Logger.info(f"Rebind du serveur vers {NewHost}:{NewPort}")
+
+        Success = await self.NetworkManager.Rebind(NewHost, NewPort)
+
+        if Success:
+            # Met à jour les propriétés internes
+            self.Host = NewHost
+            self.Port = NewPort
+            self.Logger.info(f"✓ Serveur rebind sur {NewHost}:{NewPort}")
+        else:
+            self.Logger.error(f"✗ Échec du rebind vers {NewHost}:{NewPort}")
+
+        return Success
+
     async def Serve(self):
         """
         Sert indéfiniment (bloque jusqu'à arrêt)
         """
-        if not self.Server:
+        if not self.NetworkManager or not self.NetworkManager.IsRunning():
             self.Logger.error("Serveur non démarré")
             return
 
-        async with self.Server:
-            await self.Server.serve_forever()
+        # Attend que le serveur soit arrêté
+        while self.Running:
+            await asyncio.sleep(1)
 
 
 # ============================================================================

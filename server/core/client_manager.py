@@ -486,3 +486,15 @@ class ClientManager:
             if History:
                 History.LastSeen = datetime.now()
                 self.Database.UpdateClientHistory(History)
+
+    def UpdatePassword(self, NewPassword: str):
+        """
+        Met à jour le mot de passe du serveur dynamiquement.
+        Les clients déjà connectés ne sont pas affectés (ils sont déjà authentifiés).
+        Seules les nouvelles connexions devront utiliser le nouveau mot de passe.
+
+        Args:
+            NewPassword: Nouveau mot de passe (peut être vide pour désactiver)
+        """
+        self.ServerPassword = NewPassword
+        self.Logger.info(f"Mot de passe serveur mis à jour (vide: {NewPassword == ''})")
