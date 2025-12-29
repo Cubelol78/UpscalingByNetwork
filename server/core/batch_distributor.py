@@ -258,7 +258,8 @@ class BatchDistributor:
                 VideoId=VideoObj.VideoId,
                 Images=Images,
                 UpscaleFactor=VideoObj.UpscaleFactor,
-                Model=VideoObj.Model
+                Model=VideoObj.Model,
+                TtaMode=VideoObj.TtaMode
             )
 
             # Envoie au client

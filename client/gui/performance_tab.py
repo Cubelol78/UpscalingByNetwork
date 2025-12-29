@@ -185,10 +185,8 @@ class PerformanceTab(QWidget):
         ThreadsWidget.setLayout(ThreadsLayout)
         Layout.addRow("Threads:", ThreadsWidget)
 
-        # TTA Mode
-        self.TtaModeCheckBox = QCheckBox("Activer (meilleure qualite, 8x plus lent)")
-        self.TtaModeCheckBox.stateChanged.connect(self.OnConfigChanged)
-        Layout.addRow("Mode TTA:", self.TtaModeCheckBox)
+        # Note: Le mode TTA est configuré côté serveur pour garantir
+        # une qualité uniforme sur tous les paquets d'une vidéo
 
         return Group
 
@@ -379,9 +377,6 @@ class PerformanceTab(QWidget):
         self.ProcessThreadsSpinBox.setValue(Threads.get("process", 2))
         self.SaveThreadsSpinBox.setValue(Threads.get("save", 2))
 
-        # TTA mode
-        self.TtaModeCheckBox.setChecked(Config.get("tta_mode", False))
-
     def SaveConfig(self):
         """Sauvegarde la configuration"""
         Config = self.BuildConfigFromUI()
@@ -429,7 +424,6 @@ class PerformanceTab(QWidget):
                 "process": self.ProcessThreadsSpinBox.value(),
                 "save": self.SaveThreadsSpinBox.value()
             },
-            "tta_mode": self.TtaModeCheckBox.isChecked(),
             "output_format": "png",
             "first_run": False
         }
@@ -450,8 +444,6 @@ class PerformanceTab(QWidget):
         self.LoadThreadsSpinBox.setValue(Threads.get("load", 1))
         self.ProcessThreadsSpinBox.setValue(Threads.get("process", 2))
         self.SaveThreadsSpinBox.setValue(Threads.get("save", 2))
-
-        self.TtaModeCheckBox.setChecked(Config.get("tta_mode", False))
 
         # Sélectionne tous les GPU valides
         for Row in range(self.GpuTable.rowCount()):

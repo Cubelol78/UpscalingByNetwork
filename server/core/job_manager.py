@@ -96,7 +96,7 @@ class JobManager:
             self.Logger.error(f"Erreur dans la boucle de jobs: {e}")
 
     def AddVideo(self, VideoPath: str, UpscaleFactor: int = 4,
-                 Model: str = "realesr-animevideov3") -> Optional[str]:
+                 Model: str = "realesr-animevideov3", TtaMode: bool = False) -> Optional[str]:
         """
         Ajoute une vidéo à la file d'attente
 
@@ -104,6 +104,7 @@ class JobManager:
             VideoPath: Chemin vers la vidéo
             UpscaleFactor: Facteur d'upscaling (2, 3, ou 4)
             Model: Modèle Real-ESRGAN
+            TtaMode: Mode TTA pour meilleure qualité (plus lent)
 
         Returns:
             ID de la vidéo ou None si erreur
@@ -124,6 +125,7 @@ class JobManager:
                 Status=JobStatus.QUEUED,
                 UpscaleFactor=UpscaleFactor,
                 Model=Model,
+                TtaMode=TtaMode,
                 CreatedAt=datetime.now()
             )
 

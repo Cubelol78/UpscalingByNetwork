@@ -19,7 +19,7 @@ from shared.protocol.messages import BatchResult
 class LocalProcessor:
     """Processeur local de batches d'images avec support des performances"""
 
-    def __init__(self, TempDirectory: str = None, PerformanceConfig: Optional[Dict] = None):
+    def __init__(self, TempDirectory: Optional[str] = None, PerformanceConfig: Optional[Dict] = None):
         """
         Initialise le processeur local
 
@@ -54,15 +54,13 @@ class LocalProcessor:
         """Affiche la configuration de performance active"""
         TileSize = self.PerformanceConfig.get('tile_size', 0)
         GpuIds = self.PerformanceConfig.get('gpu_ids', [])
-        TtaMode = self.PerformanceConfig.get('tta_mode', False)
 
         ConfigStr = []
         if TileSize:
             ConfigStr.append(f"tile={TileSize}")
         if GpuIds:
             ConfigStr.append(f"GPU={','.join(map(str, GpuIds))}")
-        if TtaMode:
-            ConfigStr.append("TTA=on")
+        # Note: TTA est configuré par le serveur, pas en local
 
         if ConfigStr:
             self.Logger.info(f"Config performance: {', '.join(ConfigStr)}")
@@ -86,6 +84,18 @@ class LocalProcessor:
         self.Logger.info("Configuration de performance rechargée")
         self._LogPerformanceConfig()
 
+    def _ApplyServerTtaMode(self, TtaMode: bool):
+        """
+        Applique le mode TTA défini par le serveur (override la config locale)
+
+        Args:
+            TtaMode: Mode TTA à appliquer
+        """
+        # Crée une copie de la config avec le TTA du serveur
+        CurrentConfig = self.RealESRGANHandler.PerformanceConfig.copy()
+        CurrentConfig['tta_mode'] = TtaMode
+        self.RealESRGANHandler.SetPerformanceConfig(CurrentConfig)
+
     def ProcessBatch(self, BatchData: Dict[str, Any]) -> Optional[BatchResult]:
         """
         Traite un batch d'images
@@ -96,18 +106,28 @@ class LocalProcessor:
         Returns:
             BatchResult ou None si erreur
         """
+        BatchId: str = ""
         try:
-            BatchId = BatchData.get("batch_id")
-            VideoId = BatchData.get("video_id")
+            BatchId = BatchData.get("batch_id", "")
+            if not BatchId:
+                self.Logger.error("BatchId manquant dans les données du batch")
+                return None
+
+            VideoId = BatchData.get("video_id", "")
             Images = BatchData.get("images", [])
             UpscaleFactor = BatchData.get("upscale_factor", 4)
             Model = BatchData.get("model", "realesr-animevideov3")
+            TtaMode = BatchData.get("tta_mode", False)  # TTA défini par le serveur
 
             self.Logger.info(f"Traitement du batch {BatchId}")
             self.Logger.info(f"  Vidéo: {VideoId}")
             self.Logger.info(f"  Images: {len(Images)}")
             self.Logger.info(f"  Facteur: x{UpscaleFactor}")
             self.Logger.info(f"  Modèle: {Model}")
+            self.Logger.info(f"  Mode TTA: {'Oui' if TtaMode else 'Non'}")
+
+            # Applique le TtaMode du serveur (override la config locale)
+            self._ApplyServerTtaMode(TtaMode)
 
             # Crée les répertoires temporaires
             InputDir = os.path.join(self.TempDir, BatchId, 'input')
@@ -170,9 +190,13 @@ class LocalProcessor:
 
         try:
             for ImageData in Images:
-                ImageId = ImageData.get("id")
+                ImageId = ImageData.get("id", "unknown")
                 ImageB64 = ImageData.get("data")
                 Filename = ImageData.get("filename", f"frame_{ImageId}.png")
+
+                if not ImageB64:
+                    self.Logger.warning(f"Image {ImageId} sans données, ignorée")
+                    continue
 
                 # Décode l'image
                 ImageBytes = base64.b64decode(ImageB64)
@@ -329,8 +353,6 @@ class LocalProcessor:
 # ============================================================================
 
 if __name__ == "__main__":
-    import json
-
     # Crée un processeur
     Processor = LocalProcessor()
 

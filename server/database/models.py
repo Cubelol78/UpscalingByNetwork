@@ -46,6 +46,7 @@ class Video:
     Status: str = JobStatus.QUEUED
     UpscaleFactor: int = 4
     Model: str = "realesr-animevideov3"
+    TtaMode: bool = False  # Mode TTA (meilleure qualité, plus lent)
     TotalBatches: int = 0
     CompletedBatches: int = 0
     Progress: float = 0.0
@@ -65,6 +66,7 @@ class Video:
             "status": self.Status,
             "upscale_factor": self.UpscaleFactor,
             "model": self.Model,
+            "tta_mode": self.TtaMode,
             "total_batches": self.TotalBatches,
             "completed_batches": self.CompletedBatches,
             "progress": self.Progress,
@@ -86,6 +88,7 @@ class Video:
             Status=Data.get("status", JobStatus.QUEUED),
             UpscaleFactor=Data.get("upscale_factor", 4),
             Model=Data.get("model", "realesr-animevideov3"),
+            TtaMode=bool(Data.get("tta_mode", False)),
             TotalBatches=Data.get("total_batches", 0),
             CompletedBatches=Data.get("completed_batches", 0),
             Progress=Data.get("progress", 0.0),
@@ -217,6 +220,7 @@ CREATE TABLE IF NOT EXISTS videos (
     status TEXT NOT NULL DEFAULT 'queued',
     upscale_factor INTEGER NOT NULL DEFAULT 4,
     model TEXT NOT NULL DEFAULT 'realesr-animevideov3',
+    tta_mode INTEGER NOT NULL DEFAULT 0,
     total_batches INTEGER DEFAULT 0,
     completed_batches INTEGER DEFAULT 0,
     progress REAL DEFAULT 0.0,

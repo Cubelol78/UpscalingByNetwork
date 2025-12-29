@@ -6,7 +6,8 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QTableWidget, QTableWidgetItem, QPushButton,
     QHeaderView, QFileDialog, QComboBox, QDialog,
-    QDialogButtonBox, QFormLayout, QMessageBox, QProgressBar
+    QDialogButtonBox, QFormLayout, QMessageBox, QProgressBar,
+    QCheckBox
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
@@ -34,9 +35,9 @@ class JobsTab(QWidget):
 
         # Tableau des jobs
         self.JobsTable = QTableWidget()
-        self.JobsTable.setColumnCount(7)
+        self.JobsTable.setColumnCount(8)
         self.JobsTable.setHorizontalHeaderLabels([
-            "ID", "Vidéo", "Statut", "Progrès", "Batchs", "Upscale", "Modèle"
+            "ID", "Vidéo", "Statut", "Progrès", "Batchs", "Upscale", "Modèle", "TTA"
         ])
 
         # Configuration du tableau
@@ -48,6 +49,7 @@ class JobsTab(QWidget):
         Header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         Header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
         Header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        Header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
 
         self.JobsTable.setAlternatingRowColors(True)
         self.JobsTable.setStyleSheet("""
@@ -179,6 +181,13 @@ class JobsTab(QWidget):
                 # Modèle
                 self.JobsTable.setItem(RowPosition, 6, QTableWidgetItem(Video.Model))
 
+                # TTA Mode
+                TtaText = "Oui" if Video.TtaMode else "Non"
+                TtaItem = QTableWidgetItem(TtaText)
+                if Video.TtaMode:
+                    TtaItem.setBackground(QColor("#E3F2FD"))  # Bleu clair
+                self.JobsTable.setItem(RowPosition, 7, TtaItem)
+
         except Exception as e:
             self.ParentWindow.Logger.error(f"Erreur lors du rafraîchissement des jobs: {e}")
 
@@ -220,7 +229,8 @@ class JobsTab(QWidget):
                     VideoId = JobManager.AddVideo(
                         VideoPath=FilePath,
                         UpscaleFactor=Config['upscale_factor'],
-                        Model=Config['model']
+                        Model=Config['model'],
+                        TtaMode=Config['tta_mode']
                     )
 
                     self.ParentWindow.Logger.info(f"Vidéo ajoutée: {FilePath} (ID: {VideoId})")
@@ -323,6 +333,15 @@ class AddVideoDialog(QDialog):
         ])
         Layout.addRow("Modèle:", self.ModelCombo)
 
+        # Mode TTA
+        self.TtaCheckbox = QCheckBox()
+        self.TtaCheckbox.setChecked(False)
+        self.TtaCheckbox.setToolTip(
+            "Test-Time Augmentation: meilleure qualité mais traitement plus lent.\n"
+            "Recommandé pour les vidéos importantes."
+        )
+        Layout.addRow("Mode TTA (qualité+):", self.TtaCheckbox)
+
         # Boutons
         Buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         Buttons.accepted.connect(self.accept)
@@ -336,5 +355,6 @@ class AddVideoDialog(QDialog):
 
         return {
             'upscale_factor': UpscaleFactor,
-            'model': self.ModelCombo.currentText()
+            'model': self.ModelCombo.currentText(),
+            'tta_mode': self.TtaCheckbox.isChecked()
         }

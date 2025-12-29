@@ -269,11 +269,18 @@ class ServerCLI:
         ModelChoice = click.prompt("Choisir le modèle", type=int, default=1)
         Model = Models[ModelChoice - 1]
 
+        # Demande le mode TTA
+        TtaMode = click.confirm(
+            "Activer le mode TTA? (meilleure qualité, plus lent)",
+            default=False
+        )
+
         # Ajoute la vidéo
         VideoId = self.JobManager.AddVideo(
             VideoPath,
             int(UpscaleFactor),
-            Model
+            Model,
+            TtaMode
         )
 
         if VideoId:

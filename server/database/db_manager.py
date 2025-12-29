@@ -189,19 +189,19 @@ class DatabaseManager:
             Cursor.execute(
                 """
                 INSERT INTO videos (
-                    video_id, video_path, status, upscale_factor, model,
+                    video_id, video_path, status, upscale_factor, model, tta_mode,
                     total_batches, completed_batches, progress, framerate,
                     total_frames, output_path, error_message, created_at,
                     started_at, completed_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     Video.VideoId, Video.VideoPath, Video.Status, Video.UpscaleFactor,
-                    Video.Model, Video.TotalBatches, Video.CompletedBatches,
-                    Video.Progress, Video.Framerate, Video.TotalFrames,
-                    Video.OutputPath, Video.ErrorMessage, Video.CreatedAt,
-                    Video.StartedAt, Video.CompletedAt
+                    Video.Model, 1 if Video.TtaMode else 0, Video.TotalBatches,
+                    Video.CompletedBatches, Video.Progress, Video.Framerate,
+                    Video.TotalFrames, Video.OutputPath, Video.ErrorMessage,
+                    Video.CreatedAt, Video.StartedAt, Video.CompletedAt
                 )
             )
             self.Connection.commit()

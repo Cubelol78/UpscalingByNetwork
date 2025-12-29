@@ -241,13 +241,12 @@ class ClientCLI:
             TileSize = Config.get('tile_size', 0)
             GpuIds = Config.get('gpu_ids', [])
             Threads = Config.get('threads', {})
-            TtaMode = Config.get('tta_mode', False)
 
             click.echo("\nConfiguration actuelle:")
             click.echo(f"  Tile size: {TileSize if TileSize > 0 else 'Auto'}")
             click.echo(f"  GPU: {','.join(map(str, GpuIds)) if GpuIds else 'Auto'}")
             click.echo(f"  Threads: {Threads.get('load', 1)}:{Threads.get('process', 2)}:{Threads.get('save', 2)}")
-            click.echo(f"  Mode TTA: {'Oui' if TtaMode else 'Non'}")
+            click.echo("  (Mode TTA: configuré côté serveur)")
 
             click.echo("\nActions:")
             click.echo("1. Détecter le matériel")
@@ -341,7 +340,6 @@ class ClientCLI:
             click.echo(f"  GPU: {','.join(map(str, Config.get('gpu_ids', [])))}")
             Threads = Config.get('threads', {})
             click.echo(f"  Threads: {Threads.get('load', 1)}:{Threads.get('process', 2)}:{Threads.get('save', 2)}")
-            click.echo(f"  Mode TTA: {'Oui' if Config.get('tta_mode', False) else 'Non'}")
 
             # Demande confirmation
             if click.confirm("\nAppliquer cette configuration?", default=True):
@@ -403,10 +401,8 @@ class ClientCLI:
             'save': max(PerformancePresets.MIN_THREADS, min(PerformancePresets.MAX_THREADS, SaveThreads))
         }
 
-        # TTA mode
-        TtaMode = click.confirm("Activer le mode TTA (meilleure qualité, plus lent)?",
-                               default=Config.get('tta_mode', False))
-        Config['tta_mode'] = TtaMode
+        # Note: Le mode TTA est configuré côté serveur
+        click.echo("\n(Note: Le mode TTA est configuré côté serveur)")
 
         # Sauvegarde
         if click.confirm("\nSauvegarder cette configuration?", default=True):

@@ -212,7 +212,7 @@ class BatchAssignment(BaseMessage):
     """Assignment d'un paquet d'images à un client"""
 
     def __init__(self, BatchId: str, VideoId: str, Images: List[Dict[str, Any]],
-                 UpscaleFactor: int, Model: str):
+                 UpscaleFactor: int, Model: str, TtaMode: bool = False):
         """
         Args:
             BatchId: ID du paquet
@@ -220,6 +220,7 @@ class BatchAssignment(BaseMessage):
             Images: Liste des images (format: [{id, number, data}])
             UpscaleFactor: Facteur d'upscaling (2, 3, ou 4)
             Model: Modèle Real-ESRGAN à utiliser
+            TtaMode: Mode TTA pour meilleure qualité (défini par le serveur)
         """
         Payload = {
             "batch_id": BatchId,
@@ -227,6 +228,7 @@ class BatchAssignment(BaseMessage):
             "images": Images,
             "upscale_factor": UpscaleFactor,
             "model": Model,
+            "tta_mode": TtaMode,
             "image_count": len(Images)
         }
         super().__init__(MessageType.BATCH_ASSIGNMENT, Payload)
