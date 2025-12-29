@@ -1,17 +1,20 @@
 """
 Système de chiffrement et de handshake sécurisé
 Utilise Diffie-Hellman pour l'échange de clés et AES pour le chiffrement
+Supporte la compression zstd/zlib négociée au handshake
 """
 
 import os
 import base64
 import hashlib
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
+
+from shared.protocol.compression import CompressionHandler
 
 # Paramètres DH pré-générés (RFC 3526 - Group 14, 2048 bits)
 # Ceci évite les problèmes de permission sur Windows et accélère l'initialisation
@@ -43,6 +46,9 @@ class EncryptionHandler:
         self.PublicKey = None
         self.SharedKey = None
         self.AesKey = None
+
+        # Gestionnaire de compression
+        self.CompressionHandler = CompressionHandler()
 
         # Utilise les paramètres DH pré-générés (RFC 3526)
         if EncryptionHandler.DH_PARAMETERS is None:
@@ -179,7 +185,7 @@ class EncryptionHandler:
 
     def EncryptMessage(self, Message: str) -> str:
         """
-        Chiffre un message texte
+        Chiffre un message texte (avec compression si activée)
 
         Args:
             Message: Message en texte clair
@@ -188,12 +194,16 @@ class EncryptionHandler:
             Message chiffré encodé en base64
         """
         PlainBytes = Message.encode('utf-8')
-        EncryptedBytes = self.Encrypt(PlainBytes)
+
+        # Compresse avant chiffrement (si compression activée)
+        CompressedBytes = self.CompressionHandler.Compress(PlainBytes)
+
+        EncryptedBytes = self.Encrypt(CompressedBytes)
         return base64.b64encode(EncryptedBytes).decode('utf-8')
 
     def DecryptMessage(self, EncryptedMessage: str) -> Optional[str]:
         """
-        Déchiffre un message texte
+        Déchiffre un message texte (avec décompression si activée)
 
         Args:
             EncryptedMessage: Message chiffré encodé en base64
@@ -203,16 +213,37 @@ class EncryptionHandler:
         """
         try:
             EncryptedBytes = base64.b64decode(EncryptedMessage)
-            PlainBytes = self.Decrypt(EncryptedBytes)
+            CompressedBytes = self.Decrypt(EncryptedBytes)
 
-            if PlainBytes is None:
+            if CompressedBytes is None:
                 return None
+
+            # Décompresse après déchiffrement (si compression activée)
+            PlainBytes = self.CompressionHandler.Decompress(CompressedBytes)
 
             return PlainBytes.decode('utf-8')
 
         except Exception as e:
             print(f"Erreur lors du déchiffrement du message: {e}")
             return None
+
+    def SetCompression(self, Algorithm: str):
+        """
+        Configure l'algorithme de compression
+
+        Args:
+            Algorithm: Algorithme de compression (none, zstd, zlib)
+        """
+        self.CompressionHandler.SetAlgorithm(Algorithm)
+
+    def GetSupportedCompression(self) -> List[str]:
+        """
+        Récupère les algorithmes de compression supportés
+
+        Returns:
+            Liste des algorithmes supportés
+        """
+        return self.CompressionHandler.GetSupportedAlgorithms()
 
     def GetPublicKeyBytes(self) -> Optional[bytes]:
         """

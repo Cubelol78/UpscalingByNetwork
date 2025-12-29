@@ -14,6 +14,7 @@ from shared.protocol.messages import (
     HeartbeatPing, HeartbeatPong, MessageFactory, ErrorMessage
 )
 from shared.protocol.encryption import EncryptionHandler, PasswordHasher
+from shared.protocol.compression import NegotiateCompression
 from shared.utils.logger import GetModuleLogger
 from shared.utils.constants import ClientStatus, ErrorCode, NetworkConfig
 from server.database.db_manager import DatabaseManager
@@ -166,11 +167,21 @@ class ClientManager:
                 self.Logger.error("Échec du calcul de la clé partagée")
                 return False
 
+            # Négociation de la compression
+            ClientCompression = Request.GetSupportedCompression()
+            ServerCompression = ClientInfo.EncryptionHandler.GetSupportedCompression()
+            SelectedCompression = NegotiateCompression(ClientCompression, ServerCompression)
+
+            # Configure la compression sur le handler
+            ClientInfo.EncryptionHandler.SetCompression(SelectedCompression)
+            self.Logger.info(f"Compression négociée: {SelectedCompression}")
+
             # Envoie la réponse
             Response = HandshakeResponse(
                 PublicKey=ServerPublicKey,
                 Success=True,
-                Message="Handshake réussi"
+                Message="Handshake réussi",
+                SelectedCompression=SelectedCompression
             )
 
             await self._SendMessage(ClientInfo, Response.ToJson())

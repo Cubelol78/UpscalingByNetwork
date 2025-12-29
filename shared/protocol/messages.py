@@ -78,15 +78,18 @@ class BaseMessage:
 class HandshakeRequest(BaseMessage):
     """Demande de handshake du client"""
 
-    def __init__(self, PublicKey: bytes, ProtocolVersion: str = "1.0"):
+    def __init__(self, PublicKey: bytes, ProtocolVersion: str = "1.0",
+                 SupportedCompression: List[str] = None):
         """
         Args:
             PublicKey: Clé publique du client (bytes)
             ProtocolVersion: Version du protocole
+            SupportedCompression: Liste des algorithmes de compression supportés
         """
         Payload = {
             "public_key": base64.b64encode(PublicKey).decode('utf-8'),
-            "protocol_version": ProtocolVersion
+            "protocol_version": ProtocolVersion,
+            "supported_compression": SupportedCompression or ["none"]
         }
         super().__init__(MessageType.HANDSHAKE_REQUEST, Payload)
 
@@ -94,21 +97,28 @@ class HandshakeRequest(BaseMessage):
         """Récupère la clé publique"""
         return base64.b64decode(self.Payload["public_key"])
 
+    def GetSupportedCompression(self) -> List[str]:
+        """Récupère les algorithmes de compression supportés"""
+        return self.Payload.get("supported_compression", ["none"])
+
 
 class HandshakeResponse(BaseMessage):
     """Réponse de handshake du serveur"""
 
-    def __init__(self, PublicKey: bytes, Success: bool = True, Message: str = ""):
+    def __init__(self, PublicKey: bytes, Success: bool = True, Message: str = "",
+                 SelectedCompression: str = "none"):
         """
         Args:
             PublicKey: Clé publique du serveur (bytes)
             Success: Handshake réussi
             Message: Message optionnel
+            SelectedCompression: Algorithme de compression sélectionné
         """
         Payload = {
             "public_key": base64.b64encode(PublicKey).decode('utf-8'),
             "success": Success,
-            "message": Message
+            "message": Message,
+            "selected_compression": SelectedCompression
         }
         super().__init__(MessageType.HANDSHAKE_RESPONSE, Payload)
 
@@ -119,6 +129,10 @@ class HandshakeResponse(BaseMessage):
     def IsSuccess(self) -> bool:
         """Vérifie si le handshake a réussi"""
         return self.Payload.get("success", False)
+
+    def GetSelectedCompression(self) -> str:
+        """Récupère l'algorithme de compression sélectionné"""
+        return self.Payload.get("selected_compression", "none")
 
 
 class AuthRequest(BaseMessage):

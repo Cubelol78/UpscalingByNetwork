@@ -134,10 +134,14 @@ class ConnectionManager:
             # Génère la clé publique du client
             ClientPublicKey = self.EncryptionHandler.GenerateKeyPair()
 
-            # Envoie la demande de handshake
+            # Récupère les algorithmes de compression supportés
+            SupportedCompression = self.EncryptionHandler.GetSupportedCompression()
+
+            # Envoie la demande de handshake avec les algos de compression
             Request = HandshakeRequest(
                 PublicKey=ClientPublicKey,
-                ProtocolVersion="1.0"
+                ProtocolVersion="1.0",
+                SupportedCompression=SupportedCompression
             )
 
             await self._SendMessage(Request.ToJson())
@@ -170,7 +174,11 @@ class ConnectionManager:
                 self.Logger.error("Échec du calcul de la clé partagée")
                 return False
 
-            self.Logger.info("✓ Handshake réussi, clé partagée établie")
+            # Configure la compression négociée
+            SelectedCompression = Response.GetSelectedCompression()
+            self.EncryptionHandler.SetCompression(SelectedCompression)
+            self.Logger.info(f"✓ Handshake réussi, compression: {SelectedCompression}")
+
             return True
 
         except asyncio.TimeoutError:

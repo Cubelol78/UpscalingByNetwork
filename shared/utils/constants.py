@@ -143,6 +143,27 @@ class NetworkConfig:
 
 
 # ============================================================================
+# CONFIGURATION COMPRESSION
+# ============================================================================
+
+class CompressionConfig:
+    """Configuration de la compression réseau"""
+
+    # Algorithmes supportés
+    ALGO_NONE = "none"
+    ALGO_ZSTD = "zstd"
+    ALGO_ZLIB = "zlib"
+
+    # Algorithme par défaut et fallback
+    DEFAULT_ALGORITHM = ALGO_ZSTD
+    FALLBACK_ALGORITHM = ALGO_ZLIB
+
+    # Niveaux de compression
+    ZSTD_LEVEL = 3   # zstd: 1-22, 3 = bon équilibre vitesse/compression
+    ZLIB_LEVEL = 6   # zlib: 1-9, 6 = défaut Python
+
+
+# ============================================================================
 # CONFIGURATION TRAITEMENT
 # ============================================================================
 
