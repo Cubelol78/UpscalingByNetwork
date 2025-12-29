@@ -117,7 +117,19 @@ class RealESRGANHandler:
             '-n', Model
         ]
 
-        # Tile size (-t) - seulement si valeur valide > 0
+        # GPU selection (-g) - détecte d'abord le nombre de GPU
+        GpuIds = self.PerformanceConfig.get('gpu_ids', [])
+        GpuCount = 0
+        if GpuIds:
+            if isinstance(GpuIds, list):
+                GpuCount = len(GpuIds)
+                GpuStr = ','.join(map(str, GpuIds))
+            else:
+                GpuCount = 1
+                GpuStr = str(GpuIds)
+            Command.extend(['-g', GpuStr])
+
+        # Tile size (-t) - dupliqué pour chaque GPU si multi-GPU
         TileSize = self.PerformanceConfig.get('tile_size', 0)
         try:
             # Convertit en int si c'est une chaîne
@@ -125,21 +137,17 @@ class RealESRGANHandler:
                 TileSize = int(TileSize) if TileSize.strip() else 0
             # Valide que c'est un entier positif
             if isinstance(TileSize, int) and TileSize > 0:
-                Command.extend(['-t', str(TileSize)])
+                if GpuCount > 1:
+                    # Multi-GPU: répète le tile size pour chaque GPU
+                    TileSizeStr = ','.join([str(TileSize)] * GpuCount)
+                else:
+                    TileSizeStr = str(TileSize)
+                Command.extend(['-t', TileSizeStr])
         except (ValueError, TypeError):
             # Ignore les valeurs invalides
             self.Logger.warning(f"Tile size invalide ignoré: {TileSize}")
 
-        # GPU selection (-g)
-        GpuIds = self.PerformanceConfig.get('gpu_ids')
-        if GpuIds:
-            if isinstance(GpuIds, list):
-                GpuStr = ','.join(map(str, GpuIds))
-            else:
-                GpuStr = str(GpuIds)
-            Command.extend(['-g', GpuStr])
-
-        # Threads (-j) format: "load:proc:save" ou "1:2,2:2" pour multi-GPU
+        # Threads (-j) format: "load:proc:save" ou "load:proc,proc:save" pour multi-GPU
         Threads = self.PerformanceConfig.get('threads')
         if Threads:
             try:
@@ -151,7 +159,12 @@ class RealESRGANHandler:
                     Load = int(Threads.get('load', 1)) or 1
                     Process = int(Threads.get('process', 2)) or 2
                     Save = int(Threads.get('save', 2)) or 2
-                    Command.extend(['-j', f"{Load}:{Process}:{Save}"])
+                    if GpuCount > 1:
+                        # Multi-GPU: format "load:proc,proc,...:save"
+                        ProcessStr = ','.join([str(Process)] * GpuCount)
+                        Command.extend(['-j', f"{Load}:{ProcessStr}:{Save}"])
+                    else:
+                        Command.extend(['-j', f"{Load}:{Process}:{Save}"])
             except (ValueError, TypeError) as e:
                 self.Logger.warning(f"Configuration threads invalide ignorée: {Threads} - {e}")
 
