@@ -1,6 +1,7 @@
 """
 Processeur local pour le traitement des batches d'images
 Reçoit des images, les upscale et renvoie les résultats
+Supporte la configuration de performance pour Real-ESRGAN
 """
 
 import os
@@ -10,19 +11,21 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 
 from client.utils.realesrgan_handler import RealESRGANHandler
+from client.utils.performance_config import PerformanceConfigManager
 from shared.utils.logger import GetClientLogger
 from shared.protocol.messages import BatchResult
 
 
 class LocalProcessor:
-    """Processeur local de batches d'images"""
+    """Processeur local de batches d'images avec support des performances"""
 
-    def __init__(self, TempDirectory: str = None):
+    def __init__(self, TempDirectory: str = None, PerformanceConfig: Optional[Dict] = None):
         """
         Initialise le processeur local
 
         Args:
             TempDirectory: Répertoire temporaire (défaut: ~/.upscaling_client/temp)
+            PerformanceConfig: Configuration de performance (optionnel)
         """
         self.Logger = GetClientLogger()
 
@@ -34,10 +37,54 @@ class LocalProcessor:
 
         os.makedirs(self.TempDir, exist_ok=True)
 
-        # Handler Real-ESRGAN
-        self.RealESRGANHandler = RealESRGANHandler()
+        # Charge la configuration de performance
+        self.PerformanceConfigManager = PerformanceConfigManager()
+        if PerformanceConfig:
+            self.PerformanceConfig = PerformanceConfig
+        else:
+            self.PerformanceConfig = self.PerformanceConfigManager.Load()
+
+        # Handler Real-ESRGAN avec configuration de performance
+        self.RealESRGANHandler = RealESRGANHandler(PerformanceConfig=self.PerformanceConfig)
 
         self.Logger.info("Processeur local initialisé")
+        self._LogPerformanceConfig()
+
+    def _LogPerformanceConfig(self):
+        """Affiche la configuration de performance active"""
+        TileSize = self.PerformanceConfig.get('tile_size', 0)
+        GpuIds = self.PerformanceConfig.get('gpu_ids', [])
+        TtaMode = self.PerformanceConfig.get('tta_mode', False)
+
+        ConfigStr = []
+        if TileSize:
+            ConfigStr.append(f"tile={TileSize}")
+        if GpuIds:
+            ConfigStr.append(f"GPU={','.join(map(str, GpuIds))}")
+        if TtaMode:
+            ConfigStr.append("TTA=on")
+
+        if ConfigStr:
+            self.Logger.info(f"Config performance: {', '.join(ConfigStr)}")
+
+    def UpdatePerformanceConfig(self, NewConfig: Dict):
+        """
+        Met à jour la configuration de performance
+
+        Args:
+            NewConfig: Nouvelle configuration
+        """
+        self.PerformanceConfig = NewConfig
+        self.RealESRGANHandler.SetPerformanceConfig(NewConfig)
+        self.Logger.info("Configuration de performance mise à jour")
+        self._LogPerformanceConfig()
+
+    def ReloadPerformanceConfig(self):
+        """Recharge la configuration de performance depuis le fichier"""
+        self.PerformanceConfig = self.PerformanceConfigManager.Load()
+        self.RealESRGANHandler.SetPerformanceConfig(self.PerformanceConfig)
+        self.Logger.info("Configuration de performance rechargée")
+        self._LogPerformanceConfig()
 
     def ProcessBatch(self, BatchData: Dict[str, Any]) -> Optional[BatchResult]:
         """

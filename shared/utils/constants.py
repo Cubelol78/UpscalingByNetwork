@@ -169,6 +169,44 @@ class ProcessingConfig:
 
 
 # ============================================================================
+# CONFIGURATION PERFORMANCE
+# ============================================================================
+
+class PerformanceConfig:
+    """Configuration des performances Real-ESRGAN"""
+
+    # Tile size selon la VRAM (en MB)
+    TILE_SIZE_2GB = 128
+    TILE_SIZE_4GB = 256
+    TILE_SIZE_6GB = 384
+    TILE_SIZE_8GB = 512
+    TILE_SIZE_12GB = 768
+    TILE_SIZE_16GB = 1024
+
+    # Valeurs limites
+    MIN_TILE_SIZE = 32
+    MAX_TILE_SIZE = 2048
+    MIN_THREADS = 1
+    MAX_THREADS = 16
+
+    # Threads par défaut
+    DEFAULT_LOAD_THREADS = 1
+    DEFAULT_PROCESS_THREADS = 2
+    DEFAULT_SAVE_THREADS = 2
+
+    # Mapping VRAM -> Tile size
+    TILE_SIZE_MAP = {
+        2048: 128,
+        4096: 256,
+        6144: 384,
+        8192: 512,
+        12288: 768,
+        16384: 1024,
+        24576: 1024
+    }
+
+
+# ============================================================================
 # CHEMINS RELATIFS
 # ============================================================================
 

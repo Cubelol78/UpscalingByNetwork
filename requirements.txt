@@ -10,5 +10,8 @@ click>=8.1.7
 # Utilitaires
 pillow>=10.0.0
 
+# Détection matérielle
+psutil>=5.9.0
+
 # Interface graphique
 PyQt5>=5.15.0

@@ -13,6 +13,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 
 from client.core.client import UpscalingClient
 from client.core.connection import SavedServersManager
+from client.utils.hardware_detector import HardwareDetector
+from client.utils.performance_config import PerformanceConfigManager, PerformancePresets
 from shared.utils.constants import ClientStatus
 
 
@@ -23,6 +25,7 @@ class ClientCLI:
         """Initialise l'interface CLI"""
         self.Client = None
         self.ServerManager = SavedServersManager()
+        self.PerformanceManager = PerformanceConfigManager()
         self.Running = False
         self.MonitoringTask = None
 
@@ -44,6 +47,7 @@ class ClientCLI:
             click.echo("1. Connecter à un serveur")
             click.echo("2. Serveurs sauvegardés")
             click.echo("3. Ajouter un serveur")
+            click.echo("4. Configuration performances")
             click.echo("0. Quitter")
             click.echo("="*60)
 
@@ -58,6 +62,8 @@ class ClientCLI:
                 await self.ManageSavedServers()
             elif Choice == 3:
                 self.AddServer()
+            elif Choice == 4:
+                self.PerformanceMenu()
             else:
                 click.echo("✗ Choix invalide")
 
@@ -220,6 +226,200 @@ class ClientCLI:
                 click.echo(f"✓ Serveur '{ServerName}' retiré")
         else:
             click.echo("✗ Numéro invalide")
+
+    def PerformanceMenu(self):
+        """Menu de configuration des performances"""
+        while True:
+            click.echo("\n" + "="*60)
+            click.echo("CONFIGURATION DES PERFORMANCES")
+            click.echo("="*60)
+
+            # Charge la configuration actuelle
+            Config = self.PerformanceManager.Load()
+
+            # Affiche la configuration actuelle
+            TileSize = Config.get('tile_size', 0)
+            GpuIds = Config.get('gpu_ids', [])
+            Threads = Config.get('threads', {})
+            TtaMode = Config.get('tta_mode', False)
+
+            click.echo("\nConfiguration actuelle:")
+            click.echo(f"  Tile size: {TileSize if TileSize > 0 else 'Auto'}")
+            click.echo(f"  GPU: {','.join(map(str, GpuIds)) if GpuIds else 'Auto'}")
+            click.echo(f"  Threads: {Threads.get('load', 1)}:{Threads.get('process', 2)}:{Threads.get('save', 2)}")
+            click.echo(f"  Mode TTA: {'Oui' if TtaMode else 'Non'}")
+
+            click.echo("\nActions:")
+            click.echo("1. Détecter le matériel")
+            click.echo("2. Configuration automatique")
+            click.echo("3. Configuration manuelle")
+            click.echo("4. Réinitialiser par défaut")
+            click.echo("0. Retour")
+
+            Choice = click.prompt("Votre choix", type=int, default=0)
+
+            if Choice == 0:
+                break
+            elif Choice == 1:
+                self._DetectHardware()
+            elif Choice == 2:
+                self._AutoConfigure()
+            elif Choice == 3:
+                self._ManualConfigure()
+            elif Choice == 4:
+                self._ResetPerformanceConfig()
+            else:
+                click.echo("✗ Choix invalide")
+
+    def _DetectHardware(self):
+        """Détecte et affiche le matériel"""
+        click.echo("\n" + "="*60)
+        click.echo("DÉTECTION DU MATÉRIEL")
+        click.echo("="*60)
+
+        click.echo("\nDétection en cours...")
+
+        try:
+            Detector = HardwareDetector()
+            HardwareInfo = Detector.DetectAll()
+
+            # CPU
+            CpuInfo = HardwareInfo.get('cpu', {})
+            click.echo(f"\n📦 CPU:")
+            click.echo(f"   Nom: {CpuInfo.get('name', 'Inconnu')}")
+            click.echo(f"   Coeurs physiques: {CpuInfo.get('physical_cores', '?')}")
+            click.echo(f"   Coeurs logiques: {CpuInfo.get('logical_cores', '?')}")
+
+            # RAM
+            RamInfo = HardwareInfo.get('ram', {})
+            click.echo(f"\n💾 RAM:")
+            click.echo(f"   Total: {RamInfo.get('total_gb', '?')} GB")
+            click.echo(f"   Disponible: {RamInfo.get('available_gb', '?')} GB")
+
+            # GPU
+            GpuList = HardwareInfo.get('gpu', [])
+            click.echo(f"\n🎮 GPU ({len(GpuList)} détecté(s)):")
+
+            if GpuList:
+                for Gpu in GpuList:
+                    GpuId = Gpu.get('id', -1)
+                    Name = Gpu.get('name', 'Inconnu')
+                    Vram = Gpu.get('vram_mb', 0)
+                    VramStr = f"{Vram} MB" if Vram > 0 else "N/A"
+                    click.echo(f"   [{GpuId}] {Name} - VRAM: {VramStr}")
+            else:
+                click.echo("   Aucun GPU Vulkan détecté")
+
+            # Recommandations
+            click.echo("\n📊 Recommandations:")
+            TileSize = Detector.GetRecommendedTileSize()
+            ThreadConfig = Detector.GetRecommendedThreads()
+            click.echo(f"   Tile size recommandé: {TileSize}")
+            click.echo(f"   Threads recommandés: {ThreadConfig.get('load', 1)}:{ThreadConfig.get('process', 2)}:{ThreadConfig.get('save', 2)}")
+
+        except Exception as e:
+            click.echo(f"\n✗ Erreur lors de la détection: {e}")
+
+    def _AutoConfigure(self):
+        """Configuration automatique basée sur le matériel"""
+        click.echo("\n" + "="*60)
+        click.echo("CONFIGURATION AUTOMATIQUE")
+        click.echo("="*60)
+
+        click.echo("\nDétection du matériel...")
+
+        try:
+            Detector = HardwareDetector()
+            HardwareInfo = Detector.DetectAll()
+
+            # Génère la configuration optimale
+            Config = self.PerformanceManager.AutoConfigure(HardwareInfo)
+
+            # Affiche la configuration proposée
+            click.echo("\nConfiguration proposée:")
+            click.echo(f"  Tile size: {Config.get('tile_size', 0)}")
+            click.echo(f"  GPU: {','.join(map(str, Config.get('gpu_ids', [])))}")
+            Threads = Config.get('threads', {})
+            click.echo(f"  Threads: {Threads.get('load', 1)}:{Threads.get('process', 2)}:{Threads.get('save', 2)}")
+            click.echo(f"  Mode TTA: {'Oui' if Config.get('tta_mode', False) else 'Non'}")
+
+            # Demande confirmation
+            if click.confirm("\nAppliquer cette configuration?", default=True):
+                self.PerformanceManager.Save(Config)
+                click.echo("✓ Configuration sauvegardée")
+            else:
+                click.echo("Configuration non appliquée")
+
+        except Exception as e:
+            click.echo(f"\n✗ Erreur: {e}")
+
+    def _ManualConfigure(self):
+        """Configuration manuelle des performances"""
+        click.echo("\n" + "="*60)
+        click.echo("CONFIGURATION MANUELLE")
+        click.echo("="*60)
+
+        Config = self.PerformanceManager.Load()
+
+        # Tile size
+        CurrentTile = Config.get('tile_size', 0)
+        click.echo(f"\nTile size (0=auto, min={PerformancePresets.MIN_TILE_SIZE}, max={PerformancePresets.MAX_TILE_SIZE})")
+        TileSize = click.prompt("Tile size", type=int, default=CurrentTile)
+
+        if TileSize < 0:
+            TileSize = 0
+        elif TileSize > 0 and TileSize < PerformancePresets.MIN_TILE_SIZE:
+            TileSize = PerformancePresets.MIN_TILE_SIZE
+        elif TileSize > PerformancePresets.MAX_TILE_SIZE:
+            TileSize = PerformancePresets.MAX_TILE_SIZE
+
+        Config['tile_size'] = TileSize
+
+        # GPU selection
+        click.echo("\nSélection GPU (vide=auto, ex: 0 ou 0,1 pour multi-GPU)")
+        CurrentGpu = ','.join(map(str, Config.get('gpu_ids', [])))
+        GpuInput = click.prompt("GPU IDs", default=CurrentGpu, show_default=True)
+
+        if GpuInput.strip():
+            try:
+                GpuIds = [int(x.strip()) for x in GpuInput.split(',') if x.strip()]
+                Config['gpu_ids'] = GpuIds
+            except ValueError:
+                click.echo("✗ Format invalide, GPU non modifié")
+        else:
+            Config['gpu_ids'] = []
+
+        # Threads
+        Threads = Config.get('threads', {})
+        click.echo(f"\nConfiguration threads (min={PerformancePresets.MIN_THREADS}, max={PerformancePresets.MAX_THREADS})")
+
+        LoadThreads = click.prompt("Threads de chargement", type=int, default=Threads.get('load', 1))
+        ProcessThreads = click.prompt("Threads de traitement", type=int, default=Threads.get('process', 2))
+        SaveThreads = click.prompt("Threads de sauvegarde", type=int, default=Threads.get('save', 2))
+
+        Config['threads'] = {
+            'load': max(PerformancePresets.MIN_THREADS, min(PerformancePresets.MAX_THREADS, LoadThreads)),
+            'process': max(PerformancePresets.MIN_THREADS, min(PerformancePresets.MAX_THREADS, ProcessThreads)),
+            'save': max(PerformancePresets.MIN_THREADS, min(PerformancePresets.MAX_THREADS, SaveThreads))
+        }
+
+        # TTA mode
+        TtaMode = click.confirm("Activer le mode TTA (meilleure qualité, plus lent)?",
+                               default=Config.get('tta_mode', False))
+        Config['tta_mode'] = TtaMode
+
+        # Sauvegarde
+        if click.confirm("\nSauvegarder cette configuration?", default=True):
+            self.PerformanceManager.Save(Config)
+            click.echo("✓ Configuration sauvegardée")
+        else:
+            click.echo("Configuration non sauvegardée")
+
+    def _ResetPerformanceConfig(self):
+        """Réinitialise la configuration des performances"""
+        if click.confirm("Réinitialiser aux valeurs par défaut?", default=False):
+            self.PerformanceManager.Reset()
+            click.echo("✓ Configuration réinitialisée")
 
     async def _MonitorStatus(self):
         """Monitore et affiche le statut du client"""
