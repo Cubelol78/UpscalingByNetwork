@@ -68,6 +68,7 @@ class ClientManager:
         self.Logger = GetModuleLogger("ClientManager")
         self.HeartbeatTask = None
         self.Running = False
+        self.OnClientDisconnected = None  # Callback async appelé lors d'une déconnexion
 
     async def HandleNewConnection(self, Reader: asyncio.StreamReader,
                                   Writer: asyncio.StreamWriter) -> Optional[str]:
@@ -364,6 +365,14 @@ class ClientManager:
 
         ClientInfo = self.Clients[ClientId]
 
+        # Appelle le callback de déconnexion AVANT de fermer
+        # Permet de réallouer les batches assignés au client
+        if self.OnClientDisconnected:
+            try:
+                await self.OnClientDisconnected(ClientId)
+            except Exception as e:
+                self.Logger.error(f"Erreur dans le callback de déconnexion: {e}")
+
         try:
             # Ferme la connexion
             ClientInfo.Writer.close()
@@ -498,3 +507,13 @@ class ClientManager:
         """
         self.ServerPassword = NewPassword
         self.Logger.info(f"Mot de passe serveur mis à jour (vide: {NewPassword == ''})")
+
+    def SetDisconnectCallback(self, Callback):
+        """
+        Définit un callback à appeler lors de la déconnexion d'un client.
+        Le callback sera appelé avant la fermeture de la connexion.
+
+        Args:
+            Callback: Fonction async prenant ClientId en paramètre
+        """
+        self.OnClientDisconnected = Callback

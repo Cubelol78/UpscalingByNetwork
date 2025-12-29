@@ -279,6 +279,11 @@ class HardwareDetector:
                 if NvidiaGpus:
                     Gpus = NvidiaGpus
 
+            # Enrichissement: Pour les GPU NVIDIA, nvidia-smi donne la vraie VRAM
+            # On corrige les valeurs estimées par les vraies valeurs
+            if Gpus:
+                Gpus = self._EnrichWithNvidiaSmiVram(Gpus)
+
             if Gpus:
                 for Gpu in Gpus:
                     VramStr = f" ({Gpu.get('vram_mb', '?')} MB)" if Gpu.get('vram_mb') else ""
@@ -449,6 +454,70 @@ class HardwareDetector:
             self.Logger.debug(f"Détection GPU via nvidia-smi échouée: {e}")
             return []
 
+    def _EnrichWithNvidiaSmiVram(self, Gpus: List[Dict]) -> List[Dict]:
+        """
+        Enrichit la liste des GPU avec les vraies valeurs VRAM de nvidia-smi.
+        Pour les GPU NVIDIA, nvidia-smi retourne la vraie VRAM au lieu d'une estimation.
+
+        Args:
+            Gpus: Liste des GPU détectés
+
+        Returns:
+            Liste enrichie avec les vraies valeurs VRAM pour les GPU NVIDIA
+        """
+        try:
+            Result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=index,name,memory.total", "--format=csv,noheader,nounits"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if Result.returncode != 0:
+                return Gpus
+
+            # Parse les données nvidia-smi
+            NvidiaData = {}
+            for Line in Result.stdout.strip().split("\n"):
+                Parts = Line.split(",")
+                if len(Parts) >= 3:
+                    GpuName = Parts[1].strip().lower()
+                    VramMb = int(Parts[2].strip())
+                    NvidiaData[GpuName] = VramMb
+
+            # Enrichit les GPU détectés
+            for Gpu in Gpus:
+                GpuNameLower = Gpu.get("name", "").lower()
+                # Cherche une correspondance dans les données nvidia-smi
+                for NvidiaName, VramMb in NvidiaData.items():
+                    # Correspondance partielle (le nom peut varier légèrement)
+                    if NvidiaName in GpuNameLower or GpuNameLower in NvidiaName:
+                        OldVram = Gpu.get("vram_mb", 0)
+                        if VramMb != OldVram:
+                            self.Logger.info(f"VRAM corrigée pour {Gpu['name']}: {OldVram} MB -> {VramMb} MB")
+                        Gpu["vram_mb"] = VramMb
+                        break
+                    # Correspondance par mots clés (RTX 4060 Ti, etc.)
+                    NvidiaWords = set(NvidiaName.replace("-", " ").split())
+                    GpuWords = set(GpuNameLower.replace("-", " ").split())
+                    CommonWords = NvidiaWords & GpuWords
+                    # Si on a au moins 3 mots en commun (ex: "geforce", "rtx", "4060")
+                    if len(CommonWords) >= 3:
+                        OldVram = Gpu.get("vram_mb", 0)
+                        if VramMb != OldVram:
+                            self.Logger.info(f"VRAM corrigée pour {Gpu['name']}: {OldVram} MB -> {VramMb} MB")
+                        Gpu["vram_mb"] = VramMb
+                        break
+
+            return Gpus
+
+        except FileNotFoundError:
+            # nvidia-smi non disponible (pas de driver NVIDIA ou GPU non-NVIDIA)
+            return Gpus
+        except Exception as e:
+            self.Logger.debug(f"Enrichissement VRAM via nvidia-smi échoué: {e}")
+            return Gpus
+
     def _EstimateVram(self, GpuName: str) -> int:
         """
         Estime la VRAM basée sur le nom du GPU
@@ -466,11 +535,14 @@ class HardwareDetector:
             return 24576
         elif "4080" in GpuNameLower:
             return 16384
-        elif "4070 ti" in GpuNameLower:
+        elif "4070 ti" in GpuNameLower or "4070ti" in GpuNameLower:
             return 12288
         elif "4070" in GpuNameLower:
             return 12288
-        elif "4060 ti" in GpuNameLower:
+        # RTX 4060 Ti 16GB (doit être vérifié AVANT la version standard)
+        elif ("4060 ti" in GpuNameLower or "4060ti" in GpuNameLower) and ("16g" in GpuNameLower or "16 g" in GpuNameLower):
+            return 16384
+        elif "4060 ti" in GpuNameLower or "4060ti" in GpuNameLower:
             return 8192
         elif "4060" in GpuNameLower:
             return 8192

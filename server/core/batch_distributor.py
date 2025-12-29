@@ -457,6 +457,43 @@ class BatchDistributor:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la gestion du timeout: {e}")
 
+    async def ReassignClientBatches(self, ClientId: str):
+        """
+        Réassigne les batches d'un client déconnecté.
+        Appelé quand un client est retiré (manuellement ou par déconnexion).
+
+        Args:
+            ClientId: ID du client déconnecté
+        """
+        try:
+            BatchesToReassign = []
+
+            # Trouve les batches actifs assignés à ce client
+            for BatchId, BatchInfo in list(self.ActiveBatches.items()):
+                if BatchInfo.get("client_id") == ClientId:
+                    BatchesToReassign.append(BatchId)
+
+            if not BatchesToReassign:
+                return
+
+            self.Logger.info(f"Réallocation de {len(BatchesToReassign)} batch(es) du client {ClientId}")
+
+            for BatchId in BatchesToReassign:
+                # Retire du tracking actif
+                del self.ActiveBatches[BatchId]
+
+                # Remet le batch en PENDING dans la base de données
+                BatchObj = self.Database.GetBatch(BatchId)
+                if BatchObj:
+                    BatchObj.Status = BatchStatus.PENDING
+                    BatchObj.AssignedClientId = None
+                    # Pas d'incrément de RetryCount car ce n'est pas une erreur
+                    self.Database.UpdateBatch(BatchObj)
+                    self.Logger.info(f"Batch {BatchId} remis en file d'attente")
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la réallocation des batches: {e}")
+
     def CancelVideoProcessing(self, VideoId: str):
         """
         Annule le traitement de tous les batches d'une vidéo

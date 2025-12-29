@@ -52,12 +52,17 @@ class UpscalingServer:
 
     def SetBatchDistributor(self, Distributor):
         """
-        Définit le distributeur de batches
+        Définit le distributeur de batches et configure les callbacks
 
         Args:
             Distributor: Instance de BatchDistributor
         """
         self.BatchDistributor = Distributor
+
+        # Enregistre le callback de réallocation des batches
+        # Quand un client est déconnecté, ses batches seront réalloués
+        if self.ClientManager and Distributor:
+            self.ClientManager.SetDisconnectCallback(Distributor.ReassignClientBatches)
 
     def Initialize(self) -> bool:
         """
