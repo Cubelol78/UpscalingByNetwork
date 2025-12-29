@@ -194,9 +194,18 @@ class EncryptionHandler:
             Message chiffré encodé en base64
         """
         PlainBytes = Message.encode('utf-8')
+        OriginalSize = len(PlainBytes)
 
         # Compresse avant chiffrement (si compression activée)
         CompressedBytes = self.CompressionHandler.Compress(PlainBytes)
+        CompressedSize = len(CompressedBytes)
+
+        # Log du ratio de compression pour les gros messages (> 10KB)
+        if self.CompressionHandler.IsEnabled() and OriginalSize > 10240:
+            Ratio = (1 - CompressedSize / OriginalSize) * 100
+            from shared.utils.logger import GetModuleLogger
+            Logger = GetModuleLogger("Compression")
+            Logger.info(f"Compression: {OriginalSize/1024:.1f}KB -> {CompressedSize/1024:.1f}KB ({Ratio:.1f}% réduit)")
 
         EncryptedBytes = self.Encrypt(CompressedBytes)
         return base64.b64encode(EncryptedBytes).decode('utf-8')
