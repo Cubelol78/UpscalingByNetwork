@@ -12,7 +12,7 @@ from client.core.connection import ConnectionManager
 from client.core.processor import LocalProcessor
 from shared.protocol.messages import (
     MessageFactory, BatchAssignment, HeartbeatPing, HeartbeatPong,
-    BatchResult
+    BatchResult, StatusUpdate
 )
 from shared.utils.logger import GetClientLogger
 from shared.utils.constants import ClientStatus, NetworkConfig
@@ -265,6 +265,10 @@ class UpscalingClient:
             self.CurrentBatch = None
             self.ProcessingTask = None
 
+            # Notifie le serveur immédiatement du changement de statut
+            # Permet au serveur d'envoyer le prochain batch AVANT de recevoir le résultat
+            await self._SendStatusUpdate()
+
     async def _SenderLoop(self):
         """
         Boucle d'envoi des résultats en arrière-plan.
@@ -301,6 +305,19 @@ class UpscalingClient:
                 break
             except Exception as e:
                 self.Logger.error(f"Erreur dans SenderLoop: {e}")
+
+    async def _SendStatusUpdate(self):
+        """
+        Envoie une notification de statut au serveur.
+        Permet au serveur de savoir immédiatement quand le client est disponible
+        pour un nouveau batch, sans attendre le prochain heartbeat.
+        """
+        try:
+            Update = StatusUpdate(Status=self.Status)
+            await self.ConnectionManager.SendMessage(Update.ToJson(), Encrypted=True)
+            self.Logger.debug(f"StatusUpdate envoyé: {self.Status}")
+        except Exception as e:
+            self.Logger.error(f"Erreur envoi StatusUpdate: {e}")
 
     def GetStatus(self) -> dict:
         """

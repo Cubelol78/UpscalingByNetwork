@@ -13,7 +13,7 @@ from server.core.network_manager import NetworkManager
 from server.database.db_manager import DatabaseManager
 from shared.utils.logger import GetServerLogger
 from shared.utils.constants import NetworkConfig, PathConfig, ClientStatus
-from shared.protocol.messages import MessageFactory, HeartbeatPong, BatchResult
+from shared.protocol.messages import MessageFactory, HeartbeatPong, BatchResult, StatusUpdate
 
 
 class UpscalingServer:
@@ -280,6 +280,13 @@ class UpscalingServer:
                     self.Logger.debug(f"Client {ClientId} passe en IDLE (via heartbeat)")
 
             self.Logger.debug(f"Heartbeat pong reçu du client {ClientId}")
+
+        # Mise à jour de statut (notification push du client)
+        elif isinstance(Message, StatusUpdate):
+            NewStatus = Message.Payload.get("status")
+            if NewStatus:
+                self.ClientManager.UpdateClientStatus(ClientId, NewStatus)
+                self.Logger.info(f"Client {ClientId} signale statut: {NewStatus}")
 
         # Résultat de batch
         elif isinstance(Message, BatchResult):
