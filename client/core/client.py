@@ -5,8 +5,11 @@ Connecte au serveur, reçoit et traite les batches d'images
 
 import asyncio
 import time
+import os
+import json
 from typing import Optional
 from asyncio import Queue
+from pathlib import Path
 
 from client.core.connection import ConnectionManager
 from client.core.processor import LocalProcessor
@@ -32,8 +35,14 @@ class UpscalingClient:
         self.ProcessingTask = None  # Tâche de traitement en arrière-plan
 
         # File d'attente pour les résultats à envoyer (découplage traitement/envoi)
+        # La queue contient des chemins de fichiers (pas les données en RAM)
         self.ResultQueue: Queue = None
         self.SenderTask = None  # Tâche d'envoi en arrière-plan
+
+        # Répertoire de cache pour les résultats en attente d'envoi
+        # Permet de ne pas remplir la RAM avec les images upscalées
+        self.ResultCacheDir = os.path.join(Path.home(), '.upscaling_client', 'result_cache')
+        os.makedirs(self.ResultCacheDir, exist_ok=True)
 
     async def Start(self, Host: str, Port: int, Password: str = "") -> bool:
         """
@@ -109,6 +118,9 @@ class UpscalingClient:
 
         # Nettoie les fichiers temporaires
         self.LocalProcessor.CleanupAll()
+
+        # Nettoie le cache des résultats en attente
+        self._CleanupResultCache()
 
         self.Logger.info("✓ Client arrêté")
 
@@ -219,7 +231,7 @@ class UpscalingClient:
     async def _ProcessBatchAsync(self, BatchId: str, Payload: dict):
         """
         Traite un batch de manière asynchrone dans un thread séparé.
-        Ajoute le résultat à la queue d'envoi au lieu d'envoyer directement.
+        Sauvegarde le résultat sur disque et ajoute le chemin à la queue.
         Permet de recevoir un nouveau batch pendant l'envoi du précédent.
 
         Args:
@@ -241,9 +253,13 @@ class UpscalingClient:
                     ErrorMessage="Erreur interne du processeur"
                 )
 
-            # Ajoute le résultat à la queue d'envoi (au lieu d'envoyer directement)
-            await self.ResultQueue.put(Result)
-            self.Logger.info(f"Batch {BatchId} traité, ajouté à la queue d'envoi")
+            # Sauvegarde le résultat sur disque (au lieu de garder en RAM)
+            CachePath = await self._SaveResultToCache(BatchId, Result)
+            if CachePath:
+                await self.ResultQueue.put(CachePath)
+                self.Logger.info(f"Batch {BatchId} traité, sauvegardé dans le cache")
+            else:
+                self.Logger.error(f"Échec de la sauvegarde du batch {BatchId}")
 
         except Exception as e:
             self.Logger.error(f"Erreur lors du traitement async du batch: {e}")
@@ -254,7 +270,9 @@ class UpscalingClient:
                     Success=False,
                     ErrorMessage=str(e)
                 )
-                await self.ResultQueue.put(ErrorResult)
+                CachePath = await self._SaveResultToCache(BatchId, ErrorResult)
+                if CachePath:
+                    await self.ResultQueue.put(CachePath)
             except Exception:
                 pass
 
@@ -272,13 +290,21 @@ class UpscalingClient:
     async def _SenderLoop(self):
         """
         Boucle d'envoi des résultats en arrière-plan.
-        Consomme la queue et envoie les résultats un par un (FIFO).
-        Permet au client de recevoir de nouveaux batches pendant l'envoi.
+        Consomme la queue (chemins de fichiers) et envoie les résultats un par un (FIFO).
+        Charge les données depuis le disque pour éviter de remplir la RAM.
         """
         while self.Running:
             try:
-                # Attend un résultat dans la queue (bloquant async)
-                Result = await self.ResultQueue.get()
+                # Attend un chemin de fichier dans la queue (bloquant async)
+                CachePath = await self.ResultQueue.get()
+
+                # Charge le résultat depuis le disque
+                Result = await self._LoadResultFromCache(CachePath)
+
+                if not Result:
+                    self.Logger.error(f"Impossible de charger le résultat depuis {CachePath}")
+                    self.ResultQueue.task_done()
+                    continue
 
                 BatchId = Result.Payload.get("batch_id", "unknown")
                 self.Logger.info(f"Envoi du résultat batch {BatchId}...")
@@ -294,8 +320,14 @@ class UpscalingClient:
                         self.Logger.info(f"✓ Résultat batch {BatchId} envoyé avec succès")
                     else:
                         self.Logger.warning(f"✗ Résultat batch {BatchId} (échec) envoyé")
+
+                    # Supprime le fichier cache après envoi réussi
+                    self._DeleteCacheFile(CachePath)
                 else:
                     self.Logger.error(f"Échec d'envoi du résultat batch {BatchId}")
+                    # En cas d'échec, on pourrait réessayer ou garder le fichier
+                    # Pour l'instant on le supprime quand même
+                    self._DeleteCacheFile(CachePath)
 
                 # Marque la tâche comme terminée dans la queue
                 self.ResultQueue.task_done()
@@ -318,6 +350,84 @@ class UpscalingClient:
             self.Logger.debug(f"StatusUpdate envoyé: {self.Status}")
         except Exception as e:
             self.Logger.error(f"Erreur envoi StatusUpdate: {e}")
+
+    async def _SaveResultToCache(self, BatchId: str, Result: BatchResult) -> Optional[str]:
+        """
+        Sauvegarde un BatchResult sur disque pour éviter de remplir la RAM.
+
+        Args:
+            BatchId: ID du batch
+            Result: Objet BatchResult à sauvegarder
+
+        Returns:
+            Chemin du fichier cache ou None si erreur
+        """
+        try:
+            # Génère un nom de fichier unique
+            CachePath = os.path.join(self.ResultCacheDir, f"{BatchId}.json")
+
+            # Sérialise et sauvegarde dans un thread séparé (IO bloquant)
+            def SaveToFile():
+                with open(CachePath, 'w', encoding='utf-8') as f:
+                    json.dump(Result.ToDict(), f)
+                return CachePath
+
+            return await asyncio.to_thread(SaveToFile)
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la sauvegarde du cache: {e}")
+            return None
+
+    async def _LoadResultFromCache(self, CachePath: str) -> Optional[BatchResult]:
+        """
+        Charge un BatchResult depuis le cache disque.
+
+        Args:
+            CachePath: Chemin du fichier cache
+
+        Returns:
+            Objet BatchResult ou None si erreur
+        """
+        try:
+            def LoadFromFile():
+                with open(CachePath, 'r', encoding='utf-8') as f:
+                    Data = json.load(f)
+                return BatchResult.FromDict(Data)
+
+            return await asyncio.to_thread(LoadFromFile)
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors du chargement du cache: {e}")
+            return None
+
+    def _DeleteCacheFile(self, CachePath: str):
+        """
+        Supprime un fichier cache après envoi.
+
+        Args:
+            CachePath: Chemin du fichier à supprimer
+        """
+        try:
+            if os.path.exists(CachePath):
+                os.remove(CachePath)
+                self.Logger.debug(f"Cache supprimé: {CachePath}")
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la suppression du cache: {e}")
+
+    def _CleanupResultCache(self):
+        """
+        Nettoie tous les fichiers dans le répertoire de cache.
+        Appelé lors de l'arrêt du client.
+        """
+        try:
+            if os.path.exists(self.ResultCacheDir):
+                for Filename in os.listdir(self.ResultCacheDir):
+                    FilePath = os.path.join(self.ResultCacheDir, Filename)
+                    if os.path.isfile(FilePath):
+                        os.remove(FilePath)
+                self.Logger.info("Cache des résultats nettoyé")
+        except Exception as e:
+            self.Logger.error(f"Erreur lors du nettoyage du cache: {e}")
 
     def GetStatus(self) -> dict:
         """
