@@ -47,19 +47,6 @@ class ServersTab(QWidget):
         Header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
 
         self.ServersTable.setAlternatingRowColors(True)
-        self.ServersTable.setStyleSheet("""
-            QTableWidget {
-                gridline-color: #d0d0d0;
-                background-color: white;
-            }
-            QTableWidget::item:selected {
-                background-color: #2196F3;
-                color: white;
-            }
-            QTableWidget::item:alternate {
-                background-color: #f5f5f5;
-            }
-        """)
 
         Layout.addWidget(self.ServersTable)
 
@@ -73,19 +60,8 @@ class ServersTab(QWidget):
         ActionLayout = QHBoxLayout(ActionWidget)
 
         self.AddServerButton = QPushButton("➕ Ajouter un serveur")
-        self.AddServerButton.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                padding: 8px 16px;
-                border: none;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-        """)
+        self.AddServerButton.setObjectName("AddServerButton")
+        self.AddServerButton.setProperty("class", "primary")
         self.AddServerButton.clicked.connect(self.AddServer)
         ActionLayout.addWidget(self.AddServerButton)
 
@@ -134,7 +110,7 @@ class ServersTab(QWidget):
 
                 # Bouton Supprimer
                 DeleteBtn = QPushButton("Supprimer")
-                DeleteBtn.setStyleSheet("background-color: #f44336; color: white;")
+                DeleteBtn.setProperty("class", "danger")
                 DeleteBtn.clicked.connect(
                     lambda checked, name=Server['name']: self.DeleteServer(name)
                 )

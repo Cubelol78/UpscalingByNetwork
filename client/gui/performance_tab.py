@@ -16,6 +16,7 @@ from PyQt5.QtGui import QFont
 from client.utils.hardware_detector import HardwareDetector
 from client.utils.performance_config import PerformanceConfigManager, PerformancePresets
 from shared.utils.constants import CompressionConfig
+from shared.gui.theme_manager import ThemeManager
 
 
 class HardwareDetectionThread(QThread):
@@ -62,6 +63,11 @@ class PerformanceTab(QWidget):
         self.SavedIndicatorTimer.setSingleShot(True)
         self.SavedIndicatorTimer.timeout.connect(self.HideSavedIndicator)
 
+        # Timer pour debounce de l'auto-save du thème
+        self.ThemeAutoSaveTimer = QTimer()
+        self.ThemeAutoSaveTimer.setSingleShot(True)
+        self.ThemeAutoSaveTimer.timeout.connect(self.AutoSaveTheme)
+
         self.SetupUI()
         self.LoadConfig()
 
@@ -86,10 +92,14 @@ class PerformanceTab(QWidget):
 
         # Indicateur de sauvegarde (discret)
         self.SavedIndicator = QLabel("")
-        self.SavedIndicator.setStyleSheet("color: #4CAF50; font-style: italic;")
+        self.SavedIndicator.setProperty("class", "hint-success")
         HeaderLayout.addWidget(self.SavedIndicator)
 
         Layout.addLayout(HeaderLayout)
+
+        # Section Apparence (thème)
+        AppearanceGroup = self.CreateAppearanceGroup()
+        Layout.addWidget(AppearanceGroup)
 
         # Section Matériel détecté
         HardwareGroup = self.CreateHardwareGroup()
@@ -116,7 +126,7 @@ class PerformanceTab(QWidget):
 
         # Indicateur de chargement
         self.HardwareLoadingLabel = QLabel("Detection en cours...")
-        self.HardwareLoadingLabel.setStyleSheet("color: #FF9800; font-style: italic;")
+        self.HardwareLoadingLabel.setProperty("class", "hint-warning")
         Layout.addWidget(self.HardwareLoadingLabel)
 
         # Informations CPU/RAM
@@ -151,6 +161,66 @@ class PerformanceTab(QWidget):
 
         return Group
 
+    def CreateAppearanceGroup(self) -> QGroupBox:
+        """Crée le groupe Apparence (thème)"""
+        Group = QGroupBox("Apparence")
+
+        FormLayout = QFormLayout(Group)
+
+        # Sélecteur de thème
+        ThemeLayout = QHBoxLayout()
+        self.ThemeComboBox = QComboBox()
+        self.ThemeComboBox.addItem("Auto (Systeme)", ThemeManager.THEME_AUTO)
+        self.ThemeComboBox.addItem("Clair", ThemeManager.THEME_LIGHT)
+        self.ThemeComboBox.addItem("Sombre", ThemeManager.THEME_DARK)
+        self.ThemeComboBox.currentIndexChanged.connect(self.OnThemeChanged)
+        ThemeLayout.addWidget(self.ThemeComboBox)
+
+        ThemeNote = QLabel("(applique immediatement)")
+        ThemeNote.setProperty("class", "hint")
+        ThemeLayout.addWidget(ThemeNote)
+        ThemeLayout.addStretch()
+
+        FormLayout.addRow("Theme:", ThemeLayout)
+
+        return Group
+
+    def OnThemeChanged(self, Index: int):
+        """Appelé quand le thème change - applique immédiatement et déclenche l'auto-save"""
+        if self.IsLoading:
+            return
+
+        # Récupère la valeur du thème sélectionné
+        ThemeValue = self.ThemeComboBox.currentData()
+
+        # Applique immédiatement le thème
+        if hasattr(self.ParentWindow, 'ThemeManager') and self.ParentWindow.ThemeManager:
+            self.ParentWindow.ThemeManager.SetUserPreference(ThemeValue)
+
+        # Redémarre le timer de debounce pour la sauvegarde
+        self.ThemeAutoSaveTimer.stop()
+        self.ThemeAutoSaveTimer.start(self.AUTOSAVE_DELAY_MS)
+
+    def AutoSaveTheme(self):
+        """Sauvegarde automatique du thème dans le fichier de configuration"""
+        try:
+            ThemeValue = self.ThemeComboBox.currentData()
+
+            # Charge la config actuelle, met à jour le thème, et sauvegarde
+            Config = self.ConfigManager.Load()
+            Config['theme'] = ThemeValue
+            self.ConfigManager.Save(Config)
+
+            # Affiche l'indicateur "Sauvegardé"
+            self.ShowSavedIndicator()
+
+            if hasattr(self.ParentWindow, 'Logger'):
+                self.ParentWindow.Logger.info(f"Theme mis a jour: {ThemeValue}")
+
+        except Exception as e:
+            if hasattr(self.ParentWindow, 'Logger'):
+                self.ParentWindow.Logger.error(f"Erreur lors de l'auto-save du theme: {e}")
+
     def CreateGpuConfigGroup(self) -> QGroupBox:
         """Crée le groupe de configuration GPU"""
         Group = QGroupBox("Configuration GPU")
@@ -176,7 +246,7 @@ class PerformanceTab(QWidget):
         TileSizeLayout.addWidget(self.TileSizeSpinBox)
 
         self.TileSizeRecommendLabel = QLabel("")
-        self.TileSizeRecommendLabel.setStyleSheet("color: gray; font-style: italic;")
+        self.TileSizeRecommendLabel.setProperty("class", "hint")
         TileSizeLayout.addWidget(self.TileSizeRecommendLabel)
         TileSizeLayout.addStretch()
 
@@ -228,7 +298,7 @@ class PerformanceTab(QWidget):
         CompressionLayout.addWidget(self.CompressionLevelSpinBox)
 
         CompressionNote = QLabel("(1=rapide, 10=max)")
-        CompressionNote.setStyleSheet("color: gray; font-style: italic; font-size: 10px;")
+        CompressionNote.setProperty("class", "hint")
         CompressionLayout.addWidget(CompressionNote)
         CompressionLayout.addStretch()
 
@@ -238,7 +308,7 @@ class PerformanceTab(QWidget):
 
         # Note TTA
         TtaNote = QLabel("Note: Le mode TTA est configure cote serveur")
-        TtaNote.setStyleSheet("color: gray; font-size: 10px;")
+        TtaNote.setProperty("class", "hint")
         Layout.addRow("", TtaNote)
 
         return Group
@@ -250,19 +320,8 @@ class PerformanceTab(QWidget):
 
         # Auto-configurer
         self.AutoConfigButton = QPushButton("Configuration automatique")
-        self.AutoConfigButton.setStyleSheet("""
-            QPushButton {
-                background-color: #2196F3;
-                color: white;
-                padding: 8px 16px;
-                border: none;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #1976D2;
-            }
-        """)
+        self.AutoConfigButton.setObjectName("AutoConfigButton")
+        self.AutoConfigButton.setProperty("class", "info")
         self.AutoConfigButton.clicked.connect(self.AutoConfigure)
         ActionLayout.addWidget(self.AutoConfigButton)
 
@@ -315,7 +374,9 @@ class PerformanceTab(QWidget):
     def OnHardwareError(self, ErrorMsg: str):
         """Appelé si une erreur survient pendant la détection"""
         self.HardwareLoadingLabel.setText(f"Erreur: {ErrorMsg}")
-        self.HardwareLoadingLabel.setStyleSheet("color: #F44336; font-style: italic;")
+        self.HardwareLoadingLabel.setProperty("class", "hint-danger")
+        self.HardwareLoadingLabel.style().unpolish(self.HardwareLoadingLabel)
+        self.HardwareLoadingLabel.style().polish(self.HardwareLoadingLabel)
 
     def UpdateHardwareDisplay(self):
         """Met à jour l'affichage du matériel détecté"""
@@ -429,6 +490,12 @@ class PerformanceTab(QWidget):
             # Compression level
             CompressionLevel = Config.get("compression_level", CompressionConfig.LEVEL_DEFAULT)
             self.CompressionLevelSpinBox.setValue(CompressionLevel)
+
+            # Thème
+            ThemeValue = Config.get("theme", ThemeManager.THEME_AUTO)
+            ThemeIndex = self.ThemeComboBox.findData(ThemeValue)
+            if ThemeIndex >= 0:
+                self.ThemeComboBox.setCurrentIndex(ThemeIndex)
 
         finally:
             # Réactive l'auto-save

@@ -12,10 +12,12 @@ Comportements:
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QGroupBox, QFormLayout,
-    QSpinBox, QFileDialog, QMessageBox
+    QSpinBox, QFileDialog, QMessageBox, QComboBox
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
+
+from shared.gui.theme_manager import ThemeManager
 
 
 class ConfigTab(QWidget):
@@ -56,6 +58,11 @@ class ConfigTab(QWidget):
         self.SavedIndicatorTimer.setSingleShot(True)
         self.SavedIndicatorTimer.timeout.connect(self.HideSavedIndicator)
 
+        # Timer pour debounce de l'auto-save du thème
+        self.ThemeAutoSaveTimer = QTimer()
+        self.ThemeAutoSaveTimer.setSingleShot(True)
+        self.ThemeAutoSaveTimer.timeout.connect(self.AutoSaveTheme)
+
         self.SetupUI()
         self.LoadConfiguration()
 
@@ -77,10 +84,14 @@ class ConfigTab(QWidget):
 
         # Indicateur de sauvegarde (discret)
         self.SavedIndicator = QLabel("")
-        self.SavedIndicator.setStyleSheet("color: #4CAF50; font-style: italic;")
+        self.SavedIndicator.setProperty("class", "hint-success")
         HeaderLayout.addWidget(self.SavedIndicator)
 
         Layout.addLayout(HeaderLayout)
+
+        # Groupe Apparence (thème)
+        AppearanceGroup = self.CreateAppearanceGroup()
+        Layout.addWidget(AppearanceGroup)
 
         # Groupe adresse réseau (IP/Port) - orange, appliqué via bouton
         NetworkAddressGroup = self.CreateNetworkAddressGroup()
@@ -95,21 +106,7 @@ class ConfigTab(QWidget):
     def CreateNetworkAddressGroup(self) -> QGroupBox:
         """Crée le groupe d'adresse réseau (IP/Port) - appliqué via bouton"""
         Group = QGroupBox("Adresse reseau (cliquer Appliquer pour changer)")
-        Group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 2px solid #FF9800;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-                color: #FF9800;
-            }
-        """)
+        Group.setObjectName("NetworkGroup")  # Permet de cibler avec CSS si nécessaire
 
         MainLayout = QVBoxLayout()
         FormLayout = QFormLayout()
@@ -132,25 +129,14 @@ class ConfigTab(QWidget):
         ButtonLayout = QHBoxLayout()
 
         NoteLabel = QLabel("Les clients connectes ne seront pas affectes")
-        NoteLabel.setStyleSheet("color: #FF9800; font-style: italic; font-size: 10px;")
+        NoteLabel.setProperty("class", "hint-warning")
         ButtonLayout.addWidget(NoteLabel)
 
         ButtonLayout.addStretch()
 
         self.ApplyNetworkButton = QPushButton("Appliquer les changements reseau")
-        self.ApplyNetworkButton.setStyleSheet("""
-            QPushButton {
-                background-color: #FF9800;
-                color: white;
-                padding: 6px 12px;
-                border: none;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #F57C00;
-            }
-        """)
+        self.ApplyNetworkButton.setObjectName("ApplyNetworkButton")
+        self.ApplyNetworkButton.setProperty("class", "warning")  # Style warning (orange)
         self.ApplyNetworkButton.clicked.connect(self.ApplyNetworkChanges)
         ButtonLayout.addWidget(self.ApplyNetworkButton)
 
@@ -158,24 +144,68 @@ class ConfigTab(QWidget):
         Group.setLayout(MainLayout)
         return Group
 
+    def CreateAppearanceGroup(self) -> QGroupBox:
+        """Crée le groupe Apparence (thème)"""
+        Group = QGroupBox("Apparence")
+
+        FormLayout = QFormLayout()
+
+        # Sélecteur de thème
+        ThemeLayout = QHBoxLayout()
+        self.ThemeComboBox = QComboBox()
+        self.ThemeComboBox.addItem("Auto (Systeme)", ThemeManager.THEME_AUTO)
+        self.ThemeComboBox.addItem("Clair", ThemeManager.THEME_LIGHT)
+        self.ThemeComboBox.addItem("Sombre", ThemeManager.THEME_DARK)
+        self.ThemeComboBox.currentIndexChanged.connect(self.OnThemeChanged)
+        ThemeLayout.addWidget(self.ThemeComboBox)
+
+        ThemeNote = QLabel("(applique immediatement)")
+        ThemeNote.setProperty("class", "hint")
+        ThemeLayout.addWidget(ThemeNote)
+        ThemeLayout.addStretch()
+
+        FormLayout.addRow("Theme:", ThemeLayout)
+
+        Group.setLayout(FormLayout)
+        return Group
+
+    def OnThemeChanged(self, Index: int):
+        """Appelé quand le thème change - applique immédiatement et déclenche l'auto-save"""
+        if self.IsLoading:
+            return
+
+        # Récupère la valeur du thème sélectionné
+        ThemeValue = self.ThemeComboBox.currentData()
+
+        # Applique immédiatement le thème
+        if hasattr(self.ParentWindow, 'ThemeManager') and self.ParentWindow.ThemeManager:
+            self.ParentWindow.ThemeManager.SetUserPreference(ThemeValue)
+
+        # Redémarre le timer de debounce pour la sauvegarde
+        self.ThemeAutoSaveTimer.stop()
+        self.ThemeAutoSaveTimer.start(self.AUTOSAVE_DELAY_MS)
+
+    def AutoSaveTheme(self):
+        """Sauvegarde automatique du thème"""
+        try:
+            Database = self.ParentWindow.GetDatabase()
+            ThemeValue = self.ThemeComboBox.currentData()
+
+            if Database:
+                Database.SetParameter('theme', ThemeValue, "Theme de l'interface (auto, light, dark)")
+
+            # Affiche l'indicateur "Sauvegardé"
+            self.ShowSavedIndicator()
+
+            self.ParentWindow.Logger.info(f"Theme mis a jour: {ThemeValue}")
+
+        except Exception as e:
+            self.ParentWindow.Logger.error(f"Erreur lors de l'auto-save du theme: {e}")
+
     def CreateDynamicGroup(self) -> QGroupBox:
         """Crée le groupe des paramètres dynamiques (appliqués immédiatement)"""
         Group = QGroupBox("Parametres dynamiques (appliques immediatement)")
-        Group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 2px solid #4CAF50;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-                color: #4CAF50;
-            }
-        """)
+        Group.setObjectName("DynamicGroup")
 
         FormLayout = QFormLayout()
 
@@ -188,7 +218,7 @@ class ConfigTab(QWidget):
         PasswordLayout.addWidget(self.PasswordInput)
 
         PasswordNote = QLabel("(sauvegarde automatique)")
-        PasswordNote.setStyleSheet("color: gray; font-style: italic; font-size: 10px;")
+        PasswordNote.setProperty("class", "hint")
         PasswordLayout.addWidget(PasswordNote)
         PasswordLayout.addStretch()
 
@@ -205,7 +235,7 @@ class ConfigTab(QWidget):
         BatchSizeLayout.addWidget(self.BatchSizeInput)
 
         BatchSizeNote = QLabel("(sauvegarde automatique)")
-        BatchSizeNote.setStyleSheet("color: gray; font-style: italic; font-size: 10px;")
+        BatchSizeNote.setProperty("class", "hint")
         BatchSizeLayout.addWidget(BatchSizeNote)
         BatchSizeLayout.addStretch()
 
@@ -222,7 +252,7 @@ class ConfigTab(QWidget):
         CompressionLayout.addWidget(self.CompressionLevelInput)
 
         CompressionNote = QLabel("(1=rapide, 10=max)")
-        CompressionNote.setStyleSheet("color: gray; font-style: italic; font-size: 10px;")
+        CompressionNote.setProperty("class", "hint")
         CompressionLayout.addWidget(CompressionNote)
         CompressionLayout.addStretch()
 
@@ -240,7 +270,7 @@ class ConfigTab(QWidget):
         WorkDirLayout.addWidget(BrowseButton)
 
         WorkDirNote = QLabel("(necessite redemarrage)")
-        WorkDirNote.setStyleSheet("color: #FF9800; font-style: italic; font-size: 10px;")
+        WorkDirNote.setProperty("class", "hint-warning")
         WorkDirLayout.addWidget(WorkDirNote)
 
         FormLayout.addRow("Repertoire de travail:", WorkDirLayout)
@@ -279,6 +309,12 @@ class ConfigTab(QWidget):
                 self.BatchSizeInput.setValue(Config.get('batch_size', 100))
                 self.CompressionLevelInput.setValue(Config.get('compression_level', 5))
 
+                # Charger le thème
+                ThemeValue = Database.GetParameter('theme', ThemeManager.THEME_AUTO)
+                ThemeIndex = self.ThemeComboBox.findData(ThemeValue)
+                if ThemeIndex >= 0:
+                    self.ThemeComboBox.setCurrentIndex(ThemeIndex)
+
                 self.ParentWindow.Logger.info("Configuration chargee depuis la base de donnees")
             else:
                 # Valeurs par défaut si pas de DB
@@ -288,6 +324,7 @@ class ConfigTab(QWidget):
                 self.WorkDirInput.setText('./work')
                 self.BatchSizeInput.setValue(100)
                 self.CompressionLevelInput.setValue(5)
+                self.ThemeComboBox.setCurrentIndex(0)  # Auto par défaut
 
         except Exception as e:
             self.ParentWindow.Logger.error(f"Erreur lors du chargement de la configuration: {e}")

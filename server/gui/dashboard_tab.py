@@ -43,20 +43,6 @@ class DashboardTab(QWidget):
     def CreateStatsGroup(self) -> QGroupBox:
         """Crée le groupe de statistiques générales"""
         Group = QGroupBox("Statistiques en temps réel")
-        Group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 2px solid #cccccc;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
 
         GridLayout = QGridLayout()
 
@@ -82,27 +68,13 @@ class DashboardTab(QWidget):
     def CreateActivityGroup(self) -> QGroupBox:
         """Crée le groupe d'activité récente"""
         Group = QGroupBox("Activité récente")
-        Group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 2px solid #cccccc;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
 
         Layout = QVBoxLayout()
 
         self.ActivityLabel = QLabel("Aucune activité récente")
         self.ActivityLabel.setAlignment(Qt.AlignTop)
         self.ActivityLabel.setWordWrap(True)
-        self.ActivityLabel.setStyleSheet("padding: 10px;")
+        self.ActivityLabel.setContentsMargins(10, 10, 10, 10)
 
         Layout.addWidget(self.ActivityLabel)
         Group.setLayout(Layout)
@@ -122,12 +94,12 @@ class DashboardTab(QWidget):
         ValueFont.setBold(True)
         ValueLabel.setFont(ValueFont)
         ValueLabel.setAlignment(Qt.AlignCenter)
-        ValueLabel.setStyleSheet("color: #2196F3;")
+        ValueLabel.setProperty("class", "stat-value")
 
         # Description
         DescLabel = QLabel(Description)
         DescLabel.setAlignment(Qt.AlignCenter)
-        DescLabel.setStyleSheet("color: #666666;")
+        DescLabel.setProperty("class", "stat-desc")
 
         Layout.addWidget(ValueLabel)
         Layout.addWidget(DescLabel)

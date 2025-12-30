@@ -26,6 +26,7 @@ from shared.utils.logger import GetServerLogger
 from shared.utils.firewall import (
     IsWindows, RequestFirewallPermission, ShowFirewallDialog, RunAsAdmin
 )
+from shared.gui.theme_manager import ThemeManager, ApplyTheme
 
 
 class ServerWindow(QMainWindow):
@@ -102,50 +103,23 @@ class ServerWindow(QMainWindow):
 
         # Label statut
         self.StatusLabel = QLabel("● Arrêté")
-        self.StatusLabel.setStyleSheet("color: red; font-weight: bold; font-size: 14px;")
+        self.StatusLabel.setObjectName("StatusLabel")
+        self.StatusLabel.setProperty("status", "stopped")
         ControlLayout.addWidget(self.StatusLabel)
 
         ControlLayout.addStretch()
 
         # Bouton Start
         self.StartButton = QPushButton("▶ Démarrer le serveur")
-        self.StartButton.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                padding: 8px 16px;
-                border: none;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-            QPushButton:disabled {
-                background-color: #cccccc;
-            }
-        """)
+        self.StartButton.setObjectName("StartButton")
+        self.StartButton.setProperty("class", "primary")
         self.StartButton.clicked.connect(self.StartServer)
         ControlLayout.addWidget(self.StartButton)
 
         # Bouton Stop
         self.StopButton = QPushButton("⏹ Arrêter le serveur")
-        self.StopButton.setStyleSheet("""
-            QPushButton {
-                background-color: #f44336;
-                color: white;
-                padding: 8px 16px;
-                border: none;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #da190b;
-            }
-            QPushButton:disabled {
-                background-color: #cccccc;
-            }
-        """)
+        self.StopButton.setObjectName("StopButton")
+        self.StopButton.setProperty("class", "danger")
         self.StopButton.clicked.connect(self.StopServer)
         self.StopButton.setEnabled(False)
         ControlLayout.addWidget(self.StopButton)
@@ -222,7 +196,9 @@ class ServerWindow(QMainWindow):
 
             # Mettre à jour l'interface
             self.StatusLabel.setText("● En cours")
-            self.StatusLabel.setStyleSheet("color: green; font-weight: bold; font-size: 14px;")
+            self.StatusLabel.setProperty("status", "running")
+            self.StatusLabel.style().unpolish(self.StatusLabel)
+            self.StatusLabel.style().polish(self.StatusLabel)
             self.StartButton.setEnabled(False)
             self.StopButton.setEnabled(True)
             self.UpdateStatusBar(f"Serveur démarré sur {GuiConfig['ip']}:{GuiConfig['port']}")
@@ -256,7 +232,9 @@ class ServerWindow(QMainWindow):
 
             # Mettre à jour l'interface
             self.StatusLabel.setText("● Arrêté")
-            self.StatusLabel.setStyleSheet("color: red; font-weight: bold; font-size: 14px;")
+            self.StatusLabel.setProperty("status", "stopped")
+            self.StatusLabel.style().unpolish(self.StatusLabel)
+            self.StatusLabel.style().polish(self.StatusLabel)
             self.StartButton.setEnabled(True)
             self.StopButton.setEnabled(False)
             self.UpdateStatusBar("Serveur arrêté")
@@ -329,7 +307,19 @@ def RunServerGUI():
             print(f"Avertissement pare-feu: {Message}")
 
     App = QApplication(sys.argv)
+
+    # Charger la préférence de thème depuis la base de données
+    try:
+        TempDb = DatabaseManager()
+        ThemePreference = TempDb.GetParameter("theme", ThemeManager.THEME_AUTO)
+    except Exception:
+        ThemePreference = ThemeManager.THEME_AUTO
+
+    # Appliquer le thème adaptatif
+    ThemeMgr = ApplyTheme(App, ThemePreference)
+
     Window = ServerWindow()
+    Window.ThemeManager = ThemeMgr  # Stocker la référence pour l'onglet Config
     Window.show()
     sys.exit(App.exec_())
 

@@ -45,20 +45,6 @@ class MonitoringTab(QWidget):
     def CreateStatsGroup(self) -> QGroupBox:
         """Crée le groupe de statistiques"""
         Group = QGroupBox("Statistiques")
-        Group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 2px solid #cccccc;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
 
         GridLayout = QGridLayout()
 
@@ -80,27 +66,13 @@ class MonitoringTab(QWidget):
     def CreateActivityGroup(self) -> QGroupBox:
         """Crée le groupe d'activité en cours"""
         Group = QGroupBox("Activité en cours")
-        Group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 2px solid #cccccc;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
 
         Layout = QVBoxLayout()
 
         self.ActivityLabel = QLabel("Aucune activité")
         self.ActivityLabel.setAlignment(Qt.AlignCenter)
         self.ActivityLabel.setWordWrap(True)
-        self.ActivityLabel.setStyleSheet("padding: 20px; font-size: 14px;")
+        self.ActivityLabel.setContentsMargins(20, 20, 20, 20)
 
         Layout.addWidget(self.ActivityLabel)
         Group.setLayout(Layout)
@@ -110,20 +82,6 @@ class MonitoringTab(QWidget):
     def CreateLogsGroup(self) -> QGroupBox:
         """Crée le groupe des logs récents"""
         Group = QGroupBox("Logs récents")
-        Group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 2px solid #cccccc;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
 
         Layout = QVBoxLayout()
 
@@ -150,12 +108,12 @@ class MonitoringTab(QWidget):
         ValueFont.setBold(True)
         ValueLabel.setFont(ValueFont)
         ValueLabel.setAlignment(Qt.AlignCenter)
-        ValueLabel.setStyleSheet("color: #2196F3;")
+        ValueLabel.setProperty("class", "stat-value")
 
         # Description
         DescLabel = QLabel(Description)
         DescLabel.setAlignment(Qt.AlignCenter)
-        DescLabel.setStyleSheet("color: #666666;")
+        DescLabel.setProperty("class", "stat-desc")
 
         Layout.addWidget(ValueLabel)
         Layout.addWidget(DescLabel)

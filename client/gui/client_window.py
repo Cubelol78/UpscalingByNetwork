@@ -24,6 +24,8 @@ from shared.utils.logger import GetClientLogger
 from shared.utils.firewall import (
     IsWindows, RequestFirewallPermission, ShowFirewallDialog, RunAsAdmin
 )
+from shared.gui.theme_manager import ThemeManager, ApplyTheme
+from client.utils.performance_config import PerformanceConfigManager
 
 
 class HardwareDetectionThread(QThread):
@@ -266,7 +268,20 @@ def RunClientGUI():
             print(f"Avertissement pare-feu: {Message}")
 
     App = QApplication(sys.argv)
+
+    # Charger la préférence de thème depuis la configuration
+    try:
+        ConfigMgr = PerformanceConfigManager()
+        Config = ConfigMgr.Load()
+        ThemePreference = Config.get("theme", ThemeManager.THEME_AUTO)
+    except Exception:
+        ThemePreference = ThemeManager.THEME_AUTO
+
+    # Appliquer le thème adaptatif
+    ThemeMgr = ApplyTheme(App, ThemePreference)
+
     Window = ClientWindow()
+    Window.ThemeManager = ThemeMgr  # Stocker la référence pour l'onglet Performance
     Window.show()
     sys.exit(App.exec_())
 

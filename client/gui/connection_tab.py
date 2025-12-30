@@ -33,7 +33,8 @@ class ConnectionTab(QWidget):
 
         # Statut de connexion
         self.StatusLabel = QLabel("● Déconnecté")
-        self.StatusLabel.setStyleSheet("color: red; font-weight: bold; font-size: 14px;")
+        self.StatusLabel.setObjectName("StatusLabel")
+        self.StatusLabel.setProperty("status", "stopped")
         Layout.addWidget(self.StatusLabel)
 
         # Groupe de connexion
@@ -49,20 +50,6 @@ class ConnectionTab(QWidget):
     def CreateConnectionGroup(self) -> QGroupBox:
         """Crée le groupe de configuration de connexion"""
         Group = QGroupBox("Informations du serveur")
-        Group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 2px solid #cccccc;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
 
         FormLayout = QFormLayout()
 
@@ -102,45 +89,15 @@ class ConnectionTab(QWidget):
 
         # Bouton Connecter
         self.ConnectButton = QPushButton("🔌 Se connecter")
-        self.ConnectButton.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                padding: 10px 20px;
-                border: none;
-                border-radius: 4px;
-                font-weight: bold;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-            QPushButton:disabled {
-                background-color: #cccccc;
-            }
-        """)
+        self.ConnectButton.setObjectName("ConnectButton")
+        self.ConnectButton.setProperty("class", "primary")
         self.ConnectButton.clicked.connect(self.Connect)
         ActionLayout.addWidget(self.ConnectButton)
 
         # Bouton Déconnecter
         self.DisconnectButton = QPushButton("✖ Se déconnecter")
-        self.DisconnectButton.setStyleSheet("""
-            QPushButton {
-                background-color: #f44336;
-                color: white;
-                padding: 10px 20px;
-                border: none;
-                border-radius: 4px;
-                font-weight: bold;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #da190b;
-            }
-            QPushButton:disabled {
-                background-color: #cccccc;
-            }
-        """)
+        self.DisconnectButton.setObjectName("DisconnectButton")
+        self.DisconnectButton.setProperty("class", "danger")
         self.DisconnectButton.clicked.connect(self.Disconnect)
         self.DisconnectButton.setEnabled(False)
         ActionLayout.addWidget(self.DisconnectButton)
@@ -183,7 +140,9 @@ class ConnectionTab(QWidget):
 
             if Success:
                 self.StatusLabel.setText("● Connecté")
-                self.StatusLabel.setStyleSheet("color: green; font-weight: bold; font-size: 14px;")
+                self.StatusLabel.setProperty("status", "running")
+                self.StatusLabel.style().unpolish(self.StatusLabel)
+                self.StatusLabel.style().polish(self.StatusLabel)
                 self.ConnectButton.setEnabled(False)
                 self.DisconnectButton.setEnabled(True)
 
@@ -215,7 +174,9 @@ class ConnectionTab(QWidget):
         """Se déconnecte du serveur"""
         self.ParentWindow.DisconnectFromServer()
         self.StatusLabel.setText("● Déconnecté")
-        self.StatusLabel.setStyleSheet("color: red; font-weight: bold; font-size: 14px;")
+        self.StatusLabel.setProperty("status", "stopped")
+        self.StatusLabel.style().unpolish(self.StatusLabel)
+        self.StatusLabel.style().polish(self.StatusLabel)
         self.ConnectButton.setEnabled(True)
         self.DisconnectButton.setEnabled(False)
 
@@ -254,11 +215,15 @@ class ConnectionTab(QWidget):
         # Mettre à jour le statut
         if self.ParentWindow.IsClientRunning():
             self.StatusLabel.setText("● Connecté")
-            self.StatusLabel.setStyleSheet("color: green; font-weight: bold; font-size: 14px;")
+            self.StatusLabel.setProperty("status", "running")
+            self.StatusLabel.style().unpolish(self.StatusLabel)
+            self.StatusLabel.style().polish(self.StatusLabel)
             self.ConnectButton.setEnabled(False)
             self.DisconnectButton.setEnabled(True)
         else:
             self.StatusLabel.setText("● Déconnecté")
-            self.StatusLabel.setStyleSheet("color: red; font-weight: bold; font-size: 14px;")
+            self.StatusLabel.setProperty("status", "stopped")
+            self.StatusLabel.style().unpolish(self.StatusLabel)
+            self.StatusLabel.style().polish(self.StatusLabel)
             self.ConnectButton.setEnabled(True)
             self.DisconnectButton.setEnabled(False)

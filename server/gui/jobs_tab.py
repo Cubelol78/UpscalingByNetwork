@@ -52,19 +52,6 @@ class JobsTab(QWidget):
         Header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
 
         self.JobsTable.setAlternatingRowColors(True)
-        self.JobsTable.setStyleSheet("""
-            QTableWidget {
-                gridline-color: #d0d0d0;
-                background-color: white;
-            }
-            QTableWidget::item:selected {
-                background-color: #2196F3;
-                color: white;
-            }
-            QTableWidget::item:alternate {
-                background-color: #f5f5f5;
-            }
-        """)
 
         # Connecter le signal de sélection
         self.JobsTable.itemSelectionChanged.connect(self.OnSelectionChanged)
@@ -81,39 +68,14 @@ class JobsTab(QWidget):
         ActionLayout = QHBoxLayout(ActionWidget)
 
         self.AddVideoButton = QPushButton("➕ Ajouter une vidéo")
-        self.AddVideoButton.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                padding: 8px 16px;
-                border: none;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-        """)
+        self.AddVideoButton.setObjectName("AddVideoButton")
+        self.AddVideoButton.setProperty("class", "primary")
         self.AddVideoButton.clicked.connect(self.AddVideo)
         ActionLayout.addWidget(self.AddVideoButton)
 
         self.CancelVideoButton = QPushButton("❌ Annuler la vidéo")
-        self.CancelVideoButton.setStyleSheet("""
-            QPushButton {
-                background-color: #F44336;
-                color: white;
-                padding: 8px 16px;
-                border: none;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #d32f2f;
-            }
-            QPushButton:disabled {
-                background-color: #cccccc;
-            }
-        """)
+        self.CancelVideoButton.setObjectName("CancelVideoButton")
+        self.CancelVideoButton.setProperty("class", "danger")
         self.CancelVideoButton.clicked.connect(self.CancelSelectedVideo)
         self.CancelVideoButton.setEnabled(False)
         ActionLayout.addWidget(self.CancelVideoButton)

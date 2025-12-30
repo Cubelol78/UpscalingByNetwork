@@ -48,19 +48,6 @@ class ClientsTab(QWidget):
         Header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
 
         self.ClientsTable.setAlternatingRowColors(True)
-        self.ClientsTable.setStyleSheet("""
-            QTableWidget {
-                gridline-color: #d0d0d0;
-                background-color: white;
-            }
-            QTableWidget::item:selected {
-                background-color: #2196F3;
-                color: white;
-            }
-            QTableWidget::item:alternate {
-                background-color: #f5f5f5;
-            }
-        """)
 
         Layout.addWidget(self.ClientsTable)
 
