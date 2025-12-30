@@ -154,13 +154,18 @@ class ConnectionManager:
             )
 
             if not ResponseData:
+                self.Logger.error("Aucune réponse reçue lors du handshake")
                 return False
 
             # Parse la réponse
-            Response = MessageFactory.CreateFromJson(ResponseData)
+            try:
+                Response = MessageFactory.CreateFromJson(ResponseData)
+            except Exception as e:
+                self.Logger.error(f"Impossible de parser la réponse du handshake: {e}")
+                return False
 
             if not isinstance(Response, HandshakeResponse):
-                self.Logger.error("Réponse de handshake invalide")
+                self.Logger.error(f"Type de réponse inattendu: {type(Response).__name__} (attendu: HandshakeResponse)")
                 return False
 
             if not Response.IsSuccess():
@@ -223,6 +228,7 @@ class ConnectionManager:
             )
 
             if not EncryptedResponse:
+                self.Logger.error("Aucune réponse reçue lors de l'authentification")
                 return False
 
             # Déchiffre
@@ -232,10 +238,14 @@ class ConnectionManager:
                 return False
 
             # Parse
-            Response = MessageFactory.CreateFromJson(DecryptedResponse)
+            try:
+                Response = MessageFactory.CreateFromJson(DecryptedResponse)
+            except Exception as e:
+                self.Logger.error(f"Impossible de parser la réponse d'authentification: {e}")
+                return False
 
             if not isinstance(Response, AuthResponse):
-                self.Logger.error("Réponse d'authentification invalide")
+                self.Logger.error(f"Type de réponse inattendu: {type(Response).__name__} (attendu: AuthResponse)")
                 return False
 
             if not Response.IsSuccess():
@@ -314,6 +324,11 @@ class ConnectionManager:
     async def _SendMessage(self, Message: str) -> bool:
         """Envoie un message (interne)"""
         try:
+            # Validation du message
+            if not Message:
+                self.Logger.error("Tentative d'envoi d'un message vide ou None")
+                return False
+
             # Format: taille (4 bytes) + message
             MessageBytes = Message.encode('utf-8')
             MessageSize = len(MessageBytes)
@@ -324,6 +339,10 @@ class ConnectionManager:
 
             return True
 
+        except (ConnectionResetError, BrokenPipeError) as e:
+            self.Logger.error(f"Connexion perdue lors de l'envoi: {e}")
+            self.Connected = False
+            return False
         except Exception as e:
             self.Logger.error(f"Erreur d'envoi: {e}")
             return False
@@ -335,9 +354,16 @@ class ConnectionManager:
             SizeBytes = await self.Reader.readexactly(4)
             MessageSize = int.from_bytes(SizeBytes, byteorder='big')
 
-            # Limite de taille
+            # Validation de la taille
+            if MessageSize <= 0:
+                self.Logger.error(f"Taille de message invalide: {MessageSize}")
+                self.Connected = False
+                return None
+
+            # Limite de taille maximale
             if MessageSize > NetworkConfig.MAX_MESSAGE_SIZE:
-                self.Logger.error(f"Message trop grand: {MessageSize} bytes")
+                self.Logger.error(f"Message trop grand: {MessageSize} bytes (max: {NetworkConfig.MAX_MESSAGE_SIZE})")
+                self.Connected = False
                 return None
 
             # Lit le message
@@ -345,11 +371,20 @@ class ConnectionManager:
             return MessageBytes.decode('utf-8')
 
         except asyncio.IncompleteReadError:
-            self.Logger.warning("Connexion fermée par le serveur")
+            self.Logger.warning("Connexion fermée par le serveur (lecture incomplète)")
+            self.Connected = False
+            return None
+        except (ConnectionResetError, BrokenPipeError) as e:
+            self.Logger.error(f"Connexion perdue lors de la réception: {e}")
+            self.Connected = False
+            return None
+        except UnicodeDecodeError as e:
+            self.Logger.error(f"Données corrompues (encodage UTF-8 invalide): {e}")
             self.Connected = False
             return None
         except Exception as e:
             self.Logger.error(f"Erreur de réception: {e}")
+            self.Connected = False
             return None
 
     async def Disconnect(self):

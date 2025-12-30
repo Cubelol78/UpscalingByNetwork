@@ -336,8 +336,30 @@ class BatchDistributor:
             UpscaledImages = ResultMessage.GetUpscaledImages()
 
             if not UpscaledImages:
-                self.Logger.error("Aucune image upscalée reçue")
+                self.Logger.error(f"Batch {BatchId}: Aucune image upscalée reçue")
+                # Marque comme échec et retry
+                BatchObj.Status = BatchStatus.FAILED
+                BatchObj.ErrorMessage = "Aucune image reçue du client"
+                BatchObj.RetryCount += 1
+                self.Database.UpdateBatch(BatchObj)
+
+                if BatchObj.RetryCount < Limits.MAX_RETRY_ATTEMPTS:
+                    self.Logger.info(f"Retry du batch {BatchId} ({BatchObj.RetryCount}/{Limits.MAX_RETRY_ATTEMPTS})")
+                    BatchObj.Status = BatchStatus.PENDING
+                    BatchObj.AssignedClientId = None
+                    self.Database.UpdateBatch(BatchObj)
+
+                # Retire du tracking et remet le client en idle
+                if BatchId in self.ActiveBatches:
+                    del self.ActiveBatches[BatchId]
+                self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.IDLE)
                 return False
+
+            # Calcul du nombre d'images attendues
+            ExpectedCount = BatchObj.EndFrame - BatchObj.StartFrame + 1
+            ReceivedCount = len(UpscaledImages)
+
+            self.Logger.info(f"Batch {BatchId}: {ReceivedCount}/{ExpectedCount} images reçues")
 
             # Sauvegarde les images upscalées
             VideoId = BatchObj.VideoId
@@ -345,6 +367,7 @@ class BatchDistributor:
             os.makedirs(UpscaledDir, exist_ok=True)
 
             SavedCount = 0
+            FailedImages = []
             for ImageData in UpscaledImages:
                 try:
                     FrameNumber = ImageData.get("number")
@@ -362,12 +385,40 @@ class BatchDistributor:
                     SavedCount += 1
 
                 except Exception as e:
-                    self.Logger.error(f"Erreur lors de la sauvegarde d'une image: {e}")
+                    FailedImages.append(ImageData.get("number", "?"))
+                    self.Logger.error(f"Erreur lors de la sauvegarde de l'image {FrameNumber}: {e}")
                     continue
 
-            self.Logger.info(f"✓ {SavedCount} images upscalées sauvegardées")
+            # Vérification du résultat de sauvegarde
+            if SavedCount == 0:
+                # Échec total - aucune image sauvegardée
+                self.Logger.error(f"Batch {BatchId}: Échec total - 0/{ReceivedCount} images sauvegardées")
+                BatchObj.Status = BatchStatus.FAILED
+                BatchObj.ErrorMessage = "Aucune image sauvegardée sur le serveur"
+                BatchObj.RetryCount += 1
+                self.Database.UpdateBatch(BatchObj)
 
-            # Marque le batch comme complété
+                if BatchObj.RetryCount < Limits.MAX_RETRY_ATTEMPTS:
+                    self.Logger.info(f"Retry du batch {BatchId} ({BatchObj.RetryCount}/{Limits.MAX_RETRY_ATTEMPTS})")
+                    BatchObj.Status = BatchStatus.PENDING
+                    BatchObj.AssignedClientId = None
+                    self.Database.UpdateBatch(BatchObj)
+
+                if BatchId in self.ActiveBatches:
+                    del self.ActiveBatches[BatchId]
+                self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.IDLE)
+                return False
+
+            elif SavedCount < ExpectedCount:
+                # Succès partiel - certaines images manquantes
+                self.Logger.warning(
+                    f"Batch {BatchId}: Succès partiel - {SavedCount}/{ExpectedCount} images sauvegardées. "
+                    f"Images manquantes: {FailedImages}"
+                )
+
+            self.Logger.info(f"✓ {SavedCount}/{ExpectedCount} images upscalées sauvegardées")
+
+            # Marque le batch comme complété (même si partiel, on continue)
             BatchObj.Status = BatchStatus.COMPLETED
             BatchObj.CompletedAt = datetime.now()
             self.Database.UpdateBatch(BatchObj)

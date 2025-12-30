@@ -15,6 +15,12 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 
 from shared.protocol.compression import CompressionHandler
+from shared.utils.logger import GetModuleLogger
+
+
+class EncryptionError(Exception):
+    """Exception pour les erreurs de chiffrement"""
+    pass
 
 # Paramètres DH pré-générés (RFC 3526 - Group 14, 2048 bits)
 # Ceci évite les problèmes de permission sur Windows et accélère l'initialisation
@@ -42,6 +48,7 @@ class EncryptionHandler:
 
     def __init__(self):
         """Initialise le gestionnaire de chiffrement"""
+        self.Logger = GetModuleLogger("EncryptionHandler")
         self.PrivateKey = None
         self.PublicKey = None
         self.SharedKey = None
@@ -90,6 +97,20 @@ class EncryptionHandler:
             True si succès, False sinon
         """
         try:
+            # Validation de la clé publique
+            if not PeerPublicKeyBytes:
+                self.Logger.error("Clé publique vide ou None")
+                return False
+
+            if len(PeerPublicKeyBytes) < 100:
+                self.Logger.error(f"Clé publique trop courte: {len(PeerPublicKeyBytes)} bytes")
+                return False
+
+            # Vérifie que c'est bien un format PEM
+            if not PeerPublicKeyBytes.startswith(b'-----BEGIN PUBLIC KEY-----'):
+                self.Logger.error("Format de clé publique invalide (attendu: PEM)")
+                return False
+
             # Désérialise la clé publique du pair
             PeerPublicKey = serialization.load_pem_public_key(
                 PeerPublicKeyBytes,
@@ -110,8 +131,14 @@ class EncryptionHandler:
 
             return True
 
+        except ValueError as e:
+            self.Logger.error(f"Format de clé publique invalide: {e}")
+            return False
+        except TypeError as e:
+            self.Logger.error(f"Type de clé publique invalide: {e}")
+            return False
         except Exception as e:
-            print(f"Erreur lors du calcul de la clé partagée: {e}")
+            self.Logger.error(f"Erreur lors du calcul de la clé partagée: {e}")
             return False
 
     def Encrypt(self, PlainText: bytes) -> bytes:
@@ -180,7 +207,7 @@ class EncryptionHandler:
             return PlainText
 
         except Exception as e:
-            print(f"Erreur lors du déchiffrement: {e}")
+            self.Logger.error(f"Erreur lors du déchiffrement: {e}")
             return None
 
     def EncryptMessage(self, Message: str) -> str:
@@ -233,7 +260,7 @@ class EncryptionHandler:
             return PlainBytes.decode('utf-8')
 
         except Exception as e:
-            print(f"Erreur lors du déchiffrement du message: {e}")
+            self.Logger.error(f"Erreur lors du déchiffrement du message: {e}")
             return None
 
     def SetCompression(self, Algorithm: str):
@@ -281,6 +308,9 @@ class EncryptionHandler:
 
 class PasswordHasher:
     """Gestionnaire de hashage de mots de passe"""
+
+    # Logger pour les méthodes statiques
+    _Logger = GetModuleLogger("PasswordHasher")
 
     @staticmethod
     def HashPassword(Password: str, Salt: Optional[bytes] = None) -> Tuple[str, str]:
@@ -339,7 +369,7 @@ class PasswordHasher:
             return hmac.compare_digest(ComputedHash, ExpectedHash)
 
         except Exception as e:
-            print(f"Erreur lors de la vérification du mot de passe: {e}")
+            PasswordHasher._Logger.error(f"Erreur lors de la vérification du mot de passe: {e}")
             return False
 
 

@@ -10,6 +10,11 @@ from shared.utils.logger import GetModuleLogger
 from shared.utils.constants import CompressionConfig
 
 
+class CompressionError(Exception):
+    """Exception pour les erreurs de compression/décompression"""
+    pass
+
+
 class CompressionHandler:
     """Gestionnaire de compression avec support zstd et fallback zlib"""
 
@@ -102,6 +107,9 @@ class CompressionHandler:
 
         Returns:
             Données compressées (ou originales si compression désactivée)
+
+        Raises:
+            CompressionError: Si la compression échoue
         """
         if self.Algorithm == self.ALGO_NONE:
             return Data
@@ -114,8 +122,8 @@ class CompressionHandler:
             else:
                 return Data
         except Exception as e:
-            self.Logger.error(f"Erreur de compression: {e}")
-            return Data
+            self.Logger.error(f"Erreur de compression ({self.Algorithm}): {e}")
+            raise CompressionError(f"Échec compression {self.Algorithm}: {e}")
 
     def Decompress(self, Data: bytes) -> bytes:
         """
@@ -126,6 +134,9 @@ class CompressionHandler:
 
         Returns:
             Données décompressées
+
+        Raises:
+            CompressionError: Si la décompression échoue
         """
         if self.Algorithm == self.ALGO_NONE:
             return Data
@@ -138,8 +149,8 @@ class CompressionHandler:
             else:
                 return Data
         except Exception as e:
-            self.Logger.error(f"Erreur de décompression: {e}")
-            raise
+            self.Logger.error(f"Erreur de décompression ({self.Algorithm}): {e}")
+            raise CompressionError(f"Échec décompression {self.Algorithm}: {e}")
 
     def _CompressZstd(self, Data: bytes) -> bytes:
         """Compresse avec zstd"""

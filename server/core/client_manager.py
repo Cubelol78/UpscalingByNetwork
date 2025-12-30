@@ -153,13 +153,18 @@ class ClientManager:
             )
 
             if not RequestData:
+                self.Logger.error("Aucune donnée reçue lors du handshake")
                 return False
 
             # Parse la demande
-            Request = MessageFactory.CreateFromJson(RequestData)
+            try:
+                Request = MessageFactory.CreateFromJson(RequestData)
+            except Exception as e:
+                self.Logger.error(f"Impossible de parser la demande de handshake: {e}")
+                return False
 
             if not isinstance(Request, HandshakeRequest):
-                self.Logger.error("Message de handshake invalide")
+                self.Logger.error(f"Type de message inattendu: {type(Request).__name__} (attendu: HandshakeRequest)")
                 return False
 
             # Récupère la clé publique du client
@@ -171,6 +176,12 @@ class ClientManager:
             # Calcule la clé partagée
             if not ClientInfo.EncryptionHandler.ComputeSharedKey(ClientPublicKey):
                 self.Logger.error("Échec du calcul de la clé partagée")
+                # Envoie un message d'erreur au client avant de fermer
+                ErrorResponse = HandshakeResponse(
+                    Success=False,
+                    Message="Échec du calcul de la clé partagée - clé publique invalide"
+                )
+                await self._SendMessage(ClientInfo, ErrorResponse.ToJson())
                 return False
 
             # Négociation de la compression
@@ -223,6 +234,7 @@ class ClientManager:
             )
 
             if not RequestData:
+                self.Logger.error("Aucune donnée reçue lors de l'authentification")
                 return False
 
             # Déchiffre et parse la demande
@@ -231,10 +243,14 @@ class ClientManager:
                 self.Logger.error("Impossible de déchiffrer la demande d'authentification")
                 return False
 
-            Request = MessageFactory.CreateFromJson(DecryptedData)
+            try:
+                Request = MessageFactory.CreateFromJson(DecryptedData)
+            except Exception as e:
+                self.Logger.error(f"Impossible de parser la demande d'authentification: {e}")
+                return False
 
             if not isinstance(Request, AuthRequest):
-                self.Logger.error("Message d'authentification invalide")
+                self.Logger.error(f"Type de message inattendu: {type(Request).__name__} (attendu: AuthRequest)")
                 return False
 
             # Vérifie le mot de passe
@@ -336,6 +352,11 @@ class ClientManager:
     async def _SendMessage(self, ClientInfo: ClientInfo, Message: str) -> bool:
         """Envoie un message (interne)"""
         try:
+            # Validation du message
+            if not Message:
+                self.Logger.error(f"Tentative d'envoi d'un message vide au client {ClientInfo.ClientId}")
+                return False
+
             # Format: taille (4 bytes) + message
             MessageBytes = Message.encode('utf-8')
             MessageSize = len(MessageBytes)
@@ -346,8 +367,11 @@ class ClientManager:
 
             return True
 
+        except (ConnectionResetError, BrokenPipeError) as e:
+            self.Logger.error(f"Connexion perdue avec {ClientInfo.ClientId} lors de l'envoi: {e}")
+            return False
         except Exception as e:
-            self.Logger.error(f"Erreur d'envoi: {e}")
+            self.Logger.error(f"Erreur d'envoi au client {ClientInfo.ClientId}: {e}")
             return False
 
     async def _ReceiveMessage(self, ClientInfo: ClientInfo) -> Optional[str]:
@@ -357,9 +381,14 @@ class ClientManager:
             SizeBytes = await ClientInfo.Reader.readexactly(4)
             MessageSize = int.from_bytes(SizeBytes, byteorder='big')
 
-            # Limite de taille
+            # Validation de la taille
+            if MessageSize <= 0:
+                self.Logger.error(f"Taille de message invalide du client {ClientInfo.ClientId}: {MessageSize}")
+                return None
+
+            # Limite de taille maximale
             if MessageSize > NetworkConfig.MAX_MESSAGE_SIZE:
-                self.Logger.error(f"Message trop grand: {MessageSize} bytes")
+                self.Logger.error(f"Message trop grand du client {ClientInfo.ClientId}: {MessageSize} bytes (max: {NetworkConfig.MAX_MESSAGE_SIZE})")
                 return None
 
             # Lit le message
@@ -367,10 +396,16 @@ class ClientManager:
             return MessageBytes.decode('utf-8')
 
         except asyncio.IncompleteReadError:
-            self.Logger.warning("Connexion fermée par le client")
+            self.Logger.warning(f"Connexion fermée par le client {ClientInfo.ClientId} (lecture incomplète)")
+            return None
+        except (ConnectionResetError, BrokenPipeError) as e:
+            self.Logger.error(f"Connexion perdue avec {ClientInfo.ClientId} lors de la réception: {e}")
+            return None
+        except UnicodeDecodeError as e:
+            self.Logger.error(f"Données corrompues du client {ClientInfo.ClientId} (encodage UTF-8 invalide): {e}")
             return None
         except Exception as e:
-            self.Logger.error(f"Erreur de réception: {e}")
+            self.Logger.error(f"Erreur de réception du client {ClientInfo.ClientId}: {e}")
             return None
 
     async def RemoveClient(self, ClientId: str):

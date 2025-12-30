@@ -24,6 +24,10 @@ from shared.utils.constants import ClientStatus, NetworkConfig
 class UpscalingClient:
     """Client d'upscaling distribué"""
 
+    # Configuration du retry avec backoff
+    RETRY_MAX_ATTEMPTS = 3
+    RETRY_BASE_DELAY = 0.5  # 0.5s, 1s, 1.5s
+
     def __init__(self):
         """Initialise le client"""
         self.Logger = GetClientLogger()
@@ -192,13 +196,56 @@ class UpscalingClient:
                 ClientStatus=self.Status
             )
 
-            # Envoie au serveur
-            await self.ConnectionManager.SendMessage(Pong.ToJson(), Encrypted=True)
+            # Envoie au serveur avec retry
+            async def SendPong():
+                return await self.ConnectionManager.SendMessage(Pong.ToJson(), Encrypted=True)
 
-            self.Logger.debug("Heartbeat pong envoyé")
+            Success = await self._RetryWithBackoff(SendPong)
+            if Success:
+                self.Logger.debug("Heartbeat pong envoyé")
+            else:
+                self.Logger.warning("Échec de l'envoi du heartbeat pong après plusieurs tentatives")
 
         except Exception as e:
             self.Logger.error(f"Erreur lors de la réponse heartbeat: {e}")
+
+    async def _RetryWithBackoff(self, AsyncFunc, MaxRetries: int = None,
+                                BaseDelay: float = None) -> bool:
+        """
+        Helper pour exécuter une fonction async avec retry et backoff exponentiel.
+
+        Args:
+            AsyncFunc: Fonction async à exécuter (doit retourner bool)
+            MaxRetries: Nombre maximum de tentatives (défaut: RETRY_MAX_ATTEMPTS)
+            BaseDelay: Délai de base en secondes (défaut: RETRY_BASE_DELAY)
+
+        Returns:
+            True si succès, False après tous les échecs
+        """
+        if MaxRetries is None:
+            MaxRetries = self.RETRY_MAX_ATTEMPTS
+        if BaseDelay is None:
+            BaseDelay = self.RETRY_BASE_DELAY
+
+        for Attempt in range(MaxRetries):
+            try:
+                Success = await AsyncFunc()
+                if Success:
+                    return True
+
+                # Backoff exponentiel: 0.5s, 1s, 1.5s
+                if Attempt < MaxRetries - 1:
+                    Delay = BaseDelay * (Attempt + 1)
+                    self.Logger.debug(f"Tentative {Attempt + 1}/{MaxRetries} échouée, retry dans {Delay}s")
+                    await asyncio.sleep(Delay)
+
+            except Exception as e:
+                self.Logger.error(f"Tentative {Attempt + 1}/{MaxRetries} - Exception: {e}")
+                if Attempt < MaxRetries - 1:
+                    Delay = BaseDelay * (Attempt + 1)
+                    await asyncio.sleep(Delay)
+
+        return False
 
     async def _HandleBatchAssignment(self, Assignment: BatchAssignment):
         """
@@ -292,6 +339,7 @@ class UpscalingClient:
         Boucle d'envoi des résultats en arrière-plan.
         Consomme la queue (chemins de fichiers) et envoie les résultats un par un (FIFO).
         Charge les données depuis le disque pour éviter de remplir la RAM.
+        Utilise retry avec backoff en cas d'échec.
         """
         while self.Running:
             try:
@@ -309,11 +357,14 @@ class UpscalingClient:
                 BatchId = Result.Payload.get("batch_id", "unknown")
                 self.Logger.info(f"Envoi du résultat batch {BatchId}...")
 
-                # Envoie le résultat au serveur
-                Success = await self.ConnectionManager.SendMessage(
-                    Result.ToJson(),
-                    Encrypted=True
-                )
+                # Envoie le résultat au serveur avec retry
+                async def SendResult():
+                    return await self.ConnectionManager.SendMessage(
+                        Result.ToJson(),
+                        Encrypted=True
+                    )
+
+                Success = await self._RetryWithBackoff(SendResult)
 
                 if Success:
                     if Result.IsSuccess():
@@ -324,10 +375,12 @@ class UpscalingClient:
                     # Supprime le fichier cache après envoi réussi
                     self._DeleteCacheFile(CachePath)
                 else:
-                    self.Logger.error(f"Échec d'envoi du résultat batch {BatchId}")
-                    # En cas d'échec, on pourrait réessayer ou garder le fichier
-                    # Pour l'instant on le supprime quand même
-                    self._DeleteCacheFile(CachePath)
+                    # Échec définitif après tous les retries - conserver le cache pour diagnostic
+                    self.Logger.error(
+                        f"Échec définitif envoi batch {BatchId} après {self.RETRY_MAX_ATTEMPTS} tentatives. "
+                        f"Cache conservé: {CachePath}"
+                    )
+                    # Ne pas supprimer le fichier cache pour permettre un diagnostic ou retry manuel
 
                 # Marque la tâche comme terminée dans la queue
                 self.ResultQueue.task_done()
@@ -338,18 +391,30 @@ class UpscalingClient:
             except Exception as e:
                 self.Logger.error(f"Erreur dans SenderLoop: {e}")
 
-    async def _SendStatusUpdate(self):
+    async def _SendStatusUpdate(self) -> bool:
         """
-        Envoie une notification de statut au serveur.
+        Envoie une notification de statut au serveur avec retry.
         Permet au serveur de savoir immédiatement quand le client est disponible
         pour un nouveau batch, sans attendre le prochain heartbeat.
+
+        Returns:
+            True si envoi réussi, False sinon
         """
         try:
-            Update = StatusUpdate(Status=self.Status)
-            await self.ConnectionManager.SendMessage(Update.ToJson(), Encrypted=True)
-            self.Logger.debug(f"StatusUpdate envoyé: {self.Status}")
+            async def DoSend():
+                Update = StatusUpdate(Status=self.Status)
+                return await self.ConnectionManager.SendMessage(Update.ToJson(), Encrypted=True)
+
+            Success = await self._RetryWithBackoff(DoSend)
+            if Success:
+                self.Logger.debug(f"StatusUpdate envoyé: {self.Status}")
+            else:
+                self.Logger.warning(f"Impossible d'envoyer StatusUpdate ({self.Status}) après {self.RETRY_MAX_ATTEMPTS} tentatives")
+            return Success
+
         except Exception as e:
             self.Logger.error(f"Erreur envoi StatusUpdate: {e}")
+            return False
 
     async def _SaveResultToCache(self, BatchId: str, Result: BatchResult) -> Optional[str]:
         """
