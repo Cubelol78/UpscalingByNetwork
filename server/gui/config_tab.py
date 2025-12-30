@@ -46,6 +46,11 @@ class ConfigTab(QWidget):
         self.WorkDirAutoSaveTimer.setSingleShot(True)
         self.WorkDirAutoSaveTimer.timeout.connect(self.AutoSaveWorkDirectory)
 
+        # Timer pour debounce de l'auto-save du compression_level
+        self.CompressionLevelAutoSaveTimer = QTimer()
+        self.CompressionLevelAutoSaveTimer.setSingleShot(True)
+        self.CompressionLevelAutoSaveTimer.timeout.connect(self.AutoSaveCompressionLevel)
+
         # Timer pour masquer l'indicateur "Sauvegardé"
         self.SavedIndicatorTimer = QTimer()
         self.SavedIndicatorTimer.setSingleShot(True)
@@ -206,6 +211,23 @@ class ConfigTab(QWidget):
 
         FormLayout.addRow("Taille des batchs:", BatchSizeLayout)
 
+        # Niveau de compression réseau (dynamique, auto-save)
+        CompressionLayout = QHBoxLayout()
+        self.CompressionLevelInput = QSpinBox()
+        self.CompressionLevelInput.setMinimum(1)
+        self.CompressionLevelInput.setMaximum(10)
+        self.CompressionLevelInput.setValue(5)
+        self.CompressionLevelInput.setToolTip("1 = compression rapide, 10 = compression maximale")
+        self.CompressionLevelInput.valueChanged.connect(self.OnCompressionLevelChanged)
+        CompressionLayout.addWidget(self.CompressionLevelInput)
+
+        CompressionNote = QLabel("(1=rapide, 10=max)")
+        CompressionNote.setStyleSheet("color: gray; font-style: italic; font-size: 10px;")
+        CompressionLayout.addWidget(CompressionNote)
+        CompressionLayout.addStretch()
+
+        FormLayout.addRow("Compression reseau:", CompressionLayout)
+
         # Répertoire de travail (auto-save, mais nécessite redémarrage)
         WorkDirLayout = QHBoxLayout()
         self.WorkDirInput = QLineEdit()
@@ -255,6 +277,7 @@ class ConfigTab(QWidget):
                 self.PasswordInput.setText(Config.get('password', ''))
                 self.WorkDirInput.setText(Config.get('work_directory', './work'))
                 self.BatchSizeInput.setValue(Config.get('batch_size', 100))
+                self.CompressionLevelInput.setValue(Config.get('compression_level', 5))
 
                 self.ParentWindow.Logger.info("Configuration chargee depuis la base de donnees")
             else:
@@ -264,6 +287,7 @@ class ConfigTab(QWidget):
                 self.PasswordInput.setText('')
                 self.WorkDirInput.setText('./work')
                 self.BatchSizeInput.setValue(100)
+                self.CompressionLevelInput.setValue(5)
 
         except Exception as e:
             self.ParentWindow.Logger.error(f"Erreur lors du chargement de la configuration: {e}")
@@ -407,6 +431,55 @@ class ConfigTab(QWidget):
         except Exception as e:
             self.ParentWindow.Logger.error(f"Erreur lors de l'auto-save du work_directory: {e}")
 
+    def OnCompressionLevelChanged(self, Value: int):
+        """Appelé quand le niveau de compression change - déclenche l'auto-save"""
+        if self.IsLoading:
+            return
+
+        # Redémarre le timer de debounce
+        self.CompressionLevelAutoSaveTimer.stop()
+        self.CompressionLevelAutoSaveTimer.start(self.AUTOSAVE_DELAY_MS)
+
+    def AutoSaveCompressionLevel(self):
+        """Sauvegarde automatique du niveau de compression et propagation au serveur actif"""
+        try:
+            Database = self.ParentWindow.GetDatabase()
+            NewLevel = self.CompressionLevelInput.value()
+
+            if Database:
+                # Sauvegarder dans la base de données
+                Database.SetParameter('compression_level', str(NewLevel), "Niveau de compression réseau (1=rapide, 10=max)")
+
+            # Propager au serveur actif s'il existe
+            self.PropagateCompressionLevelToServer(NewLevel)
+
+            # Affiche l'indicateur "Sauvegardé"
+            self.ShowSavedIndicator()
+
+            self.ParentWindow.Logger.info(f"Niveau de compression mis a jour: {NewLevel}/10")
+
+        except Exception as e:
+            self.ParentWindow.Logger.error(f"Erreur lors de l'auto-save du niveau de compression: {e}")
+
+    def PropagateCompressionLevelToServer(self, CompressionLevel: int):
+        """Propage le niveau de compression au serveur actif"""
+        try:
+            # Vérifie si le serveur est actif
+            if hasattr(self.ParentWindow, 'Server') and self.ParentWindow.Server:
+                Server = self.ParentWindow.Server
+
+                # Met à jour dans le serveur
+                Server.CompressionLevel = CompressionLevel
+
+                # Met à jour dans le ClientManager
+                if hasattr(Server, 'ClientManager') and Server.ClientManager:
+                    Server.ClientManager.UpdateCompressionLevel(CompressionLevel)
+
+                self.ParentWindow.Logger.info(f"Niveau de compression propag au serveur actif: {CompressionLevel}/10")
+
+        except Exception as e:
+            self.ParentWindow.Logger.error(f"Erreur lors de la propagation du niveau de compression: {e}")
+
     def ApplyNetworkChanges(self):
         """
         Applique les changements d'adresse réseau (IP/Port) au serveur actif.
@@ -502,11 +575,13 @@ class ConfigTab(QWidget):
         self.BatchSizeAutoSaveTimer.stop()
         self.PasswordAutoSaveTimer.stop()
         self.WorkDirAutoSaveTimer.stop()
+        self.CompressionLevelAutoSaveTimer.stop()
 
         # Force l'exécution des auto-saves
         self.AutoSaveBatchSize()
         self.AutoSavePassword()
         self.AutoSaveWorkDirectory()
+        self.AutoSaveCompressionLevel()
 
         self.ParentWindow.Logger.info("Configuration sauvegardee (force)")
 
@@ -517,5 +592,6 @@ class ConfigTab(QWidget):
             'port': self.PortInput.value(),
             'password': self.PasswordInput.text(),
             'work_directory': self.WorkDirInput.text() or './work',
-            'batch_size': self.BatchSizeInput.value()
+            'batch_size': self.BatchSizeInput.value(),
+            'compression_level': self.CompressionLevelInput.value()
         }

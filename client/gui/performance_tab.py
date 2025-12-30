@@ -15,6 +15,7 @@ from PyQt5.QtGui import QFont
 
 from client.utils.hardware_detector import HardwareDetector
 from client.utils.performance_config import PerformanceConfigManager, PerformancePresets
+from shared.utils.constants import CompressionConfig
 
 
 class HardwareDetectionThread(QThread):
@@ -217,6 +218,24 @@ class PerformanceTab(QWidget):
         ThreadsWidget.setLayout(ThreadsLayout)
         Layout.addRow("Threads:", ThreadsWidget)
 
+        # Niveau de compression réseau
+        CompressionLayout = QHBoxLayout()
+        self.CompressionLevelSpinBox = QSpinBox()
+        self.CompressionLevelSpinBox.setRange(CompressionConfig.LEVEL_MIN, CompressionConfig.LEVEL_MAX)
+        self.CompressionLevelSpinBox.setValue(CompressionConfig.LEVEL_DEFAULT)
+        self.CompressionLevelSpinBox.setToolTip("1 = compression rapide, 10 = compression maximale")
+        self.CompressionLevelSpinBox.valueChanged.connect(self.OnConfigChanged)
+        CompressionLayout.addWidget(self.CompressionLevelSpinBox)
+
+        CompressionNote = QLabel("(1=rapide, 10=max)")
+        CompressionNote.setStyleSheet("color: gray; font-style: italic; font-size: 10px;")
+        CompressionLayout.addWidget(CompressionNote)
+        CompressionLayout.addStretch()
+
+        CompressionWidget = QWidget()
+        CompressionWidget.setLayout(CompressionLayout)
+        Layout.addRow("Compression reseau:", CompressionWidget)
+
         # Note TTA
         TtaNote = QLabel("Note: Le mode TTA est configure cote serveur")
         TtaNote.setStyleSheet("color: gray; font-size: 10px;")
@@ -407,6 +426,10 @@ class PerformanceTab(QWidget):
             self.ProcessThreadsSpinBox.setValue(Threads.get("process", 2))
             self.SaveThreadsSpinBox.setValue(Threads.get("save", 2))
 
+            # Compression level
+            CompressionLevel = Config.get("compression_level", CompressionConfig.LEVEL_DEFAULT)
+            self.CompressionLevelSpinBox.setValue(CompressionLevel)
+
         finally:
             # Réactive l'auto-save
             self.IsLoading = False
@@ -471,7 +494,8 @@ class PerformanceTab(QWidget):
                 "save": self.SaveThreadsSpinBox.value()
             },
             "output_format": "png",
-            "first_run": False
+            "first_run": False,
+            "compression_level": self.CompressionLevelSpinBox.value()
         }
 
     def AutoConfigureQuiet(self):

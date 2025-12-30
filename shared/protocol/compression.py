@@ -7,6 +7,7 @@ import zlib
 from typing import List, Optional
 
 from shared.utils.logger import GetModuleLogger
+from shared.utils.constants import CompressionConfig
 
 
 class CompressionHandler:
@@ -16,7 +17,7 @@ class CompressionHandler:
     ALGO_ZSTD = "zstd"
     ALGO_ZLIB = "zlib"
 
-    # Niveaux de compression par défaut
+    # Niveaux de compression par défaut (valeurs natives)
     ZSTD_LEVEL = 3   # zstd: 1-22, 3 = bon équilibre vitesse/compression
     ZLIB_LEVEL = 6   # zlib: 1-9, 6 = défaut Python
 
@@ -24,6 +25,7 @@ class CompressionHandler:
         """Initialise le gestionnaire de compression"""
         self.Logger = GetModuleLogger("CompressionHandler")
         self.Algorithm = self.ALGO_NONE
+        self.Level = CompressionConfig.LEVEL_DEFAULT  # Niveau commun (1-10)
         self.ZstdAvailable = self._CheckZstdAvailable()
         self.ZstdCompressor = None
         self.ZstdDecompressor = None
@@ -49,7 +51,8 @@ class CompressionHandler:
         """Initialise les compresseurs zstd"""
         try:
             import zstd
-            self.ZstdCompressor = zstd.ZstdCompressor(level=self.ZSTD_LEVEL)
+            NativeLevel = self._ConvertToNativeLevel()
+            self.ZstdCompressor = zstd.ZstdCompressor(level=NativeLevel)
             self.ZstdDecompressor = zstd.ZstdDecompressor()
         except Exception as e:
             self.Logger.warning(f"Erreur initialisation zstd: {e}")
@@ -154,7 +157,8 @@ class CompressionHandler:
 
     def _CompressZlib(self, Data: bytes) -> bytes:
         """Compresse avec zlib"""
-        return zlib.compress(Data, level=self.ZLIB_LEVEL)
+        NativeLevel = self._ConvertToNativeLevel()
+        return zlib.compress(Data, level=NativeLevel)
 
     def _DecompressZlib(self, Data: bytes) -> bytes:
         """Décompresse avec zlib"""
@@ -192,6 +196,47 @@ class CompressionHandler:
             Nom de l'algorithme
         """
         return self.Algorithm
+
+    def SetLevel(self, Level: int):
+        """
+        Définit le niveau de compression (échelle commune 1-10)
+
+        Args:
+            Level: Niveau de compression (1=rapide, 10=max)
+        """
+        # Validation du niveau
+        Level = max(CompressionConfig.LEVEL_MIN, min(Level, CompressionConfig.LEVEL_MAX))
+        self.Level = Level
+
+        # Réinitialiser le compresseur zstd si actif pour appliquer le nouveau niveau
+        if self.ZstdAvailable and self.Algorithm == self.ALGO_ZSTD:
+            self._InitZstd()
+
+        self.Logger.info(f"Niveau de compression configuré: {Level}/10 (natif: {self._ConvertToNativeLevel()})")
+
+    def GetLevel(self) -> int:
+        """
+        Retourne le niveau de compression actuel (échelle commune 1-10)
+
+        Returns:
+            Niveau de compression
+        """
+        return self.Level
+
+    def _ConvertToNativeLevel(self) -> int:
+        """
+        Convertit le niveau commun (1-10) vers le niveau natif de l'algorithme
+
+        Returns:
+            Niveau natif pour l'algorithme actuel
+        """
+        if self.Algorithm == self.ALGO_ZSTD:
+            # 1-10 → 1-22 (interpolation linéaire)
+            return round(1 + (self.Level - 1) * (CompressionConfig.ZSTD_LEVEL_MAX - 1) / (CompressionConfig.LEVEL_MAX - 1))
+        elif self.Algorithm == self.ALGO_ZLIB:
+            # 1-10 → 1-9 (cap à 9)
+            return min(self.Level, CompressionConfig.ZLIB_LEVEL_MAX)
+        return 0
 
 
 def NegotiateCompression(ClientAlgorithms: List[str], ServerAlgorithms: List[str] = None) -> str:

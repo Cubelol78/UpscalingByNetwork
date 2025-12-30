@@ -26,6 +26,7 @@ DEFAULT_PARAMETERS = {
     "server_password": ("", "Mot de passe du serveur (vide = désactivé)"),
     "work_directory": ("./work", "Répertoire de travail pour les fichiers"),
     "batch_size": ("100", "Nombre d'images par batch"),
+    "compression_level": ("5", "Niveau de compression réseau (1=rapide, 10=max)"),
 }
 
 
@@ -260,7 +261,8 @@ class DatabaseManager:
             'port': self.GetParameterInt('server_port', 8765),
             'password': self.GetParameter('server_password', ''),
             'work_directory': self.GetParameter('work_directory', './work'),
-            'batch_size': self.GetParameterInt('batch_size', 100)
+            'batch_size': self.GetParameterInt('batch_size', 100),
+            'compression_level': self.GetParameterInt('compression_level', 5)
         }
 
     def SaveServerConfig(self, Config: Dict[str, Any]) -> bool:
@@ -268,7 +270,7 @@ class DatabaseManager:
         Sauvegarde la configuration serveur dans la base de données.
 
         Args:
-            Config: Dictionnaire avec ip, port, password, work_directory, batch_size
+            Config: Dictionnaire avec ip, port, password, work_directory, batch_size, compression_level
 
         Returns:
             True si succès
@@ -284,6 +286,8 @@ class DatabaseManager:
                 self.SetParameter('work_directory', Config['work_directory'], "Répertoire de travail")
             if 'batch_size' in Config:
                 self.SetParameter('batch_size', str(Config['batch_size']), "Nombre d'images par batch")
+            if 'compression_level' in Config:
+                self.SetParameter('compression_level', str(Config['compression_level']), "Niveau de compression réseau (1=rapide, 10=max)")
             return True
         except Exception as e:
             self.Logger.error(f"Erreur lors de la sauvegarde de la configuration: {e}")

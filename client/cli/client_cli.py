@@ -15,7 +15,7 @@ from client.core.client import UpscalingClient
 from client.core.connection import SavedServersManager
 from client.utils.hardware_detector import HardwareDetector
 from client.utils.performance_config import PerformanceConfigManager, PerformancePresets
-from shared.utils.constants import ClientStatus
+from shared.utils.constants import ClientStatus, CompressionConfig
 
 
 class ClientCLI:
@@ -241,11 +241,13 @@ class ClientCLI:
             TileSize = Config.get('tile_size', 0)
             GpuIds = Config.get('gpu_ids', [])
             Threads = Config.get('threads', {})
+            CompressionLevel = Config.get('compression_level', CompressionConfig.LEVEL_DEFAULT)
 
             click.echo("\nConfiguration actuelle:")
             click.echo(f"  Tile size: {TileSize if TileSize > 0 else 'Auto'}")
             click.echo(f"  GPU: {','.join(map(str, GpuIds)) if GpuIds else 'Auto'}")
             click.echo(f"  Threads: {Threads.get('load', 1)}:{Threads.get('process', 2)}:{Threads.get('save', 2)}")
+            click.echo(f"  Compression reseau: {CompressionLevel}/10 (1=rapide, 10=max)")
             click.echo("  (Mode TTA: configuré côté serveur)")
 
             click.echo("\nActions:")
@@ -427,6 +429,13 @@ class ClientCLI:
             'process': max(PerformancePresets.MIN_THREADS, min(PerformancePresets.MAX_THREADS, ProcessThreads)),
             'save': max(PerformancePresets.MIN_THREADS, min(PerformancePresets.MAX_THREADS, SaveThreads))
         }
+
+        # Compression level
+        CurrentCompression = Config.get('compression_level', CompressionConfig.LEVEL_DEFAULT)
+        click.echo(f"\nCompression reseau ({CompressionConfig.LEVEL_MIN}-{CompressionConfig.LEVEL_MAX}, 1=rapide, 10=max)")
+        CompressionLevel = click.prompt("Niveau de compression", type=int, default=CurrentCompression)
+        CompressionLevel = max(CompressionConfig.LEVEL_MIN, min(CompressionConfig.LEVEL_MAX, CompressionLevel))
+        Config['compression_level'] = CompressionLevel
 
         # Note: Le mode TTA est configuré côté serveur
         click.echo("\n(Note: Le mode TTA est configuré côté serveur)")

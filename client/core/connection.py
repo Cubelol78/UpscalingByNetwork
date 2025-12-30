@@ -15,7 +15,8 @@ from shared.protocol.messages import (
 )
 from shared.protocol.encryption import EncryptionHandler
 from shared.utils.logger import GetClientLogger
-from shared.utils.constants import NetworkConfig
+from shared.utils.constants import NetworkConfig, CompressionConfig
+from client.utils.performance_config import PerformanceConfigManager
 
 
 class SavedServersWrapper:
@@ -177,7 +178,14 @@ class ConnectionManager:
             # Configure la compression négociée
             SelectedCompression = Response.GetSelectedCompression()
             self.EncryptionHandler.SetCompression(SelectedCompression)
-            self.Logger.info(f"✓ Handshake réussi, compression: {SelectedCompression}")
+
+            # Applique le niveau de compression configuré
+            PerformanceConfig = PerformanceConfigManager()
+            Config = PerformanceConfig.Load()
+            CompressionLevel = Config.get('compression_level', CompressionConfig.LEVEL_DEFAULT)
+            self.EncryptionHandler.CompressionHandler.SetLevel(CompressionLevel)
+
+            self.Logger.info(f"✓ Handshake réussi, compression: {SelectedCompression}, niveau: {CompressionLevel}/10")
 
             return True
 

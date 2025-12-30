@@ -9,6 +9,7 @@ from typing import Dict, List, Optional
 from pathlib import Path
 
 from shared.utils.logger import GetModuleLogger
+from shared.utils.constants import CompressionConfig
 
 
 class PerformancePresets:
@@ -62,7 +63,8 @@ class PerformanceConfigManager:
         },
         "tta_mode": False,
         "output_format": "png",
-        "first_run": True
+        "first_run": True,
+        "compression_level": CompressionConfig.LEVEL_DEFAULT  # Niveau de compression réseau (1-10)
     }
 
     def __init__(self, ConfigDir: Optional[str] = None):

@@ -16,7 +16,7 @@ from shared.protocol.messages import (
 from shared.protocol.encryption import EncryptionHandler, PasswordHasher
 from shared.protocol.compression import NegotiateCompression
 from shared.utils.logger import GetModuleLogger
-from shared.utils.constants import ClientStatus, ErrorCode, NetworkConfig
+from shared.utils.constants import ClientStatus, ErrorCode, NetworkConfig, CompressionConfig
 from server.database.db_manager import DatabaseManager
 from server.database.models import ClientHistory
 
@@ -55,13 +55,14 @@ class ClientInfo:
 class ClientManager:
     """Gestionnaire de clients connectés"""
 
-    def __init__(self, ServerPassword: str, Database: DatabaseManager):
+    def __init__(self, ServerPassword: str, Database: DatabaseManager, CompressionLevel: int = None):
         """
         Initialise le gestionnaire de clients
 
         Args:
             ServerPassword: Mot de passe du serveur
             Database: Gestionnaire de base de données
+            CompressionLevel: Niveau de compression réseau (1-10)
         """
         self.ServerPassword = ServerPassword
         self.Database = Database
@@ -70,6 +71,11 @@ class ClientManager:
         self.HeartbeatTask = None
         self.Running = False
         self.OnClientDisconnected = None  # Callback async appelé lors d'une déconnexion
+
+        # Niveau de compression (1-10)
+        if CompressionLevel is None:
+            CompressionLevel = Database.GetParameterInt('compression_level', CompressionConfig.LEVEL_DEFAULT)
+        self.CompressionLevel = CompressionLevel
 
     async def HandleNewConnection(self, Reader: asyncio.StreamReader,
                                   Writer: asyncio.StreamWriter) -> Optional[str]:
@@ -174,7 +180,10 @@ class ClientManager:
 
             # Configure la compression sur le handler
             ClientInfo.EncryptionHandler.SetCompression(SelectedCompression)
-            self.Logger.info(f"Compression négociée: {SelectedCompression}")
+
+            # Applique le niveau de compression configuré
+            ClientInfo.EncryptionHandler.CompressionHandler.SetLevel(self.CompressionLevel)
+            self.Logger.info(f"Compression négociée: {SelectedCompression}, niveau: {self.CompressionLevel}/10")
 
             # Envoie la réponse
             Response = HandshakeResponse(
@@ -528,3 +537,22 @@ class ClientManager:
             Callback: Fonction async prenant ClientId en paramètre
         """
         self.OnClientDisconnected = Callback
+
+    def UpdateCompressionLevel(self, NewLevel: int):
+        """
+        Met à jour le niveau de compression pour tous les clients connectés.
+        Le nouveau niveau sera utilisé pour les prochains messages envoyés.
+
+        Args:
+            NewLevel: Nouveau niveau de compression (1-10)
+        """
+        # Valide le niveau
+        NewLevel = max(CompressionConfig.LEVEL_MIN, min(NewLevel, CompressionConfig.LEVEL_MAX))
+        self.CompressionLevel = NewLevel
+
+        # Applique à tous les clients connectés
+        for ClientId, ClientInfo in self.Clients.items():
+            if ClientInfo.EncryptionHandler and ClientInfo.EncryptionHandler.CompressionHandler:
+                ClientInfo.EncryptionHandler.CompressionHandler.SetLevel(NewLevel)
+
+        self.Logger.info(f"Niveau de compression mis à jour: {NewLevel}/10 (appliqué à {len(self.Clients)} clients)")

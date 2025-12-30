@@ -40,7 +40,8 @@ class ServerCLI:
                 "port": DbConfig['port'],
                 "password": DbConfig['password'],
                 "work_directory": DbConfig['work_directory'],
-                "batch_size": DbConfig['batch_size']
+                "batch_size": DbConfig['batch_size'],
+                "compression_level": DbConfig.get('compression_level', 5)
             },
             "processing": {
                 "upscale_factor": 4,
@@ -346,6 +347,7 @@ class ServerCLI:
         click.echo(f"  Mot de passe: {'Defini' if DbConfig.get('password') else 'Non defini'}")
         click.echo(f"  Repertoire de travail: {DbConfig.get('work_directory', 'N/A')}")
         click.echo(f"  Taille batch: {DbConfig.get('batch_size', 'N/A')}")
+        click.echo(f"  Compression reseau: {DbConfig.get('compression_level', 5)}/10")
         click.echo(f"\n  Base de donnees: {self.Database.DbPath}")
 
 

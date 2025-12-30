@@ -158,7 +158,19 @@ class CompressionConfig:
     DEFAULT_ALGORITHM = ALGO_ZSTD
     FALLBACK_ALGORITHM = ALGO_ZLIB
 
-    # Niveaux de compression
+    # Échelle commune de compression (1-10)
+    LEVEL_MIN = 1
+    LEVEL_MAX = 10
+    LEVEL_DEFAULT = 5
+
+    # Plages natives des algorithmes
+    ZSTD_LEVEL_MIN = 1
+    ZSTD_LEVEL_MAX = 22
+
+    ZLIB_LEVEL_MIN = 1
+    ZLIB_LEVEL_MAX = 9
+
+    # Niveaux de compression par défaut (valeurs natives)
     ZSTD_LEVEL = 3   # zstd: 1-22, 3 = bon équilibre vitesse/compression
     ZLIB_LEVEL = 6   # zlib: 1-9, 6 = défaut Python
 
