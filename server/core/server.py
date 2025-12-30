@@ -12,7 +12,7 @@ from server.core.client_manager import ClientManager
 from server.core.network_manager import NetworkManager
 from server.database.db_manager import DatabaseManager
 from shared.utils.logger import GetServerLogger
-from shared.utils.constants import NetworkConfig, PathConfig
+from shared.utils.constants import NetworkConfig, PathConfig, ClientStatus
 from shared.protocol.messages import MessageFactory, HeartbeatPong, BatchResult
 
 
@@ -268,6 +268,17 @@ class UpscalingServer:
         # Heartbeat pong
         if isinstance(Message, HeartbeatPong):
             await self.ClientManager.UpdateHeartbeat(ClientId)
+
+            # Mise à jour du statut client depuis le heartbeat
+            # Permet de détecter qu'un client a fini de traiter avant de recevoir le BatchResult
+            ReportedStatus = Message.Payload.get("client_status")
+            if ReportedStatus:
+                CurrentStatus = self.ClientManager.GetClientStatus(ClientId)
+                # Seulement si le client rapporte IDLE et qu'on pensait qu'il était PROCESSING
+                if ReportedStatus == ClientStatus.IDLE and CurrentStatus == ClientStatus.PROCESSING:
+                    self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.IDLE)
+                    self.Logger.debug(f"Client {ClientId} passe en IDLE (via heartbeat)")
+
             self.Logger.debug(f"Heartbeat pong reçu du client {ClientId}")
 
         # Résultat de batch
