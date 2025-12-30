@@ -276,7 +276,7 @@ class UpscalingClient:
                 # Attend un résultat dans la queue (bloquant async)
                 Result = await self.ResultQueue.get()
 
-                BatchId = Result.GetBatchId()
+                BatchId = Result.Payload.get("batch_id", "unknown")
                 self.Logger.info(f"Envoi du résultat batch {BatchId}...")
 
                 # Envoie le résultat au serveur
