@@ -6,6 +6,7 @@ Connecte au serveur, reçoit et traite les batches d'images
 import asyncio
 import time
 from typing import Optional
+from asyncio import Queue
 
 from client.core.connection import ConnectionManager
 from client.core.processor import LocalProcessor
@@ -30,6 +31,10 @@ class UpscalingClient:
         self.CurrentBatch = None
         self.ProcessingTask = None  # Tâche de traitement en arrière-plan
 
+        # File d'attente pour les résultats à envoyer (découplage traitement/envoi)
+        self.ResultQueue: Queue = None
+        self.SenderTask = None  # Tâche d'envoi en arrière-plan
+
     async def Start(self, Host: str, Port: int, Password: str = "") -> bool:
         """
         Démarre le client et connecte au serveur
@@ -53,6 +58,10 @@ class UpscalingClient:
             self.Running = True
             self.Status = ClientStatus.IDLE
 
+            # Initialise la queue de résultats et démarre le sender en arrière-plan
+            self.ResultQueue = asyncio.Queue()
+            self.SenderTask = asyncio.create_task(self._SenderLoop())
+
             self.Logger.info("✓ Client démarré et connecté")
 
             # Lance la boucle principale
@@ -65,7 +74,7 @@ class UpscalingClient:
             return False
 
     async def Stop(self):
-        """Arrête le client"""
+        """Arrête le client proprement"""
         self.Logger.info("Arrêt du client...")
 
         self.Running = False
@@ -77,6 +86,23 @@ class UpscalingClient:
                 await self.ProcessingTask
             except asyncio.CancelledError:
                 self.Logger.info("Tâche de traitement annulée")
+
+        # Attend que la queue d'envoi soit vidée (avec timeout)
+        if self.ResultQueue and not self.ResultQueue.empty():
+            self.Logger.info(f"Attente de l'envoi des {self.ResultQueue.qsize()} résultat(s) en attente...")
+            try:
+                await asyncio.wait_for(self.ResultQueue.join(), timeout=30.0)
+                self.Logger.info("Queue d'envoi vidée")
+            except asyncio.TimeoutError:
+                self.Logger.warning("Timeout lors de l'attente de la queue, arrêt forcé")
+
+        # Annule la tâche d'envoi
+        if self.SenderTask and not self.SenderTask.done():
+            self.SenderTask.cancel()
+            try:
+                await self.SenderTask
+            except asyncio.CancelledError:
+                pass
 
         # Déconnecte du serveur
         await self.ConnectionManager.Disconnect()
@@ -192,7 +218,9 @@ class UpscalingClient:
 
     async def _ProcessBatchAsync(self, BatchId: str, Payload: dict):
         """
-        Traite un batch de manière asynchrone dans un thread séparé
+        Traite un batch de manière asynchrone dans un thread séparé.
+        Ajoute le résultat à la queue d'envoi au lieu d'envoyer directement.
+        Permet de recevoir un nouveau batch pendant l'envoi du précédent.
 
         Args:
             BatchId: ID du batch
@@ -213,23 +241,66 @@ class UpscalingClient:
                     ErrorMessage="Erreur interne du processeur"
                 )
 
-            # Envoie le résultat au serveur
-            self.Logger.info(f"Envoi du résultat au serveur...")
-            await self.ConnectionManager.SendMessage(Result.ToJson(), Encrypted=True)
-
-            if Result.IsSuccess():
-                self.Logger.info(f"✓ Batch {BatchId} traité et envoyé avec succès")
-            else:
-                self.Logger.error(f"✗ Batch {BatchId} échoué: {Result.Payload.get('error_message')}")
+            # Ajoute le résultat à la queue d'envoi (au lieu d'envoyer directement)
+            await self.ResultQueue.put(Result)
+            self.Logger.info(f"Batch {BatchId} traité, ajouté à la queue d'envoi")
 
         except Exception as e:
             self.Logger.error(f"Erreur lors du traitement async du batch: {e}")
+            # En cas d'erreur, ajoute quand même un résultat d'échec à la queue
+            try:
+                ErrorResult = BatchResult(
+                    BatchId=BatchId,
+                    Success=False,
+                    ErrorMessage=str(e)
+                )
+                await self.ResultQueue.put(ErrorResult)
+            except Exception:
+                pass
 
         finally:
-            # Remet en idle
+            # Remet en idle immédiatement (avant l'envoi)
+            # Permet de recevoir un nouveau batch pendant l'envoi
             self.Status = ClientStatus.IDLE
             self.CurrentBatch = None
             self.ProcessingTask = None
+
+    async def _SenderLoop(self):
+        """
+        Boucle d'envoi des résultats en arrière-plan.
+        Consomme la queue et envoie les résultats un par un (FIFO).
+        Permet au client de recevoir de nouveaux batches pendant l'envoi.
+        """
+        while self.Running:
+            try:
+                # Attend un résultat dans la queue (bloquant async)
+                Result = await self.ResultQueue.get()
+
+                BatchId = Result.GetBatchId()
+                self.Logger.info(f"Envoi du résultat batch {BatchId}...")
+
+                # Envoie le résultat au serveur
+                Success = await self.ConnectionManager.SendMessage(
+                    Result.ToJson(),
+                    Encrypted=True
+                )
+
+                if Success:
+                    if Result.IsSuccess():
+                        self.Logger.info(f"✓ Résultat batch {BatchId} envoyé avec succès")
+                    else:
+                        self.Logger.warning(f"✗ Résultat batch {BatchId} (échec) envoyé")
+                else:
+                    self.Logger.error(f"Échec d'envoi du résultat batch {BatchId}")
+
+                # Marque la tâche comme terminée dans la queue
+                self.ResultQueue.task_done()
+
+            except asyncio.CancelledError:
+                self.Logger.info("SenderLoop annulé")
+                break
+            except Exception as e:
+                self.Logger.error(f"Erreur dans SenderLoop: {e}")
 
     def GetStatus(self) -> dict:
         """
