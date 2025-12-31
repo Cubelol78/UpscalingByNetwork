@@ -47,6 +47,9 @@ class ClientWindow(QMainWindow):
     # Signal pour notifier la déconnexion demandée par le serveur (thread-safe)
     ServerDisconnectSignal = pyqtSignal(str)
 
+    # Signal pour notifier une erreur critique nécessitant déconnexion (thread-safe)
+    CriticalErrorSignal = pyqtSignal(dict)
+
     def __init__(self):
         super().__init__()
 
@@ -81,6 +84,9 @@ class ClientWindow(QMainWindow):
 
         # Connecte le signal de déconnexion serveur
         self.ServerDisconnectSignal.connect(self.OnServerDisconnect)
+
+        # Connecte le signal d'erreur critique
+        self.CriticalErrorSignal.connect(self.OnCriticalError)
 
     def SetupUI(self):
         """Configure l'interface utilisateur"""
@@ -122,6 +128,9 @@ class ClientWindow(QMainWindow):
 
             # Configure le callback de déconnexion serveur
             self.Client.OnServerDisconnect = lambda reason: self.ServerDisconnectSignal.emit(reason)
+
+            # Configure le callback d'erreur critique
+            self.Client.OnCriticalError = lambda errorInfo: self.CriticalErrorSignal.emit(errorInfo)
 
             # Démarrer le client dans un thread asyncio séparé
             import threading
@@ -228,6 +237,45 @@ class ClientWindow(QMainWindow):
             self,
             "Déconnexion",
             f"Le serveur vous a déconnecté.\n\nRaison: {Reason}"
+        )
+
+        # Met à jour l'interface de connexion
+        if hasattr(self, 'ConnectionTab') and self.ConnectionTab:
+            self.ConnectionTab.Refresh()
+
+    def OnCriticalError(self, ErrorInfo: dict):
+        """
+        Appelé quand une erreur critique est détectée (ex: mémoire GPU insuffisante).
+        Le client se déconnecte automatiquement et affiche des suggestions.
+        Cette méthode est appelée via le signal Qt (thread-safe).
+
+        Args:
+            ErrorInfo: Dictionnaire avec type, message, suggestions, raw_error
+        """
+        ErrorMessage = ErrorInfo.get("message", "Erreur inconnue")
+        ErrorType = ErrorInfo.get("type", "unknown")
+        Suggestions = ErrorInfo.get("suggestions", [])
+
+        self.Logger.error(f"Erreur critique: {ErrorMessage} (type: {ErrorType})")
+        self.IsRunning = False
+        self.UpdateStatusBar("Erreur critique - Deconnecte")
+
+        # Construit le message avec suggestions
+        Message = f"{ErrorMessage}\n\n"
+
+        if Suggestions:
+            Message += "Suggestions pour corriger le probleme:\n\n"
+            for Suggestion in Suggestions:
+                Message += f"  - {Suggestion}\n"
+
+            Message += "\nVeuillez ajuster les parametres dans l'onglet Performances "
+            Message += "puis vous reconnecter."
+
+        # Affiche une boîte de dialogue critique
+        QMessageBox.critical(
+            self,
+            "Erreur d'upscaling",
+            Message
         )
 
         # Met à jour l'interface de connexion

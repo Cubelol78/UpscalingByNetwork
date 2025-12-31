@@ -7,7 +7,7 @@ Supporte les options de performance: tile-size, GPU selection, threads, TTA
 import os
 import subprocess
 import platform
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 from pathlib import Path
 
 from shared.utils.logger import GetModuleLogger
@@ -225,7 +225,7 @@ class RealESRGANHandler:
 
     def UpscaleBatchList(self, ImagePaths: List[str], OutputDir: str,
                         ScaleFactor: int = 4, Model: str = "realesr-animevideov3",
-                        ProgressCallback=None) -> List[str]:
+                        ProgressCallback=None) -> Tuple[List[str], str]:
         """
         Upscale une liste d'images en mode dossier (une seule commande Real-ESRGAN)
 
@@ -237,10 +237,12 @@ class RealESRGANHandler:
             ProgressCallback: Fonction appelée à la fin (total, total)
 
         Returns:
-            Liste des chemins des images upscalées
+            Tuple (UpscaledImages, ErrorDetails):
+                - UpscaledImages: Liste des chemins des images upscalées
+                - ErrorDetails: Message d'erreur si échec, chaîne vide sinon
         """
         if not ImagePaths:
-            return []
+            return [], ""
 
         try:
             os.makedirs(OutputDir, exist_ok=True)
@@ -252,11 +254,11 @@ class RealESRGANHandler:
             self.Logger.info(f"Upscaling dossier: {InputDir} -> {OutputDir} ({Total} images)")
 
             # Utilise le mode dossier de Real-ESRGAN (une seule commande)
-            Success = self.UpscaleDirectory(InputDir, OutputDir, ScaleFactor, Model)
+            Success, ErrorDetails = self.UpscaleDirectory(InputDir, OutputDir, ScaleFactor, Model)
 
             if not Success:
                 self.Logger.error("Échec de l'upscaling en mode dossier")
-                return []
+                return [], ErrorDetails
 
             # Liste les images upscalées
             UpscaledImages = []
@@ -274,14 +276,15 @@ class RealESRGANHandler:
                 ProgressCallback(Total, Total)
 
             self.Logger.info(f"✓ {len(UpscaledImages)}/{Total} images upscalées avec succès")
-            return UpscaledImages
+            return UpscaledImages, ""
 
         except Exception as e:
-            self.Logger.error(f"Erreur lors de l'upscaling de la liste: {e}")
-            return []
+            ErrorMsg = f"Erreur lors de l'upscaling de la liste: {e}"
+            self.Logger.error(ErrorMsg)
+            return [], ErrorMsg
 
     def UpscaleDirectory(self, InputDir: str, OutputDir: str,
-                        ScaleFactor: int = 4, Model: str = "realesr-animevideov3") -> bool:
+                        ScaleFactor: int = 4, Model: str = "realesr-animevideov3") -> Tuple[bool, str]:
         """
         Upscale toutes les images d'un dossier en une seule commande
 
@@ -292,13 +295,16 @@ class RealESRGANHandler:
             Model: Nom du modèle à utiliser
 
         Returns:
-            True si succès
+            Tuple (Success, ErrorDetails):
+                - Success: True si succès
+                - ErrorDetails: Message d'erreur stderr si échec, chaîne vide sinon
         """
         try:
             # Valide le facteur d'upscaling
             if ScaleFactor not in ProcessingConfig.SUPPORTED_UPSCALE_FACTORS:
-                self.Logger.error(f"Facteur d'upscaling non supporté: {ScaleFactor}")
-                return False
+                ErrorMsg = f"Facteur d'upscaling non supporté: {ScaleFactor}"
+                self.Logger.error(ErrorMsg)
+                return False, ErrorMsg
 
             os.makedirs(OutputDir, exist_ok=True)
 
@@ -318,14 +324,15 @@ class RealESRGANHandler:
 
             if Result.returncode == 0:
                 self.Logger.info(f"✓ Dossier upscalé: {InputDir}")
-                return True
+                return True, ""
             else:
                 self.Logger.error(f"Erreur Real-ESRGAN: {Result.stderr}")
-                return False
+                return False, Result.stderr
 
         except Exception as e:
-            self.Logger.error(f"Erreur lors de l'upscaling du dossier: {e}")
-            return False
+            ErrorMsg = f"Erreur lors de l'upscaling du dossier: {e}"
+            self.Logger.error(ErrorMsg)
+            return False, ErrorMsg
 
     def ValidateModel(self, ModelName: str) -> bool:
         """

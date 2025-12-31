@@ -7,7 +7,7 @@ Supporte la configuration de performance pour Real-ESRGAN
 import os
 import base64
 import shutil
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 
 from client.utils.realesrgan_handler import RealESRGANHandler
@@ -143,7 +143,7 @@ class LocalProcessor:
                 return self._CreateErrorResult(BatchId, "Aucune image sauvegardée")
 
             # Upscale les images
-            UpscaledImages = self._UpscaleImages(
+            UpscaledImages, UpscaleError = self._UpscaleImages(
                 SavedImages,
                 OutputDir,
                 UpscaleFactor,
@@ -152,7 +152,9 @@ class LocalProcessor:
 
             if not UpscaledImages:
                 self.Logger.error("Échec de l'upscaling")
-                return self._CreateErrorResult(BatchId, "Échec de l'upscaling")
+                # Propage les détails de l'erreur Real-ESRGAN pour analyse
+                ErrorMsg = UpscaleError if UpscaleError else "Échec de l'upscaling"
+                return self._CreateErrorResult(BatchId, ErrorMsg)
 
             # Charge les images upscalées
             ResultImages = self._LoadUpscaledImages(UpscaledImages, Images)
@@ -216,7 +218,7 @@ class LocalProcessor:
             return []
 
     def _UpscaleImages(self, ImagePaths: List[str], OutputDir: str,
-                      UpscaleFactor: int, Model: str) -> List[str]:
+                      UpscaleFactor: int, Model: str) -> Tuple[List[str], str]:
         """
         Upscale les images avec Real-ESRGAN
 
@@ -227,7 +229,9 @@ class LocalProcessor:
             Model: Modèle à utiliser
 
         Returns:
-            Liste des chemins des images upscalées
+            Tuple (UpscaledPaths, ErrorDetails):
+                - UpscaledPaths: Liste des chemins des images upscalées
+                - ErrorDetails: Détails de l'erreur si échec, chaîne vide sinon
         """
         try:
             self.Logger.info(f"Upscaling de {len(ImagePaths)} images...")
@@ -238,7 +242,7 @@ class LocalProcessor:
                 self.Logger.info(f"Progression: {Current}/{Total} ({Progress:.1f}%)")
 
             # Upscale les images
-            UpscaledPaths = self.RealESRGANHandler.UpscaleBatchList(
+            UpscaledPaths, ErrorDetails = self.RealESRGANHandler.UpscaleBatchList(
                 ImagePaths,
                 OutputDir,
                 UpscaleFactor,
@@ -246,11 +250,11 @@ class LocalProcessor:
                 ProgressCallback
             )
 
-            return UpscaledPaths
+            return UpscaledPaths, ErrorDetails
 
         except Exception as e:
             self.Logger.error(f"Erreur lors de l'upscaling: {e}")
-            return []
+            return [], str(e)
 
     def _LoadUpscaledImages(self, UpscaledPaths: List[str],
                            OriginalImages: List[Dict]) -> List[Dict]:

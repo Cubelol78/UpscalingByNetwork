@@ -13,6 +13,7 @@ from pathlib import Path
 
 from client.core.connection import ConnectionManager
 from client.core.processor import LocalProcessor
+from client.utils.error_analyzer import GetErrorAnalyzer
 from shared.protocol.messages import (
     MessageFactory, BatchAssignment, HeartbeatPing, HeartbeatPong,
     BatchResult, StatusUpdate, DisconnectMessage
@@ -65,6 +66,9 @@ class UpscalingClient:
 
         # Callback appelé lors d'une déconnexion demandée par le serveur
         self.OnServerDisconnect = None
+
+        # Callback appelé lors d'une erreur critique nécessitant déconnexion
+        self.OnCriticalError = None
 
         self.Logger.info(f"Client initialisé avec répertoire de travail: {self.WorkDirectory}")
 
@@ -324,6 +328,7 @@ class UpscalingClient:
         Traite un batch de manière asynchrone dans un thread séparé.
         Sauvegarde le résultat sur disque et ajoute le chemin à la queue.
         Permet de recevoir un nouveau batch pendant l'envoi du précédent.
+        Analyse les erreurs et déclenche une déconnexion si critique.
 
         Args:
             BatchId: ID du batch
@@ -344,6 +349,11 @@ class UpscalingClient:
                     ErrorMessage="Erreur interne du processeur"
                 )
 
+            # Analyse l'erreur si le traitement a échoué
+            if not Result.IsSuccess():
+                ErrorMessage = Result.Payload.get("error_message", "")
+                await self._HandleBatchError(ErrorMessage)
+
             # Sauvegarde le résultat sur disque (au lieu de garder en RAM)
             CachePath = await self._SaveResultToCache(BatchId, Result)
             if CachePath:
@@ -354,6 +364,8 @@ class UpscalingClient:
 
         except Exception as e:
             self.Logger.error(f"Erreur lors du traitement async du batch: {e}")
+            # Analyse l'erreur d'exception
+            await self._HandleBatchError(str(e))
             # En cas d'erreur, ajoute quand même un résultat d'échec à la queue
             try:
                 ErrorResult = BatchResult(
@@ -377,6 +389,37 @@ class UpscalingClient:
             # Notifie le serveur immédiatement du changement de statut
             # Permet au serveur d'envoyer le prochain batch AVANT de recevoir le résultat
             await self._SendStatusUpdate()
+
+    async def _HandleBatchError(self, ErrorMessage: str):
+        """
+        Analyse une erreur de batch et déclenche une déconnexion si critique.
+        Les erreurs critiques (mémoire GPU, etc.) nécessitent un ajustement
+        des paramètres, donc on déconnecte pour éviter de gaspiller la bande passante.
+
+        Args:
+            ErrorMessage: Message d'erreur du batch
+        """
+        if not ErrorMessage:
+            return
+
+        # Analyse l'erreur
+        Analyzer = GetErrorAnalyzer()
+        ErrorInfo = Analyzer.Analyze(ErrorMessage)
+
+        if ErrorInfo.get("is_critical"):
+            self.Logger.error(f"Erreur critique détectée: {ErrorInfo.get('message')}")
+            self.Logger.error(f"Type: {ErrorInfo.get('type')}")
+
+            # Notifie le GUI via callback (thread-safe)
+            if self.OnCriticalError:
+                try:
+                    self.OnCriticalError(ErrorInfo)
+                except Exception as e:
+                    self.Logger.error(f"Erreur dans le callback OnCriticalError: {e}")
+
+            # Déclenche la déconnexion automatique
+            self.Logger.warning("Déconnexion automatique suite à une erreur critique")
+            self.Running = False
 
     async def _SenderLoop(self):
         """
