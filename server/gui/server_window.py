@@ -50,6 +50,7 @@ class ServerWindow(QMainWindow):
         self.Server = None
         self.JobManager = None
         self.IsRunning = False
+        self.ServerLoop = None  # Référence à la boucle asyncio du serveur
 
         # Configuration de l'interface
         self.SetupUI()
@@ -158,6 +159,7 @@ class ServerWindow(QMainWindow):
                 # Créer une nouvelle boucle pour ce thread
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
+                self.ServerLoop = loop  # Stocker la référence
 
                 # Initialiser le serveur (crée ClientManager) - fonction synchrone
                 if not self.Server.Initialize():
@@ -189,6 +191,10 @@ class ServerWindow(QMainWindow):
                 # Garder la boucle active
                 loop.run_forever()
 
+                # Nettoyage après arrêt de la boucle
+                loop.close()
+                self.ServerLoop = None
+
             self.ServerThread = threading.Thread(target=RunServerAsync, daemon=True)
             self.ServerThread.start()
 
@@ -214,19 +220,35 @@ class ServerWindow(QMainWindow):
         try:
             self.Logger.info("Arrêt du serveur...")
 
-            if self.Server:
-                # Arrêter le serveur dans son propre thread
-                import threading
+            if self.Server and self.ServerLoop:
+                # Utilise la boucle asyncio du serveur pour l'arrêter proprement
+                import concurrent.futures
 
-                def StopServerAsync():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(self.Server.Stop())
-                    loop.close()
+                # Créer un Future pour attendre la fin
+                StopComplete = concurrent.futures.Future()
 
-                StopThread = threading.Thread(target=StopServerAsync)
-                StopThread.start()
-                StopThread.join(timeout=5)
+                async def DoStop():
+                    try:
+                        await self.Server.Stop()
+                        StopComplete.set_result(True)
+                    except Exception as e:
+                        StopComplete.set_exception(e)
+                    finally:
+                        # Arrêter la boucle après l'arrêt du serveur
+                        self.ServerLoop.stop()
+
+                # Planifier l'arrêt dans la boucle du serveur
+                self.ServerLoop.call_soon_threadsafe(
+                    lambda: asyncio.ensure_future(DoStop(), loop=self.ServerLoop)
+                )
+
+                # Attendre que l'arrêt soit terminé (timeout 5s)
+                try:
+                    StopComplete.result(timeout=5)
+                except concurrent.futures.TimeoutError:
+                    self.Logger.warning("Timeout lors de l'arrêt du serveur")
+                except Exception as e:
+                    self.Logger.error(f"Erreur lors de l'arrêt: {e}")
 
             self.IsRunning = False
 

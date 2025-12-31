@@ -64,7 +64,8 @@ class PerformanceConfigManager:
         "tta_mode": False,
         "output_format": "png",
         "first_run": True,
-        "compression_level": CompressionConfig.LEVEL_DEFAULT  # Niveau de compression réseau (1-10)
+        "compression_level": CompressionConfig.LEVEL_DEFAULT,  # Niveau de compression réseau (1-10)
+        "work_directory": ""  # Vide = utilise ~/.upscaling_client/ par défaut
     }
 
     def __init__(self, ConfigDir: Optional[str] = None):
@@ -227,6 +228,32 @@ class PerformanceConfigManager:
             self.Load()
 
         return self.Config.get("first_run", True)
+
+    def GetWorkDirectory(self) -> str:
+        """
+        Récupère le répertoire de travail effectif
+
+        Returns:
+            Chemin du répertoire de travail (custom ou défaut)
+        """
+        if self.Config is None:
+            self.Load()
+
+        CustomDir = self.Config.get("work_directory", "")
+        if CustomDir and CustomDir.strip():
+            return CustomDir.strip()
+
+        # Utilise le répertoire par défaut
+        return os.path.join(str(Path.home()), ".upscaling_client")
+
+    def GetDefaultWorkDirectory(self) -> str:
+        """
+        Récupère le répertoire de travail par défaut
+
+        Returns:
+            Chemin du répertoire de travail par défaut
+        """
+        return os.path.join(str(Path.home()), ".upscaling_client")
 
     def _GetGpuGeneration(self, GpuName: str) -> str:
         """

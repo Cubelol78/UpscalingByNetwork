@@ -50,8 +50,13 @@ class ClientWindow(QMainWindow):
         self.Logger = GetClientLogger()
         self.Logger.info("Initialisation de l'interface graphique du client")
 
-        # Composants client
-        self.Client = UpscalingClient()
+        # Charge la configuration pour obtenir le work_directory
+        self.ConfigManager = PerformanceConfigManager()
+        Config = self.ConfigManager.Load()
+        WorkDir = self.ConfigManager.GetWorkDirectory()
+
+        # Composants client avec le répertoire de travail configuré
+        self.Client = UpscalingClient(WorkDirectory=WorkDir)
         self.IsRunning = False
         self.BatchesProcessed = 0
         self.ImagesProcessed = 0

@@ -82,6 +82,14 @@ class ClientsTab(QWidget):
                 self.ClientsTable.setRowCount(0)
                 return
 
+            # Sauvegarder la sélection actuelle
+            SelectedClientId = None
+            CurrentRow = self.ClientsTable.currentRow()
+            if CurrentRow >= 0:
+                IdItem = self.ClientsTable.item(CurrentRow, 0)
+                if IdItem:
+                    SelectedClientId = IdItem.data(Qt.UserRole)
+
             # Récupérer les clients connectés
             Clients = Server.ClientManager.GetAllClients()
 
@@ -89,6 +97,7 @@ class ClientsTab(QWidget):
             self.ClientsTable.setRowCount(0)
 
             # Remplir le tableau
+            RowToSelect = -1
             for ClientId, ClientInfo in Clients.items():
                 RowPosition = self.ClientsTable.rowCount()
                 self.ClientsTable.insertRow(RowPosition)
@@ -98,6 +107,10 @@ class ClientsTab(QWidget):
                 IdItem = QTableWidgetItem(ShortId)
                 IdItem.setData(Qt.UserRole, ClientId)  # Stocker l'ID complet
                 self.ClientsTable.setItem(RowPosition, 0, IdItem)
+
+                # Vérifier si c'est la ligne précédemment sélectionnée
+                if SelectedClientId and ClientId == SelectedClientId:
+                    RowToSelect = RowPosition
 
                 # Adresse IP
                 Address = f"{ClientInfo.Address[0]}:{ClientInfo.Address[1]}"
@@ -130,6 +143,10 @@ class ClientsTab(QWidget):
                 DisconnectBtn = QPushButton("Déconnecter")
                 DisconnectBtn.clicked.connect(lambda checked, cid=ClientId: self.DisconnectClient(cid))
                 self.ClientsTable.setCellWidget(RowPosition, 5, DisconnectBtn)
+
+            # Restaurer la sélection
+            if RowToSelect >= 0:
+                self.ClientsTable.selectRow(RowToSelect)
 
             # Mettre à jour le bouton de déconnexion
             self.DisconnectButton.setEnabled(self.ClientsTable.rowCount() > 0)

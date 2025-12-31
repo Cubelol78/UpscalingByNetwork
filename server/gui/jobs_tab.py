@@ -97,6 +97,14 @@ class JobsTab(QWidget):
                 self.JobsTable.setRowCount(0)
                 return
 
+            # Sauvegarder la sélection actuelle
+            SelectedVideoId = None
+            CurrentRow = self.JobsTable.currentRow()
+            if CurrentRow >= 0:
+                IdItem = self.JobsTable.item(CurrentRow, 0)
+                if IdItem:
+                    SelectedVideoId = IdItem.data(Qt.UserRole)
+
             # Récupérer tous les jobs
             Videos = Database.GetAllVideos()
 
@@ -104,6 +112,7 @@ class JobsTab(QWidget):
             self.JobsTable.setRowCount(0)
 
             # Remplir le tableau
+            RowToSelect = -1
             for Video in Videos:
                 RowPosition = self.JobsTable.rowCount()
                 self.JobsTable.insertRow(RowPosition)
@@ -113,6 +122,10 @@ class JobsTab(QWidget):
                 IdItem = QTableWidgetItem(ShortId)
                 IdItem.setData(Qt.UserRole, Video.VideoId)
                 self.JobsTable.setItem(RowPosition, 0, IdItem)
+
+                # Vérifier si c'est la ligne précédemment sélectionnée
+                if SelectedVideoId and Video.VideoId == SelectedVideoId:
+                    RowToSelect = RowPosition
 
                 # Nom du fichier vidéo
                 VideoName = Video.VideoPath.split('/')[-1]
@@ -149,6 +162,10 @@ class JobsTab(QWidget):
                 if Video.TtaMode:
                     TtaItem.setBackground(QColor("#E3F2FD"))  # Bleu clair
                 self.JobsTable.setItem(RowPosition, 7, TtaItem)
+
+            # Restaurer la sélection
+            if RowToSelect >= 0:
+                self.JobsTable.selectRow(RowToSelect)
 
         except Exception as e:
             self.ParentWindow.Logger.error(f"Erreur lors du rafraîchissement des jobs: {e}")

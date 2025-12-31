@@ -8,7 +8,8 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QGroupBox, QFormLayout, QSpinBox, QCheckBox,
     QPushButton, QComboBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QMessageBox, QProgressDialog
+    QHeaderView, QMessageBox, QProgressDialog, QLineEdit,
+    QFileDialog
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont
@@ -112,6 +113,10 @@ class PerformanceTab(QWidget):
         # Section Configuration avancée
         AdvancedGroup = self.CreateAdvancedGroup()
         Layout.addWidget(AdvancedGroup)
+
+        # Section Stockage
+        StorageGroup = self.CreateStorageGroup()
+        Layout.addWidget(StorageGroup)
 
         # Barre d'actions
         ActionBar = self.CreateActionBar()
@@ -313,6 +318,98 @@ class PerformanceTab(QWidget):
 
         return Group
 
+    def CreateStorageGroup(self) -> QGroupBox:
+        """Crée le groupe de configuration du stockage"""
+        Group = QGroupBox("Stockage")
+        Layout = QFormLayout(Group)
+
+        # Répertoire de travail
+        WorkDirLayout = QHBoxLayout()
+        self.WorkDirInput = QLineEdit()
+        self.WorkDirInput.setPlaceholderText(self.ConfigManager.GetDefaultWorkDirectory())
+        self.WorkDirInput.textChanged.connect(self.OnWorkDirChanged)
+        WorkDirLayout.addWidget(self.WorkDirInput)
+
+        BrowseButton = QPushButton("Parcourir...")
+        BrowseButton.clicked.connect(self.BrowseWorkDirectory)
+        WorkDirLayout.addWidget(BrowseButton)
+
+        WorkDirNote = QLabel("(necessite redemarrage)")
+        WorkDirNote.setProperty("class", "hint-warning")
+        WorkDirLayout.addWidget(WorkDirNote)
+
+        Layout.addRow("Repertoire de travail:", WorkDirLayout)
+
+        # Affichage de l'espace disque
+        self.DiskSpaceLabel = QLabel("")
+        self.DiskSpaceLabel.setProperty("class", "hint")
+        Layout.addRow("Espace disponible:", self.DiskSpaceLabel)
+
+        return Group
+
+    def BrowseWorkDirectory(self):
+        """Ouvre un dialogue pour sélectionner le répertoire de travail"""
+        CurrentDir = self.WorkDirInput.text() or self.ConfigManager.GetDefaultWorkDirectory()
+
+        Directory = QFileDialog.getExistingDirectory(
+            self,
+            "Selectionner le repertoire de travail",
+            CurrentDir
+        )
+
+        if Directory:
+            self.WorkDirInput.setText(Directory)
+
+    def OnWorkDirChanged(self, Text: str):
+        """Appelé quand le répertoire de travail change"""
+        if self.IsLoading:
+            return
+
+        # Met à jour l'affichage de l'espace disque
+        self.UpdateDiskSpaceDisplay()
+
+        # Déclenche l'auto-save
+        self.OnConfigChanged()
+
+    def UpdateDiskSpaceDisplay(self):
+        """Met à jour l'affichage de l'espace disque disponible"""
+        import shutil
+
+        WorkDir = self.WorkDirInput.text() or self.ConfigManager.GetDefaultWorkDirectory()
+
+        try:
+            # Vérifie si le chemin existe, sinon utilise le parent
+            import os
+            CheckPath = WorkDir
+            while CheckPath and not os.path.exists(CheckPath):
+                CheckPath = os.path.dirname(CheckPath)
+
+            if CheckPath:
+                Usage = shutil.disk_usage(CheckPath)
+                FreeGb = Usage.free / (1024 ** 3)
+                TotalGb = Usage.total / (1024 ** 3)
+
+                if FreeGb < 10:
+                    self.DiskSpaceLabel.setProperty("class", "hint-danger")
+                    self.DiskSpaceLabel.setText(f"{FreeGb:.1f} GB libre sur {TotalGb:.0f} GB (ATTENTION: espace faible!)")
+                elif FreeGb < 50:
+                    self.DiskSpaceLabel.setProperty("class", "hint-warning")
+                    self.DiskSpaceLabel.setText(f"{FreeGb:.1f} GB libre sur {TotalGb:.0f} GB")
+                else:
+                    self.DiskSpaceLabel.setProperty("class", "hint-success")
+                    self.DiskSpaceLabel.setText(f"{FreeGb:.1f} GB libre sur {TotalGb:.0f} GB")
+
+                # Refresh le style
+                self.DiskSpaceLabel.style().unpolish(self.DiskSpaceLabel)
+                self.DiskSpaceLabel.style().polish(self.DiskSpaceLabel)
+            else:
+                self.DiskSpaceLabel.setText("Chemin invalide")
+                self.DiskSpaceLabel.setProperty("class", "hint-danger")
+
+        except Exception as e:
+            self.DiskSpaceLabel.setText(f"Erreur: {str(e)}")
+            self.DiskSpaceLabel.setProperty("class", "hint-danger")
+
     def CreateActionBar(self) -> QWidget:
         """Crée la barre d'actions"""
         ActionWidget = QWidget()
@@ -497,6 +594,13 @@ class PerformanceTab(QWidget):
             if ThemeIndex >= 0:
                 self.ThemeComboBox.setCurrentIndex(ThemeIndex)
 
+            # Répertoire de travail
+            WorkDir = Config.get("work_directory", "")
+            self.WorkDirInput.setText(WorkDir)
+
+            # Met à jour l'affichage de l'espace disque
+            self.UpdateDiskSpaceDisplay()
+
         finally:
             # Réactive l'auto-save
             self.IsLoading = False
@@ -562,7 +666,8 @@ class PerformanceTab(QWidget):
             },
             "output_format": "png",
             "first_run": False,
-            "compression_level": self.CompressionLevelSpinBox.value()
+            "compression_level": self.CompressionLevelSpinBox.value(),
+            "work_directory": self.WorkDirInput.text().strip()
         }
 
     def AutoConfigureQuiet(self):

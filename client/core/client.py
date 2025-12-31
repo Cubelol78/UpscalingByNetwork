@@ -28,11 +28,31 @@ class UpscalingClient:
     RETRY_MAX_ATTEMPTS = 3
     RETRY_BASE_DELAY = 0.5  # 0.5s, 1s, 1.5s
 
-    def __init__(self):
-        """Initialise le client"""
+    def __init__(self, WorkDirectory: Optional[str] = None):
+        """
+        Initialise le client
+
+        Args:
+            WorkDirectory: Répertoire de travail (défaut: ~/.upscaling_client/)
+        """
         self.Logger = GetClientLogger()
         self.ConnectionManager = ConnectionManager()
-        self.LocalProcessor = LocalProcessor()
+
+        # Détermine le répertoire de travail
+        if WorkDirectory and WorkDirectory.strip():
+            self.WorkDirectory = WorkDirectory.strip()
+        else:
+            self.WorkDirectory = os.path.join(Path.home(), '.upscaling_client')
+
+        # Crée les sous-répertoires nécessaires
+        TempDir = os.path.join(self.WorkDirectory, 'temp')
+        self.ResultCacheDir = os.path.join(self.WorkDirectory, 'result_cache')
+        os.makedirs(TempDir, exist_ok=True)
+        os.makedirs(self.ResultCacheDir, exist_ok=True)
+
+        # Initialise le processeur local avec le bon répertoire temp
+        self.LocalProcessor = LocalProcessor(TempDirectory=TempDir)
+
         self.Running = False
         self.Status = ClientStatus.IDLE
         self.CurrentBatch = None
@@ -43,10 +63,7 @@ class UpscalingClient:
         self.ResultQueue: Queue = None
         self.SenderTask = None  # Tâche d'envoi en arrière-plan
 
-        # Répertoire de cache pour les résultats en attente d'envoi
-        # Permet de ne pas remplir la RAM avec les images upscalées
-        self.ResultCacheDir = os.path.join(Path.home(), '.upscaling_client', 'result_cache')
-        os.makedirs(self.ResultCacheDir, exist_ok=True)
+        self.Logger.info(f"Client initialisé avec répertoire de travail: {self.WorkDirectory}")
 
     async def Start(self, Host: str, Port: int, Password: str = "") -> bool:
         """
