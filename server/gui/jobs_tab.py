@@ -160,7 +160,8 @@ class JobsTab(QWidget):
                 TtaText = "Oui" if Video.TtaMode else "Non"
                 TtaItem = QTableWidgetItem(TtaText)
                 if Video.TtaMode:
-                    TtaItem.setBackground(QColor("#E3F2FD"))  # Bleu clair
+                    TtaItem.setBackground(QColor("#2196F3"))  # Bleu
+                    TtaItem.setForeground(QColor("white"))
                 self.JobsTable.setItem(RowPosition, 7, TtaItem)
 
             # Restaurer la sélection

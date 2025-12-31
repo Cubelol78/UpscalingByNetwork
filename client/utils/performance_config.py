@@ -37,6 +37,9 @@ class PerformancePresets:
         "default": 1.0
     }
 
+    # Facteur de réduction pour GPU laptop (moins de bande passante mémoire, throttling thermique)
+    LAPTOP_GPU_FACTOR = 0.75
+
     # Threads par défaut - augmentés pour meilleure utilisation
     DEFAULT_LOAD_THREADS = 2
     DEFAULT_PROCESS_THREADS = 4   # Augmenté de 2 à 4
@@ -429,12 +432,13 @@ class PerformanceConfigManager:
                 # Pas de GPU, utilise CPU
                 Config["gpu_ids"] = []
                 Config["tile_size"] = 32  # Petit tile size pour CPU
+                MinVram = 0
+                GpuName = ""
                 self.Logger.warning("Pas de GPU détecté, utilisation du CPU")
 
-            # Configuration des threads (utilise le nom du GPU pour ajuster)
+            # Configuration des threads (utilise le GPU le plus faible pour ajuster)
             CpuCores = HardwareInfo.get("cpu", {}).get("physical_cores", 4)
-            BestGpuName = SelectedGpus[0].get("name", "") if SelectedGpus else ""
-            Config["threads"] = self.GetThreadConfig(CpuCores, len(SelectedGpuIds), BestGpuName)
+            Config["threads"] = self.GetThreadConfig(CpuCores, len(SelectedGpuIds), GpuName, MinVram)
 
             self.Config = Config
             return Config
@@ -442,6 +446,20 @@ class PerformanceConfigManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de l'auto-configuration: {e}")
             return self.DEFAULT_CONFIG.copy()
+
+    def _IsLaptopGpu(self, GpuName: str) -> bool:
+        """
+        Détecte si un GPU est une variante laptop/mobile
+
+        Args:
+            GpuName: Nom du GPU
+
+        Returns:
+            True si c'est un GPU laptop
+        """
+        LaptopIndicators = ['laptop', 'mobile', 'max-q', 'max q']
+        GpuNameLower = GpuName.lower()
+        return any(indicator in GpuNameLower for indicator in LaptopIndicators)
 
     def GetTileSizeForVram(self, VramMb: int, GpuName: str = "") -> int:
         """
@@ -467,20 +485,31 @@ class PerformanceConfigManager:
         if GpuName:
             Generation = self._GetGpuGeneration(GpuName)
             Multiplier = PerformancePresets.GPU_GENERATION_MULTIPLIER.get(Generation, 1.0)
+
+            # Réduit le tile size pour les GPU laptop (moins de bande passante, throttling)
+            IsLaptop = self._IsLaptopGpu(GpuName)
+            if IsLaptop:
+                Multiplier *= PerformancePresets.LAPTOP_GPU_FACTOR
+                self.Logger.debug(f"GPU laptop détecté, facteur réduit: {Multiplier:.2f}x")
+
             TileSize = int(TileSize * Multiplier)
 
             # Arrondit à un multiple de 32 (meilleur pour le GPU)
             TileSize = (TileSize // 32) * 32
 
+            # Assure un minimum raisonnable
+            TileSize = max(TileSize, PerformancePresets.MIN_TILE_SIZE)
+
             # Limite au maximum
             TileSize = min(TileSize, PerformancePresets.MAX_TILE_SIZE)
 
-            self.Logger.debug(f"Tile size pour {GpuName}: base={TileSize//Multiplier:.0f}, "
-                            f"multiplier={Multiplier}x ({Generation}), final={TileSize}")
+            LaptopStr = " (laptop)" if IsLaptop else ""
+            self.Logger.debug(f"Tile size pour {GpuName}{LaptopStr}: base=320, "
+                            f"multiplier={Multiplier:.2f}x ({Generation}), final={TileSize}")
 
         return TileSize
 
-    def GetThreadConfig(self, CpuCores: int, GpuCount: int, GpuName: str = "") -> Dict:
+    def GetThreadConfig(self, CpuCores: int, GpuCount: int, GpuName: str = "", VramMb: int = 0) -> Dict:
         """
         Calcule la configuration des threads optimale
 
@@ -488,6 +517,7 @@ class PerformanceConfigManager:
             CpuCores: Nombre de coeurs CPU
             GpuCount: Nombre de GPU
             GpuName: Nom du GPU principal (pour ajuster selon la génération)
+            VramMb: VRAM en MB (pour ajuster selon la mémoire disponible)
 
         Returns:
             Configuration des threads
@@ -496,18 +526,41 @@ class PerformanceConfigManager:
         Generation = self._GetGpuGeneration(GpuName) if GpuName else "default"
         IsModernGpu = Generation in ["rtx40", "rtx30"]
 
-        # Load threads: I/O bound, un peu plus pour les GPU modernes
-        LoadThreads = min(3 if IsModernGpu else 2, max(1, CpuCores // 3))
+        # Détecte les GPU laptop
+        IsLaptop = self._IsLaptopGpu(GpuName) if GpuName else False
 
-        # Process threads: plus élevé pour les GPU modernes qui sont rapides
-        # Les GPU modernes peuvent traiter plus vite, donc on augmente le parallelisme
-        if IsModernGpu:
-            ProcessThreads = min(6, max(4, CpuCores // 2))
+        # Ajuste selon la VRAM disponible (chaque thread utilise de la mémoire GPU)
+        # Pour les GPU avec peu de VRAM, on réduit fortement les threads
+        if VramMb > 0 and VramMb <= 4096:
+            # 4GB ou moins: très conservateur (laptop, entrée de gamme)
+            MaxProcessThreads = 2
+            self.Logger.debug(f"VRAM faible ({VramMb}MB), threads limités à {MaxProcessThreads}")
+        elif VramMb > 0 and VramMb <= 6144:
+            # 6GB: modéré
+            MaxProcessThreads = 3
+        elif VramMb > 0 and VramMb <= 8192:
+            # 8GB: standard
+            MaxProcessThreads = 4
         else:
-            ProcessThreads = min(4, max(2, CpuCores // 2))
+            # 12GB+: peut gérer plus de parallélisme
+            MaxProcessThreads = 6
+
+        # Réduction supplémentaire pour les GPU laptop (throttling thermique)
+        if IsLaptop:
+            MaxProcessThreads = max(2, MaxProcessThreads - 1)
+            self.Logger.debug(f"GPU laptop détecté, threads réduits à {MaxProcessThreads}")
+
+        # Load threads: I/O bound, un peu plus pour les GPU modernes
+        LoadThreads = min(2, max(1, CpuCores // 4))
+
+        # Process threads: limité par VRAM et type de GPU
+        if IsModernGpu:
+            ProcessThreads = min(MaxProcessThreads, max(2, CpuCores // 2))
+        else:
+            ProcessThreads = min(MaxProcessThreads, max(2, CpuCores // 3))
 
         # Save threads: I/O bound, similaire à load
-        SaveThreads = min(3 if IsModernGpu else 2, max(1, CpuCores // 3))
+        SaveThreads = min(2, max(1, CpuCores // 4))
 
         return {
             "load": LoadThreads,

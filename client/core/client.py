@@ -15,7 +15,7 @@ from client.core.connection import ConnectionManager
 from client.core.processor import LocalProcessor
 from shared.protocol.messages import (
     MessageFactory, BatchAssignment, HeartbeatPing, HeartbeatPong,
-    BatchResult, StatusUpdate
+    BatchResult, StatusUpdate, DisconnectMessage
 )
 from shared.utils.logger import GetClientLogger
 from shared.utils.constants import ClientStatus, NetworkConfig
@@ -62,6 +62,9 @@ class UpscalingClient:
         # La queue contient des chemins de fichiers (pas les données en RAM)
         self.ResultQueue: Queue = None
         self.SenderTask = None  # Tâche d'envoi en arrière-plan
+
+        # Callback appelé lors d'une déconnexion demandée par le serveur
+        self.OnServerDisconnect = None
 
         self.Logger.info(f"Client initialisé avec répertoire de travail: {self.WorkDirectory}")
 
@@ -190,6 +193,10 @@ class UpscalingClient:
             elif isinstance(Message, BatchAssignment):
                 await self._HandleBatchAssignment(Message)
 
+            # Déconnexion demandée par le serveur
+            elif isinstance(Message, DisconnectMessage):
+                await self._HandleDisconnect(Message)
+
             # Autres types
             else:
                 self.Logger.debug(f"Message reçu: {MessageType}")
@@ -225,6 +232,26 @@ class UpscalingClient:
 
         except Exception as e:
             self.Logger.error(f"Erreur lors de la réponse heartbeat: {e}")
+
+    async def _HandleDisconnect(self, DisconnectMsg: DisconnectMessage):
+        """
+        Traite une demande de déconnexion du serveur
+
+        Args:
+            DisconnectMsg: Message DisconnectMessage
+        """
+        Reason = DisconnectMsg.Payload.get("reason", "Raison inconnue")
+        self.Logger.warning(f"Déconnexion demandée par le serveur: {Reason}")
+
+        # Marque le client comme devant s'arrêter
+        self.Running = False
+
+        # Notifie via callback si disponible (pour l'interface GUI)
+        if hasattr(self, 'OnServerDisconnect') and self.OnServerDisconnect:
+            try:
+                self.OnServerDisconnect(Reason)
+            except Exception as e:
+                self.Logger.error(f"Erreur dans le callback de déconnexion: {e}")
 
     async def _RetryWithBackoff(self, AsyncFunc, MaxRetries: int = None,
                                 BaseDelay: float = None) -> bool:

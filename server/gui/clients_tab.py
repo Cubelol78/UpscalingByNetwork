@@ -186,8 +186,16 @@ class ClientsTab(QWidget):
 
             if Reply == QMessageBox.Yes:
                 Server = self.ParentWindow.GetServer()
-                if Server and Server.ClientManager:
-                    Server.ClientManager.DisconnectClient(ClientId)
+                ServerLoop = self.ParentWindow.ServerLoop
+                if Server and Server.ClientManager and ServerLoop:
+                    import asyncio
+                    # Scheduler la coroutine sur la boucle du serveur
+                    ServerLoop.call_soon_threadsafe(
+                        lambda: asyncio.ensure_future(
+                            Server.ClientManager.DisconnectClient(ClientId),
+                            loop=ServerLoop
+                        )
+                    )
                     self.Refresh()
                     self.ParentWindow.Logger.info(f"Client {ClientId} déconnecté manuellement")
 

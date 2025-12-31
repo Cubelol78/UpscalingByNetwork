@@ -418,7 +418,9 @@ class ClientManager:
         if ClientId not in self.Clients:
             return
 
-        ClientInfo = self.Clients[ClientId]
+        ClientInfo = self.Clients.get(ClientId)
+        if not ClientInfo:
+            return
 
         # Appelle le callback de déconnexion AVANT de fermer
         # Permet de réallouer les batches assignés au client
@@ -442,10 +444,10 @@ class ClientManager:
             History.LastSeen = datetime.now()
             self.Database.UpdateClientHistory(History)
 
-        # Retire du dictionnaire
-        del self.Clients[ClientId]
-
-        self.Logger.info(f"Client {ClientId} retiré")
+        # Retire du dictionnaire (avec vérification pour éviter KeyError)
+        if ClientId in self.Clients:
+            del self.Clients[ClientId]
+            self.Logger.info(f"Client {ClientId} retiré")
 
     def GetClientStatus(self, ClientId: str) -> Optional[str]:
         """Récupère le statut d'un client"""
@@ -470,13 +472,29 @@ class ClientManager:
         """Récupère le nombre de clients connectés"""
         return len(self.Clients)
 
-    async def DisconnectClient(self, ClientId: str):
+    async def DisconnectClient(self, ClientId: str, Reason: str = "Déconnecté par le serveur"):
         """
-        Déconnecte un client (alias pour RemoveClient)
+        Déconnecte un client volontairement depuis le serveur.
+        Envoie d'abord un message au client pour l'informer.
 
         Args:
             ClientId: ID du client
+            Reason: Raison de la déconnexion
         """
+        if ClientId not in self.Clients:
+            self.Logger.warning(f"Tentative de déconnexion d'un client inexistant: {ClientId}")
+            return
+
+        try:
+            # Informe le client de la déconnexion
+            from shared.protocol.messages import DisconnectMessage
+            DisconnectMsg = DisconnectMessage(Reason=Reason)
+            await self.SendMessage(ClientId, DisconnectMsg.ToJson(), Encrypted=True)
+            self.Logger.info(f"Message de déconnexion envoyé au client {ClientId}: {Reason}")
+        except Exception as e:
+            self.Logger.warning(f"Impossible d'envoyer le message de déconnexion au client {ClientId}: {e}")
+
+        # Retire le client
         await self.RemoveClient(ClientId)
 
     async def StartHeartbeatMonitoring(self):

@@ -938,9 +938,17 @@ class HardwareDetector:
             elif any(x in GpuNameLower for x in ["1080", "1070", "1060", "1050"]):
                 Multiplier = 0.9
 
+            # Réduit pour les GPU laptop (moins de bande passante mémoire, throttling thermique)
+            LaptopIndicators = ['laptop', 'mobile', 'max-q', 'max q']
+            if any(indicator in GpuNameLower for indicator in LaptopIndicators):
+                Multiplier *= 0.75
+                self.Logger.debug(f"GPU laptop détecté: {GpuName}, facteur réduit")
+
             BaseTileSize = int(BaseTileSize * Multiplier)
             # Arrondit à un multiple de 32
             BaseTileSize = (BaseTileSize // 32) * 32
+            # Assure un minimum raisonnable
+            BaseTileSize = max(BaseTileSize, 32)
             # Limite max
             BaseTileSize = min(BaseTileSize, 2048)
 

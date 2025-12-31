@@ -44,6 +44,9 @@ class HardwareDetectionThread(QThread):
 class ClientWindow(QMainWindow):
     """Fenêtre principale du client avec interface graphique"""
 
+    # Signal pour notifier la déconnexion demandée par le serveur (thread-safe)
+    ServerDisconnectSignal = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
 
@@ -75,6 +78,9 @@ class ClientWindow(QMainWindow):
         self.RefreshTimer = QTimer()
         self.RefreshTimer.timeout.connect(self.RefreshInterface)
         self.RefreshTimer.start(1000)  # Rafraîchir chaque seconde
+
+        # Connecte le signal de déconnexion serveur
+        self.ServerDisconnectSignal.connect(self.OnServerDisconnect)
 
     def SetupUI(self):
         """Configure l'interface utilisateur"""
@@ -113,6 +119,9 @@ class ClientWindow(QMainWindow):
         """Se connecte à un serveur"""
         try:
             self.Logger.info(f"Connexion au serveur {Host}:{Port}...")
+
+            # Configure le callback de déconnexion serveur
+            self.Client.OnServerDisconnect = lambda reason: self.ServerDisconnectSignal.emit(reason)
 
             # Démarrer le client dans un thread asyncio séparé
             import threading
@@ -201,6 +210,29 @@ class ClientWindow(QMainWindow):
     def IsClientRunning(self) -> bool:
         """Retourne True si le client est connecté"""
         return self.IsRunning
+
+    def OnServerDisconnect(self, Reason: str):
+        """
+        Appelé quand le serveur demande la déconnexion du client.
+        Cette méthode est appelée via le signal Qt (thread-safe).
+
+        Args:
+            Reason: Raison de la déconnexion
+        """
+        self.Logger.warning(f"Déconnexion demandée par le serveur: {Reason}")
+        self.IsRunning = False
+        self.UpdateStatusBar("Déconnecté par le serveur")
+
+        # Affiche un message à l'utilisateur
+        QMessageBox.warning(
+            self,
+            "Déconnexion",
+            f"Le serveur vous a déconnecté.\n\nRaison: {Reason}"
+        )
+
+        # Met à jour l'interface de connexion
+        if hasattr(self, 'ConnectionTab') and self.ConnectionTab:
+            self.ConnectionTab.Refresh()
 
     def StartHardwareDetection(self):
         """Lance la détection matériel en arrière-plan"""
