@@ -5,7 +5,7 @@ imageio-ffmpeg>=0.4.9
 cryptography>=41.0.0
 
 # Compression réseau (zstd prioritaire, zlib en fallback natif)
-zstd>=1.5.0
+zstandard>=0.21.0
 
 # Interface CLI
 click>=8.1.7

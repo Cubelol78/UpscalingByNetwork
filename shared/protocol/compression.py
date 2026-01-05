@@ -46,19 +46,19 @@ class CompressionHandler:
             True si zstd est installé
         """
         try:
-            import zstd
+            import zstandard
             return True
         except ImportError:
-            self.Logger.debug("zstd non disponible, fallback sur zlib")
+            self.Logger.debug("zstandard non disponible, fallback sur zlib")
             return False
 
     def _InitZstd(self):
         """Initialise les compresseurs zstd"""
         try:
-            import zstd
+            import zstandard
             NativeLevel = self._ConvertToNativeLevel()
-            self.ZstdCompressor = zstd.ZstdCompressor(level=NativeLevel)
-            self.ZstdDecompressor = zstd.ZstdDecompressor()
+            self.ZstdCompressor = zstandard.ZstdCompressor(level=NativeLevel)
+            self.ZstdDecompressor = zstandard.ZstdDecompressor()
         except Exception as e:
             self.Logger.warning(f"Erreur initialisation zstd: {e}")
             self.ZstdAvailable = False
