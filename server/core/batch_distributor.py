@@ -328,8 +328,8 @@ class BatchDistributor:
                     BatchObj.AssignedClientId = None
                     self.Database.UpdateBatch(BatchObj)
 
-                # Remet le client en idle
-                self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.IDLE)
+                # Remet le client en idle si pas d'autres batches
+                self._SetClientIdleIfNoOtherBatches(ClientId)
                 return False
 
             # Récupère les images upscalées
@@ -349,10 +349,10 @@ class BatchDistributor:
                     BatchObj.AssignedClientId = None
                     self.Database.UpdateBatch(BatchObj)
 
-                # Retire du tracking et remet le client en idle
+                # Retire du tracking et remet le client en idle si pas d'autres batches
                 if BatchId in self.ActiveBatches:
                     del self.ActiveBatches[BatchId]
-                self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.IDLE)
+                self._SetClientIdleIfNoOtherBatches(ClientId)
                 return False
 
             # Calcul du nombre d'images attendues
@@ -406,7 +406,7 @@ class BatchDistributor:
 
                 if BatchId in self.ActiveBatches:
                     del self.ActiveBatches[BatchId]
-                self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.IDLE)
+                self._SetClientIdleIfNoOtherBatches(ClientId)
                 return False
 
             elif SavedCount < ExpectedCount:
@@ -436,8 +436,8 @@ class BatchDistributor:
             if BatchId in self.ActiveBatches:
                 del self.ActiveBatches[BatchId]
 
-            # Remet le client en idle
-            self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.IDLE)
+            # Remet le client en idle si pas d'autres batches
+            self._SetClientIdleIfNoOtherBatches(ClientId)
 
             return True
 
@@ -467,7 +467,9 @@ class BatchDistributor:
 
     async def HandleTimeout(self, BatchId: str):
         """
-        Gère le timeout d'un batch
+        Gère le timeout d'un batch.
+        Ne déconnecte PAS le client - le heartbeat monitoring s'en chargera
+        si le client est vraiment inactif.
 
         Args:
             BatchId: ID du batch
@@ -484,6 +486,7 @@ class BatchDistributor:
             # Récupère le batch
             BatchObj = self.Database.GetBatch(BatchId)
             if not BatchObj:
+                del self.ActiveBatches[BatchId]
                 return
 
             # Marque comme timeout
@@ -494,8 +497,9 @@ class BatchDistributor:
             # Retire du tracking
             del self.ActiveBatches[BatchId]
 
-            # Déconnecte le client (probablement inactif)
-            await self.ClientManager.RemoveClient(ClientId)
+            # Remet le client en IDLE au lieu de le déconnecter
+            # Le heartbeat monitoring se charge de déconnecter les clients inactifs
+            self._SetClientIdleIfNoOtherBatches(ClientId)
 
             # Retry si possible
             if BatchObj.RetryCount < Limits.MAX_RETRY_ATTEMPTS:
@@ -504,6 +508,8 @@ class BatchDistributor:
                 BatchObj.Status = BatchStatus.PENDING
                 BatchObj.AssignedClientId = None
                 self.Database.UpdateBatch(BatchObj)
+            else:
+                self.Logger.error(f"Batch {BatchId} a atteint le maximum de tentatives ({Limits.MAX_RETRY_ATTEMPTS})")
 
         except Exception as e:
             self.Logger.error(f"Erreur lors de la gestion du timeout: {e}")
@@ -544,6 +550,23 @@ class BatchDistributor:
 
         except Exception as e:
             self.Logger.error(f"Erreur lors de la réallocation des batches: {e}")
+
+    def _SetClientIdleIfNoOtherBatches(self, ClientId: str):
+        """
+        Remet le client à IDLE seulement s'il n'a pas d'autres batches actifs.
+        Évite une race condition où le serveur a déjà assigné un nouveau batch.
+
+        Args:
+            ClientId: ID du client
+        """
+        ClientHasOtherBatches = any(
+            Info.get("client_id") == ClientId
+            for Info in self.ActiveBatches.values()
+        )
+        if not ClientHasOtherBatches:
+            self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.IDLE)
+        else:
+            self.Logger.debug(f"Client {ClientId} a d'autres batches actifs, conserve statut PROCESSING")
 
     def CancelVideoProcessing(self, VideoId: str):
         """
