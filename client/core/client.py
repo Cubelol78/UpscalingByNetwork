@@ -71,6 +71,11 @@ class UpscalingClient:
         self.CurrentBatch = None
         self.ProcessingTask = None  # Tâche de traitement en arrière-plan
 
+        # Statistiques de session
+        self.BatchesProcessed = 0  # Nombre de batches traités avec succès
+        self.BatchesFailed = 0     # Nombre de batches échoués
+        self.ImagesProcessed = 0   # Nombre total d'images traitées
+
         # File d'attente pour les résultats à envoyer (découplage traitement/envoi)
         # La queue contient des chemins de fichiers (pas les données en RAM)
         self.ResultQueue: Queue = None
@@ -553,8 +558,13 @@ class UpscalingClient:
                 if Success:
                     if Result.IsSuccess():
                         self.Logger.info(f"✓ Résultat batch {BatchId} envoyé avec succès")
+                        # Incrémente les statistiques
+                        self.BatchesProcessed += 1
+                        ImageCount = len(Result.Payload.get("images", []))
+                        self.ImagesProcessed += ImageCount
                     else:
                         self.Logger.warning(f"✗ Résultat batch {BatchId} (échec) envoyé")
+                        self.BatchesFailed += 1
 
                     # Supprime le fichier cache après envoi réussi
                     self._DeleteCacheFile(CachePath)
@@ -730,6 +740,9 @@ class UpscalingClient:
         """
         ServerInfo = self.ConnectionManager.GetServerInfo()
 
+        # Calcule la taille de la queue d'envoi
+        QueueSize = self.ResultQueue.qsize() if self.ResultQueue else 0
+
         return {
             "running": self.Running,
             "connected": self.ConnectionManager.IsConnected(),
@@ -740,7 +753,12 @@ class UpscalingClient:
             "server_address": ServerInfo[0],
             "control_port": ServerInfo[1],
             "data_port": ServerInfo[2] if len(ServerInfo) > 2 else None,
-            "client_id": self.ConnectionManager.ClientId
+            "client_id": self.ConnectionManager.ClientId,
+            # Statistiques
+            "batches_processed": self.BatchesProcessed,
+            "batches_failed": self.BatchesFailed,
+            "images_processed": self.ImagesProcessed,
+            "queue_size": QueueSize  # Batches en attente d'envoi
         }
 
 

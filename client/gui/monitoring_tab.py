@@ -44,21 +44,25 @@ class MonitoringTab(QWidget):
 
     def CreateStatsGroup(self) -> QGroupBox:
         """Crée le groupe de statistiques"""
-        Group = QGroupBox("Statistiques")
+        Group = QGroupBox("Statistiques de la session")
 
         GridLayout = QGridLayout()
 
         # Labels des statistiques
         self.BatchesProcessedLabel = self.CreateStatLabel("0", "Batchs traités")
+        self.BatchesFailedLabel = self.CreateStatLabel("0", "Batchs échoués")
         self.ImagesProcessedLabel = self.CreateStatLabel("0", "Images traitées")
-        self.CurrentBatchLabel = self.CreateStatLabel("-", "Batch actuel")
+        self.QueueSizeLabel = self.CreateStatLabel("0", "En attente d'envoi")
+        self.CurrentBatchLabel = self.CreateStatLabel("-", "Batch en cours")
         self.StatusLabel = self.CreateStatLabel("Inactif", "Statut")
 
-        # Disposition en grille 2x2
+        # Disposition en grille 3x2
         GridLayout.addWidget(self.BatchesProcessedLabel[0], 0, 0)
-        GridLayout.addWidget(self.ImagesProcessedLabel[0], 0, 1)
-        GridLayout.addWidget(self.CurrentBatchLabel[0], 1, 0)
-        GridLayout.addWidget(self.StatusLabel[0], 1, 1)
+        GridLayout.addWidget(self.BatchesFailedLabel[0], 0, 1)
+        GridLayout.addWidget(self.ImagesProcessedLabel[0], 1, 0)
+        GridLayout.addWidget(self.QueueSizeLabel[0], 1, 1)
+        GridLayout.addWidget(self.CurrentBatchLabel[0], 2, 0)
+        GridLayout.addWidget(self.StatusLabel[0], 2, 1)
 
         Group.setLayout(GridLayout)
         return Group
@@ -134,9 +138,20 @@ class MonitoringTab(QWidget):
                 Status = Client.GetStatus()
 
                 # Mettre à jour les statistiques
-                # Note: batches_processed et images_processed ne sont pas trackés dans le client actuel
-                self.BatchesProcessedLabel[1].setText("-")
-                self.ImagesProcessedLabel[1].setText("-")
+                BatchesProcessed = Status.get('batches_processed', 0)
+                BatchesFailed = Status.get('batches_failed', 0)
+                ImagesProcessed = Status.get('images_processed', 0)
+                QueueSize = Status.get('queue_size', 0)
+
+                self.BatchesProcessedLabel[1].setText(str(BatchesProcessed))
+                self.BatchesFailedLabel[1].setText(str(BatchesFailed))
+                self.ImagesProcessedLabel[1].setText(str(ImagesProcessed))
+
+                # Affiche la queue d'envoi avec un indicateur visuel
+                if QueueSize > 0:
+                    self.QueueSizeLabel[1].setText(f"{QueueSize} 📤")
+                else:
+                    self.QueueSizeLabel[1].setText("0")
 
                 CurrentBatch = Status.get('current_batch', None)
                 if CurrentBatch:
@@ -154,22 +169,38 @@ class MonitoringTab(QWidget):
                 }.get(ClientStatus, 'Inconnu')
                 self.StatusLabel[1].setText(StatusText)
 
-                # Mettre à jour l'activité
+                # Mettre à jour l'activité avec plus de détails
                 if CurrentBatch:
+                    ActivityText = f"⚙️ Traitement du batch {CurrentBatch[:16]}...\n"
+                    ActivityText += f"Statut: {StatusText}\n"
+                    if QueueSize > 0:
+                        ActivityText += f"📤 {QueueSize} batch(s) en attente d'envoi"
+                    self.ActivityLabel.setText(ActivityText)
+                elif QueueSize > 0:
                     self.ActivityLabel.setText(
-                        f"⚙️ Traitement du batch {CurrentBatch[:16]}...\n"
+                        f"📤 Envoi de {QueueSize} batch(s) traité(s)...\n"
                         f"Statut: {StatusText}"
                     )
                 else:
-                    self.ActivityLabel.setText("💤 En attente d'un nouveau batch...")
+                    SuccessRate = ""
+                    if BatchesProcessed + BatchesFailed > 0:
+                        TotalBatches = BatchesProcessed + BatchesFailed
+                        SuccessPercent = (BatchesProcessed / TotalBatches) * 100
+                        SuccessRate = f"\n✅ Taux de réussite: {SuccessPercent:.1f}%"
+
+                    self.ActivityLabel.setText(
+                        f"💤 En attente d'un nouveau batch...{SuccessRate}"
+                    )
 
         except Exception as e:
             self.ParentWindow.Logger.error(f"Erreur lors du rafraîchissement du monitoring: {e}")
 
     def ResetStats(self):
         """Réinitialise les statistiques"""
-        self.BatchesProcessedLabel[1].setText("-")
-        self.ImagesProcessedLabel[1].setText("-")
+        self.BatchesProcessedLabel[1].setText("0")
+        self.BatchesFailedLabel[1].setText("0")
+        self.ImagesProcessedLabel[1].setText("0")
+        self.QueueSizeLabel[1].setText("0")
         self.CurrentBatchLabel[1].setText("-")
         self.StatusLabel[1].setText("Inactif")
         self.ActivityLabel.setText("Aucune activité")

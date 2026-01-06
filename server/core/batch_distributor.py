@@ -54,6 +54,9 @@ class BatchDistributor:
         self.Running = True
         self.Logger.info(f"Démarrage de la distribution pour la vidéo {VideoId}")
 
+        # Récupération des batches bloqués (PROCESSING mais pas dans ActiveBatches)
+        await self._RecoverStuckBatches(VideoId)
+
         # Lance la boucle de distribution
         self.DistributionTask = asyncio.create_task(
             self._DistributionLoop(VideoId)
@@ -123,9 +126,45 @@ class BatchDistributor:
         except Exception as e:
             self.Logger.error(f"Erreur dans la boucle de distribution: {e}")
 
+    async def _RecoverStuckBatches(self, VideoId: str):
+        """
+        Récupère les batches bloqués en PROCESSING qui ne sont pas dans ActiveBatches
+        Cela peut arriver si le serveur crash ou si un batch est assigné alors que
+        le canal Data n'était pas encore connecté
+
+        Args:
+            VideoId: ID de la vidéo
+        """
+        try:
+            # Récupère tous les batches de cette vidéo
+            AllBatches = self.Database.GetBatchesByVideo(VideoId)
+            RecoveredCount = 0
+
+            for Batch in AllBatches:
+                # Vérifie si le batch est en PROCESSING mais pas dans ActiveBatches
+                if Batch.Status == BatchStatus.PROCESSING and Batch.BatchId not in self.ActiveBatches:
+                    self.Logger.warning(
+                        f"Batch {Batch.BatchId} bloqué en PROCESSING (client: {Batch.AssignedClientId}), "
+                        f"réinitialisation à PENDING"
+                    )
+
+                    # Réinitialise le batch
+                    Batch.Status = BatchStatus.PENDING
+                    Batch.AssignedClientId = None
+                    self.Database.UpdateBatch(Batch)
+                    RecoveredCount += 1
+
+            if RecoveredCount > 0:
+                self.Logger.info(f"✓ {RecoveredCount} batch(es) bloqué(s) récupéré(s)")
+            else:
+                self.Logger.debug("Aucun batch bloqué détecté")
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la récupération des batches bloqués: {e}")
+
     def _GetAvailableClients(self) -> List[str]:
         """
-        Récupère les clients disponibles (idle)
+        Récupère les clients disponibles (idle avec canal Data connecté)
 
         Returns:
             Liste des IDs des clients disponibles
@@ -134,8 +173,16 @@ class BatchDistributor:
 
         for ClientId in self.ClientManager.GetConnectedClients():
             Status = self.ClientManager.GetClientStatus(ClientId)
+
+            # Vérifie que le client est IDLE ET que son canal Data est connecté
             if Status == ClientStatus.IDLE:
-                AvailableClients.append(ClientId)
+                ClientInfo = self.ClientManager.Clients.get(ClientId)
+
+                # Vérifie que le canal Data est connecté (requis pour envoyer les batches)
+                if ClientInfo and ClientInfo.IsDataConnected():
+                    AvailableClients.append(ClientId)
+                else:
+                    self.Logger.debug(f"Client {ClientId} IDLE mais canal Data non connecté, ignoré")
 
         return AvailableClients
 
@@ -443,9 +490,14 @@ class BatchDistributor:
             SavedCount = 0
             FailedImages = []
             for ImageData in UpscaledImages:
+                FrameNumber = None
                 try:
                     FrameNumber = ImageData.get("number")
                     ImageB64 = ImageData.get("data")
+
+                    if not ImageB64:
+                        raise ValueError("Données d'image manquantes")
+
                     Filename = ImageData.get("filename", f"frame_{FrameNumber:08d}.png")
 
                     # Décode l'image
@@ -460,7 +512,8 @@ class BatchDistributor:
 
                 except Exception as e:
                     FailedImages.append(ImageData.get("number", "?"))
-                    self.Logger.error(f"Erreur lors de la sauvegarde de l'image {FrameNumber}: {e}")
+                    FrameNumberStr = FrameNumber if FrameNumber is not None else "?"
+                    self.Logger.error(f"Erreur lors de la sauvegarde de l'image {FrameNumberStr}: {e}")
                     continue
 
             # Vérification du résultat de sauvegarde
