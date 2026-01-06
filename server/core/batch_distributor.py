@@ -489,32 +489,24 @@ class BatchDistributor:
 
             SavedCount = 0
             FailedImages = []
+
+            # Traite les images en parallèle pour ne pas bloquer l'event loop
+            SaveTasks = []
             for ImageData in UpscaledImages:
-                FrameNumber = None
-                try:
-                    FrameNumber = ImageData.get("number")
-                    ImageB64 = ImageData.get("data")
+                SaveTasks.append(self._SaveUpscaledImage(ImageData, UpscaledDir))
 
-                    if not ImageB64:
-                        raise ValueError("Données d'image manquantes")
+            # Attend que toutes les sauvegardes se terminent
+            SaveResults = await asyncio.gather(*SaveTasks, return_exceptions=True)
 
-                    Filename = ImageData.get("filename", f"frame_{FrameNumber:08d}.png")
-
-                    # Décode l'image
-                    ImageBytes = base64.b64decode(ImageB64)
-
-                    # Sauvegarde
-                    OutputPath = os.path.join(UpscaledDir, Filename)
-                    with open(OutputPath, 'wb') as f:
-                        f.write(ImageBytes)
-
+            # Compte les succès/échecs
+            for Index, Result in enumerate(SaveResults):
+                if isinstance(Result, Exception):
+                    FailedImages.append(UpscaledImages[Index].get("number", "?"))
+                    self.Logger.error(f"Erreur lors de la sauvegarde de l'image: {Result}")
+                elif Result:
                     SavedCount += 1
-
-                except Exception as e:
-                    FailedImages.append(ImageData.get("number", "?"))
-                    FrameNumberStr = FrameNumber if FrameNumber is not None else "?"
-                    self.Logger.error(f"Erreur lors de la sauvegarde de l'image {FrameNumberStr}: {e}")
-                    continue
+                else:
+                    FailedImages.append(UpscaledImages[Index].get("number", "?"))
 
             # Vérification du résultat de sauvegarde
             if SavedCount == 0:
@@ -571,6 +563,44 @@ class BatchDistributor:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la réception du résultat: {e}")
             return False
+
+    async def _SaveUpscaledImage(self, ImageData: dict, UpscaledDir: str) -> bool:
+        """
+        Sauvegarde une image upscalée dans un thread séparé pour ne pas bloquer l'event loop
+
+        Args:
+            ImageData: Dictionnaire contenant les données de l'image
+            UpscaledDir: Répertoire de destination
+
+        Returns:
+            True si succès
+        """
+        def _DoSave():
+            """Fonction synchrone exécutée dans un thread"""
+            try:
+                FrameNumber = ImageData.get("number")
+                ImageB64 = ImageData.get("data")
+
+                if not ImageB64:
+                    raise ValueError("Données d'image manquantes")
+
+                Filename = ImageData.get("filename", f"frame_{FrameNumber:08d}.png")
+
+                # Décode l'image (opération CPU intensive)
+                ImageBytes = base64.b64decode(ImageB64)
+
+                # Sauvegarde (opération I/O bloquante)
+                OutputPath = os.path.join(UpscaledDir, Filename)
+                with open(OutputPath, 'wb') as f:
+                    f.write(ImageBytes)
+
+                return True
+
+            except Exception as e:
+                raise e
+
+        # Exécute la sauvegarde dans un thread séparé
+        return await asyncio.to_thread(_DoSave)
 
     async def _CheckTimeouts(self):
         """Vérifie les batches en timeout"""
