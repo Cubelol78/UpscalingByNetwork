@@ -213,7 +213,15 @@ class ConnectionTab(QWidget):
         self.RefreshSavedServers()
 
         # Mettre à jour le statut
-        if self.ParentWindow.IsClientRunning():
+        # Vérifie d'abord si le client est en train de se reconnecter
+        if self.ParentWindow.Client.IsReconnecting:
+            self.StatusLabel.setText("🔄 Reconnexion...")
+            self.StatusLabel.setProperty("status", "reconnecting")
+            self.StatusLabel.style().unpolish(self.StatusLabel)
+            self.StatusLabel.style().polish(self.StatusLabel)
+            self.ConnectButton.setEnabled(False)
+            self.DisconnectButton.setEnabled(True)  # Permettre d'arrêter la reconnexion
+        elif self.ParentWindow.IsClientRunning():
             self.StatusLabel.setText("● Connecté")
             self.StatusLabel.setProperty("status", "running")
             self.StatusLabel.style().unpolish(self.StatusLabel)

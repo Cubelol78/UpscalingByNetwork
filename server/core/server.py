@@ -5,6 +5,8 @@ Gère les connexions clients et orchestre le traitement distribué
 
 import asyncio
 import os
+import socket
+import platform
 from typing import Optional
 from pathlib import Path
 
@@ -14,6 +16,51 @@ from server.database.db_manager import DatabaseManager
 from shared.utils.logger import GetServerLogger
 from shared.utils.constants import NetworkConfig, PathConfig, ClientStatus
 from shared.protocol.messages import MessageFactory, HeartbeatPong, BatchResult, StatusUpdate
+
+
+def ConfigureSocket(Writer: asyncio.StreamWriter, Logger):
+    """
+    Configure le socket TCP avec des options adaptées pour éviter les timeouts
+
+    Args:
+        Writer: StreamWriter asyncio
+        Logger: Logger pour les messages de debug
+    """
+    try:
+        Sock = Writer.get_extra_info('socket')
+        if not Sock:
+            return
+
+        # Active TCP keepalive pour détecter les connexions mortes
+        Sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+
+        # Configure les paramètres keepalive selon la plateforme
+        IsWindows = platform.system() == 'Windows'
+
+        if IsWindows:
+            # Windows: configure keepalive avec SIO_KEEPALIVE_VALS
+            Sock.ioctl(
+                socket.SIO_KEEPALIVE_VALS,
+                (1, 30000, 10000)  # 30s idle, 10s interval
+            )
+        else:
+            # Linux/Unix: utilise les options TCP standard
+            if hasattr(socket, 'TCP_KEEPIDLE'):
+                Sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
+            if hasattr(socket, 'TCP_KEEPINTVL'):
+                Sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+            if hasattr(socket, 'TCP_KEEPCNT'):
+                Sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 6)
+
+        # Désactive Nagle pour réduire la latence
+        Sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+        # Augmente les buffers pour les gros transferts
+        Sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2 * 1024 * 1024)  # 2MB
+        Sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 2 * 1024 * 1024)  # 2MB
+
+    except Exception as e:
+        Logger.debug(f"Configuration socket: {e}")
 
 
 class UpscalingServer:
@@ -198,6 +245,9 @@ class UpscalingServer:
         ClientId = None
 
         try:
+            # Configure le socket TCP pour éviter les timeouts
+            ConfigureSocket(Writer, self.Logger)
+
             # Handshake et authentification
             ClientId = await self.ClientManager.HandleNewConnection(Reader, Writer)
 
@@ -227,6 +277,9 @@ class UpscalingServer:
         """
         ClientId = None
         try:
+            # Configure le socket TCP pour éviter les timeouts
+            ConfigureSocket(Writer, self.Logger)
+
             # Le client doit s'identifier avec DataChannelAuth
             Success = await self.ClientManager.HandleDataConnection(Reader, Writer)
 

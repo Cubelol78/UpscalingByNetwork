@@ -145,6 +145,12 @@ class NetworkConfig:
     CONNECTION_TIMEOUT = 60  # secondes
     BATCH_TIMEOUT = 300  # 5 minutes
 
+    # Reconnexion automatique
+    RECONNECT_ENABLED = True  # Active la reconnexion automatique
+    RECONNECT_BASE_DELAY = 2  # Délai de base en secondes (backoff: 2s, 4s, 8s, 16s, 32s max)
+    RECONNECT_MAX_DELAY = 32  # Délai maximum entre deux tentatives (32 secondes)
+    RECONNECT_INFINITE = -1  # Valeur spéciale pour tentatives infinies
+
 
 # ============================================================================
 # CONFIGURATION COMPRESSION

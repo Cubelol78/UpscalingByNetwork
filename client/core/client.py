@@ -93,8 +93,16 @@ class UpscalingClient:
         # Callback appelé lors d'une erreur critique nécessitant déconnexion
         self.OnCriticalError = None
 
+        # Callback appelé lors des tentatives de reconnexion (attempt, delay)
+        self.OnReconnecting = None
+
         # Tâche de réception sur le canal Data
         self.DataReceiveTask = None
+
+        # État de reconnexion automatique
+        self.IsReconnecting = False  # True si en cours de reconnexion
+        self.ReconnectEnabled = NetworkConfig.RECONNECT_ENABLED  # Active/désactive la reconnexion auto
+        self.DisconnectedByServer = False  # True si déconnexion demandée par serveur (pas de reconnexion)
 
         self.Logger.info(f"Client initialisé avec répertoire de travail: {self.WorkDirectory}")
 
@@ -216,39 +224,89 @@ class UpscalingClient:
         Boucle principale du client (canal Control).
         Reçoit les heartbeats et status du serveur.
         Les batches sont reçus via _DataReceiveLoop().
+        Gère la reconnexion automatique en cas de perte de connexion.
         """
-        try:
-            while self.Running:
-                # Détermine le timeout adapté :
-                # - Si en PROCESSING ou envoi en cours : timeout long (5 min)
-                # - Sinon : timeout court (60s)
-                if self.Status == ClientStatus.PROCESSING or (self.ResultQueue and not self.ResultQueue.empty()):
-                    CommunicationTimeout = NetworkConfig.BATCH_TIMEOUT
-                else:
-                    CommunicationTimeout = NetworkConfig.HEARTBEAT_TIMEOUT * 2
+        while self.Running:
+            try:
+                while self.Running:
+                    # Détermine le timeout adapté :
+                    # - Si en PROCESSING ou envoi en cours : timeout long (5 min)
+                    # - Sinon : timeout court (60s)
+                    if self.Status == ClientStatus.PROCESSING or (self.ResultQueue and not self.ResultQueue.empty()):
+                        CommunicationTimeout = NetworkConfig.BATCH_TIMEOUT
+                    else:
+                        CommunicationTimeout = NetworkConfig.HEARTBEAT_TIMEOUT * 2
 
-                # Reçoit un message du serveur via Control
-                MessageData = await asyncio.wait_for(
-                    self.ConnectionManager.ReceiveControlMessage(Decrypt=True),
-                    timeout=CommunicationTimeout
-                )
+                    # Reçoit un message du serveur via Control
+                    MessageData = await asyncio.wait_for(
+                        self.ConnectionManager.ReceiveControlMessage(Decrypt=True),
+                        timeout=CommunicationTimeout
+                    )
 
-                if not MessageData:
-                    self.Logger.warning("Message Control vide reçu, déconnexion probable")
-                    break
+                    if not MessageData:
+                        self.Logger.warning("Message Control vide reçu, déconnexion probable")
+                        break
 
-                # Parse le message
-                Message = MessageFactory.CreateFromJson(MessageData)
+                    # Parse le message
+                    Message = MessageFactory.CreateFromJson(MessageData)
 
-                # Traite le message (Control: heartbeats, disconnect, status)
-                await self._HandleControlMessage(Message)
+                    # Traite le message (Control: heartbeats, disconnect, status)
+                    await self._HandleControlMessage(Message)
 
-        except asyncio.TimeoutError:
-            self.Logger.error("Timeout de communication Control avec le serveur")
-        except Exception as e:
-            self.Logger.error(f"Erreur dans la boucle principale Control: {e}")
-        finally:
-            await self.Stop()
+            except asyncio.TimeoutError:
+                self.Logger.error("Timeout de communication Control avec le serveur")
+            except Exception as e:
+                self.Logger.error(f"Erreur dans la boucle principale Control: {e}")
+
+            # Si on arrive ici, c'est qu'il y a eu une déconnexion
+            # Vérifie si on doit tenter une reconnexion automatique
+            if not self.Running:
+                # Client arrêté volontairement, on sort
+                break
+
+            if self.DisconnectedByServer:
+                # Déconnexion demandée par le serveur, on ne reconnecte pas
+                self.Logger.info("Déconnexion demandée par le serveur, pas de reconnexion")
+                break
+
+            if not self.ReconnectEnabled:
+                # Reconnexion automatique désactivée
+                self.Logger.info("Reconnexion automatique désactivée")
+                break
+
+            # Annule le batch en cours si nécessaire
+            if self.ProcessingTask and not self.ProcessingTask.done():
+                self.Logger.warning("Annulation du batch en cours suite à la déconnexion")
+                self.ProcessingTask.cancel()
+                try:
+                    await self.ProcessingTask
+                except asyncio.CancelledError:
+                    pass
+                self.CurrentBatch = None
+                self.ProcessingTask = None
+
+            # Tente la reconnexion automatique
+            self.IsReconnecting = True
+            self.Logger.warning("🔄 Déconnexion détectée, tentative de reconnexion automatique...")
+
+            ReconnectSuccess = await self.ConnectionManager.ReconnectWithRetry(
+                MaxAttempts=NetworkConfig.RECONNECT_INFINITE,
+                OnAttempt=self._OnReconnectAttempt
+            )
+
+            self.IsReconnecting = False
+
+            if ReconnectSuccess:
+                self.Logger.info("✓ Reconnexion réussie, reprise du service")
+                # Redémarre les tâches annexes
+                await self._RestartTasks()
+                # Continue la boucle principale
+            else:
+                self.Logger.error("✗ Échec de la reconnexion automatique")
+                break
+
+        # Arrêt final du client
+        await self.Stop()
 
     async def _DataReceiveLoop(self):
         """
@@ -346,6 +404,9 @@ class UpscalingClient:
         Reason = DisconnectMsg.Payload.get("reason", "Raison inconnue")
         self.Logger.warning(f"Déconnexion demandée par le serveur: {Reason}")
 
+        # Marque qu'il s'agit d'une déconnexion voulue par le serveur (pas de reconnexion auto)
+        self.DisconnectedByServer = True
+
         # Marque le client comme devant s'arrêter
         self.Running = False
 
@@ -355,6 +416,49 @@ class UpscalingClient:
                 self.OnServerDisconnect(Reason)
             except Exception as e:
                 self.Logger.error(f"Erreur dans le callback de déconnexion: {e}")
+
+    def _OnReconnectAttempt(self, Attempt: int, Delay: float):
+        """
+        Callback appelé lors de chaque tentative de reconnexion
+
+        Args:
+            Attempt: Numéro de la tentative
+            Delay: Délai avant cette tentative
+        """
+        # Notifie via callback si disponible (pour l'interface GUI)
+        if self.OnReconnecting:
+            try:
+                self.OnReconnecting(Attempt, Delay)
+            except Exception as e:
+                self.Logger.error(f"Erreur dans le callback OnReconnecting: {e}")
+
+    async def _RestartTasks(self):
+        """
+        Redémarre les tâches annexes après une reconnexion réussie
+        """
+        try:
+            # Redémarre la tâche de réception Data si elle n'est pas active
+            if not self.DataReceiveTask or self.DataReceiveTask.done():
+                self.DataReceiveTask = asyncio.create_task(self._DataReceiveLoop())
+                self.Logger.debug("✓ Tâche DataReceiveLoop redémarrée")
+
+            # Redémarre la tâche d'envoi de résultats si elle n'est pas active
+            if not self.SenderTask or self.SenderTask.done():
+                self.SenderTask = asyncio.create_task(self._SenderLoop())
+                self.Logger.debug("✓ Tâche SenderLoop redémarrée")
+
+            # Redémarre la tâche d'envoi de messages prioritaires si elle n'est pas active
+            if not self.OutgoingTask or self.OutgoingTask.done():
+                self.OutgoingTask = asyncio.create_task(self._OutgoingMessageLoop())
+                self.Logger.debug("✓ Tâche OutgoingMessageLoop redémarrée")
+
+            # Remet le client en IDLE pour pouvoir recevoir de nouveaux batches
+            self.Status = ClientStatus.IDLE
+            self.CurrentBatch = None
+            self.Logger.info("✓ Client remis en état IDLE, prêt à recevoir des batches")
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors du redémarrage des tâches: {e}")
 
     async def _RetryWithBackoff(self, AsyncFunc, MaxRetries: int = None,
                                 BaseDelay: float = None) -> bool:

@@ -6,6 +6,8 @@ Gère la connexion au serveur, le handshake et l'authentification
 import asyncio
 import json
 import os
+import socket
+import platform
 from typing import Optional, Tuple
 from pathlib import Path
 
@@ -17,6 +19,56 @@ from shared.protocol.encryption import EncryptionHandler
 from shared.utils.logger import GetClientLogger
 from shared.utils.constants import NetworkConfig, CompressionConfig
 from client.utils.performance_config import PerformanceConfigManager
+
+
+def ConfigureSocket(Writer: asyncio.StreamWriter, Logger):
+    """
+    Configure le socket TCP avec des options adaptées pour éviter les timeouts
+
+    Args:
+        Writer: StreamWriter asyncio
+        Logger: Logger pour les messages de debug
+    """
+    try:
+        Sock = Writer.get_extra_info('socket')
+        if not Sock:
+            return
+
+        # Active TCP keepalive pour détecter les connexions mortes
+        Sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+
+        # Configure les paramètres keepalive selon la plateforme
+        IsWindows = platform.system() == 'Windows'
+
+        if IsWindows:
+            # Windows: configure keepalive avec SIO_KEEPALIVE_VALS
+            # Format: (onoff, keepalivetime_ms, keepaliveinterval_ms)
+            # - Commence à envoyer des probes après 30s d'inactivité
+            # - Envoie une probe toutes les 10s
+            Sock.ioctl(
+                socket.SIO_KEEPALIVE_VALS,
+                (1, 30000, 10000)  # 30s idle, 10s interval
+            )
+            Logger.debug("✓ TCP Keepalive configuré (Windows)")
+        else:
+            # Linux/Unix: utilise les options TCP standard
+            if hasattr(socket, 'TCP_KEEPIDLE'):
+                Sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)  # 30s
+            if hasattr(socket, 'TCP_KEEPINTVL'):
+                Sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)  # 10s
+            if hasattr(socket, 'TCP_KEEPCNT'):
+                Sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 6)  # 6 retries
+            Logger.debug("✓ TCP Keepalive configuré (Linux/Unix)")
+
+        # Désactive l'algorithme de Nagle pour réduire la latence
+        Sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+        # Augmente les buffers de réception/envoi pour les gros transferts
+        Sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2 * 1024 * 1024)  # 2MB
+        Sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 2 * 1024 * 1024)  # 2MB
+
+    except Exception as e:
+        Logger.warning(f"Impossible de configurer le socket: {e}")
 
 
 class SavedServersWrapper:
@@ -97,6 +149,9 @@ class ConnectionManager:
             self.Connected = True
 
             self.Logger.info("✓ Connexion TCP établie")
+
+            # Configure le socket TCP pour éviter les timeouts
+            ConfigureSocket(self.Writer, self.Logger)
 
             # Handshake
             if not await self._PerformHandshake():
@@ -594,6 +649,9 @@ class DualConnectionManager:
             self.ControlConnected = True
             self.Logger.info("✓ Connexion TCP Control établie")
 
+            # Configure le socket TCP pour éviter les timeouts
+            ConfigureSocket(self.ControlWriter, self.Logger)
+
             # Handshake
             if not await self._PerformHandshake():
                 self.Logger.error("Échec du handshake Control")
@@ -625,6 +683,9 @@ class DualConnectionManager:
                 timeout=NetworkConfig.CONNECTION_TIMEOUT
             )
             self.Logger.info("✓ Connexion TCP Data établie")
+
+            # Configure le socket TCP pour éviter les timeouts
+            ConfigureSocket(self.DataWriter, self.Logger)
 
             # Importe le contexte de chiffrement depuis Control
             Context = self.ControlEncryption.ExportEncryptionContext()
@@ -896,3 +957,74 @@ class DualConnectionManager:
     def GetServerInfo(self):
         """Récupère les informations du serveur"""
         return (self.ServerAddress, self.ControlPort, self.DataPort)
+
+    async def ReconnectWithRetry(self, MaxAttempts: int = NetworkConfig.RECONNECT_INFINITE,
+                                  OnAttempt=None) -> bool:
+        """
+        Tente de se reconnecter avec backoff exponentiel
+
+        Args:
+            MaxAttempts: Nombre maximum de tentatives (-1 = infini)
+            OnAttempt: Callback appelé avant chaque tentative (attempt_number, delay)
+
+        Returns:
+            True si reconnexion réussie
+        """
+        if not self.ServerAddress or not self.ControlPort or not self.Password:
+            self.Logger.error("Informations de connexion manquantes pour la reconnexion")
+            return False
+
+        Attempt = 0
+        while True:
+            Attempt += 1
+
+            # Vérifie si on a atteint le maximum de tentatives
+            if MaxAttempts != NetworkConfig.RECONNECT_INFINITE and Attempt > MaxAttempts:
+                self.Logger.error(f"Échec de la reconnexion après {MaxAttempts} tentatives")
+                return False
+
+            # Calcule le délai avec backoff exponentiel
+            if Attempt == 1:
+                Delay = 0  # Première tentative immédiate
+            else:
+                Delay = min(
+                    NetworkConfig.RECONNECT_BASE_DELAY * (2 ** (Attempt - 2)),
+                    NetworkConfig.RECONNECT_MAX_DELAY
+                )
+
+            # Notifie via callback
+            if OnAttempt:
+                try:
+                    OnAttempt(Attempt, Delay)
+                except Exception as e:
+                    self.Logger.error(f"Erreur dans callback OnAttempt: {e}")
+
+            # Attend avant de réessayer (sauf première tentative)
+            if Delay > 0:
+                self.Logger.info(f"Tentative de reconnexion #{Attempt} dans {Delay}s...")
+                await asyncio.sleep(Delay)
+            else:
+                self.Logger.info(f"Tentative de reconnexion #{Attempt}...")
+
+            # Ferme les connexions existantes
+            await self.Disconnect()
+
+            # Tente la reconnexion
+            try:
+                Success = await self.ConnectToDualPorts(
+                    self.ServerAddress,
+                    self.ControlPort,
+                    self.DataPort,
+                    self.Password
+                )
+
+                if Success:
+                    self.Logger.info(f"✓ Reconnexion réussie après {Attempt} tentative(s)")
+                    return True
+                else:
+                    self.Logger.warning(f"✗ Tentative #{Attempt} échouée")
+
+            except Exception as e:
+                self.Logger.warning(f"✗ Tentative #{Attempt} échouée: {e}")
+
+            # Continue la boucle pour réessayer

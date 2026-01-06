@@ -50,6 +50,9 @@ class ClientWindow(QMainWindow):
     # Signal pour notifier une erreur critique nécessitant déconnexion (thread-safe)
     CriticalErrorSignal = pyqtSignal(dict)
 
+    # Signal pour notifier les tentatives de reconnexion (thread-safe)
+    ReconnectingSignal = pyqtSignal(int, float)  # (attempt, delay)
+
     def __init__(self):
         super().__init__()
 
@@ -87,6 +90,9 @@ class ClientWindow(QMainWindow):
 
         # Connecte le signal d'erreur critique
         self.CriticalErrorSignal.connect(self.OnCriticalError)
+
+        # Connecte le signal de reconnexion
+        self.ReconnectingSignal.connect(self.OnReconnecting)
 
     def SetupUI(self):
         """Configure l'interface utilisateur"""
@@ -131,6 +137,9 @@ class ClientWindow(QMainWindow):
 
             # Configure le callback d'erreur critique
             self.Client.OnCriticalError = lambda errorInfo: self.CriticalErrorSignal.emit(errorInfo)
+
+            # Configure le callback de reconnexion
+            self.Client.OnReconnecting = lambda attempt, delay: self.ReconnectingSignal.emit(attempt, delay)
 
             # Démarrer le client dans un thread asyncio séparé
             import threading
@@ -279,6 +288,26 @@ class ClientWindow(QMainWindow):
         )
 
         # Met à jour l'interface de connexion
+        if hasattr(self, 'ConnectionTab') and self.ConnectionTab:
+            self.ConnectionTab.Refresh()
+
+    def OnReconnecting(self, Attempt: int, Delay: float):
+        """
+        Appelé lors de chaque tentative de reconnexion automatique.
+        Cette méthode est appelée via le signal Qt (thread-safe).
+
+        Args:
+            Attempt: Numéro de la tentative
+            Delay: Délai avant cette tentative (en secondes)
+        """
+        if Delay > 0:
+            self.Logger.info(f"🔄 Reconnexion automatique - tentative #{Attempt} dans {Delay}s...")
+            self.UpdateStatusBar(f"🔄 Reconnexion dans {Delay:.0f}s (tentative #{Attempt})...")
+        else:
+            self.Logger.info(f"🔄 Reconnexion automatique - tentative #{Attempt}...")
+            self.UpdateStatusBar(f"🔄 Reconnexion en cours (tentative #{Attempt})...")
+
+        # Met à jour l'interface de connexion pour refléter l'état de reconnexion
         if hasattr(self, 'ConnectionTab') and self.ConnectionTab:
             self.ConnectionTab.Refresh()
 
