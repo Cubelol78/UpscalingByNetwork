@@ -530,37 +530,42 @@ class PerformanceConfigManager:
         IsLaptop = self._IsLaptopGpu(GpuName) if GpuName else False
 
         # Ajuste selon la VRAM disponible (chaque thread utilise de la mémoire GPU)
-        # Pour les GPU avec peu de VRAM, on réduit fortement les threads
-        if VramMb > 0 and VramMb <= 4096:
-            # 4GB ou moins: très conservateur (laptop, entrée de gamme)
+        # Pour les GPU avec peu de VRAM, on réduit les threads mais pas trop
+        if VramMb > 0 and VramMb <= 2048:
+            # 2GB ou moins: très conservateur (cartes très anciennes)
             MaxProcessThreads = 2
-            self.Logger.debug(f"VRAM faible ({VramMb}MB), threads limités à {MaxProcessThreads}")
+            self.Logger.debug(f"VRAM très faible ({VramMb}MB), threads limités à {MaxProcessThreads}")
+        elif VramMb > 0 and VramMb <= 4096:
+            # 3-4GB: modéré (GTX 970, GTX 1050Ti, etc.)
+            MaxProcessThreads = 6
+            self.Logger.debug(f"VRAM modérée ({VramMb}MB), threads limités à {MaxProcessThreads}")
         elif VramMb > 0 and VramMb <= 6144:
-            # 6GB: modéré
-            MaxProcessThreads = 3
+            # 6GB: bon
+            MaxProcessThreads = 6
         elif VramMb > 0 and VramMb <= 8192:
-            # 8GB: standard
-            MaxProcessThreads = 4
+            # 8GB: très bon
+            MaxProcessThreads = 6
         else:
             # 12GB+: peut gérer plus de parallélisme
-            MaxProcessThreads = 6
+            MaxProcessThreads = 8
 
         # Réduction supplémentaire pour les GPU laptop (throttling thermique)
         if IsLaptop:
             MaxProcessThreads = max(2, MaxProcessThreads - 1)
             self.Logger.debug(f"GPU laptop détecté, threads réduits à {MaxProcessThreads}")
 
-        # Load threads: I/O bound, un peu plus pour les GPU modernes
-        LoadThreads = min(2, max(1, CpuCores // 4))
+        # Load threads: I/O bound, toujours au moins 2
+        LoadThreads = min(4, max(2, CpuCores // 4))
 
         # Process threads: limité par VRAM et type de GPU
         if IsModernGpu:
-            ProcessThreads = min(MaxProcessThreads, max(2, CpuCores // 2))
+            ProcessThreads = min(MaxProcessThreads, max(4, CpuCores // 2))
         else:
-            ProcessThreads = min(MaxProcessThreads, max(2, CpuCores // 3))
+            # Pour les anciens GPU (GTX 970, etc.), on peut quand même paralléliser
+            ProcessThreads = min(MaxProcessThreads, max(4, CpuCores // 3))
 
-        # Save threads: I/O bound, similaire à load
-        SaveThreads = min(2, max(1, CpuCores // 4))
+        # Save threads: I/O bound, toujours au moins 2
+        SaveThreads = min(4, max(2, CpuCores // 4))
 
         return {
             "load": LoadThreads,
