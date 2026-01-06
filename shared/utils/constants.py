@@ -41,6 +41,9 @@ class MessageType:
     # Déconnexion
     DISCONNECT = "disconnect"
 
+    # Authentification canal Data
+    DATA_CHANNEL_AUTH = "data_channel_auth"
+
 
 # ============================================================================
 # CODES D'ERREUR
@@ -134,6 +137,7 @@ class NetworkConfig:
     """Configuration réseau par défaut"""
 
     DEFAULT_PORT = 8765
+    DEFAULT_DATA_PORT = 8766  # Port dédié aux transferts de données (batches)
     DEFAULT_HOST = "0.0.0.0"
     MAX_MESSAGE_SIZE = 5 * 1024 * 1024 * 1024  # 5 GB - Les batches d'images upscalées peuvent être très lourds
     HEARTBEAT_INTERVAL = 10  # secondes

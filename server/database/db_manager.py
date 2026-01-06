@@ -22,7 +22,8 @@ from shared.utils.constants import JobStatus, BatchStatus
 # Paramètres par défaut du serveur
 DEFAULT_PARAMETERS = {
     "server_ip": ("0.0.0.0", "Adresse IP d'écoute du serveur"),
-    "server_port": ("8765", "Port d'écoute du serveur"),
+    "server_port": ("8765", "Port de contrôle du serveur (handshake, heartbeat)"),
+    "server_data_port": ("8766", "Port de données du serveur (transferts de batches)"),
     "server_password": ("", "Mot de passe du serveur (vide = désactivé)"),
     "work_directory": ("./work", "Répertoire de travail pour les fichiers"),
     "batch_size": ("100", "Nombre d'images par batch"),
@@ -259,6 +260,7 @@ class DatabaseManager:
         return {
             'ip': self.GetParameter('server_ip', '0.0.0.0'),
             'port': self.GetParameterInt('server_port', 8765),
+            'data_port': self.GetParameterInt('server_data_port', 8766),
             'password': self.GetParameter('server_password', ''),
             'work_directory': self.GetParameter('work_directory', './work'),
             'batch_size': self.GetParameterInt('batch_size', 100),
@@ -270,7 +272,7 @@ class DatabaseManager:
         Sauvegarde la configuration serveur dans la base de données.
 
         Args:
-            Config: Dictionnaire avec ip, port, password, work_directory, batch_size, compression_level
+            Config: Dictionnaire avec ip, port, data_port, password, work_directory, batch_size, compression_level
 
         Returns:
             True si succès
@@ -279,7 +281,9 @@ class DatabaseManager:
             if 'ip' in Config:
                 self.SetParameter('server_ip', Config['ip'], "Adresse IP d'écoute du serveur")
             if 'port' in Config:
-                self.SetParameter('server_port', str(Config['port']), "Port d'écoute du serveur")
+                self.SetParameter('server_port', str(Config['port']), "Port de contrôle du serveur")
+            if 'data_port' in Config:
+                self.SetParameter('server_data_port', str(Config['data_port']), "Port de données du serveur")
             if 'password' in Config:
                 self.SetParameter('server_password', Config['password'], "Mot de passe du serveur")
             if 'work_directory' in Config:

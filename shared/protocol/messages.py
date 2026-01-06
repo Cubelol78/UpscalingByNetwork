@@ -492,6 +492,24 @@ class DisconnectMessage(BaseMessage):
         super().__init__(MessageType.DISCONNECT, Payload)
 
 
+class DataChannelAuth(BaseMessage):
+    """Authentification sur le canal Data (port dédié aux transferts)"""
+
+    def __init__(self, ClientId: str):
+        """
+        Args:
+            ClientId: ID du client (reçu lors de l'authentification sur le canal Control)
+        """
+        Payload = {
+            "client_id": ClientId
+        }
+        super().__init__(MessageType.DATA_CHANNEL_AUTH, Payload)
+
+    def GetClientId(self) -> str:
+        """Récupère l'ID du client"""
+        return self.Payload.get("client_id", "")
+
+
 # ============================================================================
 # FACTORY DE MESSAGES
 # ============================================================================
@@ -518,6 +536,7 @@ class MessageFactory:
         MessageType.JOB_FAILED: JobFailedMessage,
         MessageType.ERROR_MESSAGE: ErrorMessage,
         MessageType.DISCONNECT: DisconnectMessage,
+        MessageType.DATA_CHANNEL_AUTH: DataChannelAuth,
     }
 
     @classmethod

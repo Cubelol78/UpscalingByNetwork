@@ -305,6 +305,46 @@ class EncryptionHandler:
         """
         return self.AesKey is not None
 
+    def ExportEncryptionContext(self) -> dict:
+        """
+        Exporte le contexte de chiffrement pour le partager avec une autre connexion.
+        Utilisé pour dupliquer le contexte du canal Control vers le canal Data.
+
+        Returns:
+            Dictionnaire contenant la clé AES et la configuration de compression
+        """
+        if self.AesKey is None:
+            raise ValueError("Contexte non initialisé. Effectuez d'abord le handshake.")
+
+        return {
+            "aes_key": base64.b64encode(self.AesKey).decode('utf-8'),
+            "compression_algo": self.CompressionHandler.GetAlgorithm(),
+            "compression_level": self.CompressionHandler.GetLevel()
+        }
+
+    def ImportEncryptionContext(self, Context: dict):
+        """
+        Importe un contexte de chiffrement depuis une autre connexion.
+        Utilisé pour configurer le canal Data avec le même contexte que le canal Control.
+
+        Args:
+            Context: Dictionnaire retourné par ExportEncryptionContext()
+        """
+        if "aes_key" not in Context:
+            raise ValueError("Contexte invalide: clé AES manquante")
+
+        # Importe la clé AES
+        self.AesKey = base64.b64decode(Context["aes_key"])
+
+        # Configure la compression
+        if "compression_algo" in Context:
+            self.CompressionHandler.SetAlgorithm(Context["compression_algo"])
+
+        if "compression_level" in Context:
+            self.CompressionHandler.SetLevel(Context["compression_level"])
+
+        self.Logger.info(f"Contexte de chiffrement importé (compression: {Context.get('compression_algo', 'none')})")
+
 
 class PasswordHasher:
     """Gestionnaire de hashage de mots de passe"""

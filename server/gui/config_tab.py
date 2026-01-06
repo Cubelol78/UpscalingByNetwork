@@ -104,7 +104,7 @@ class ConfigTab(QWidget):
         Layout.addStretch()
 
     def CreateNetworkAddressGroup(self) -> QGroupBox:
-        """Crée le groupe d'adresse réseau (IP/Port) - appliqué via bouton"""
+        """Crée le groupe d'adresse réseau (IP/Ports) - appliqué via bouton"""
         Group = QGroupBox("Adresse reseau (cliquer Appliquer pour changer)")
         Group.setObjectName("NetworkGroup")  # Permet de cibler avec CSS si nécessaire
 
@@ -116,12 +116,33 @@ class ConfigTab(QWidget):
         self.IpInput.setPlaceholderText("0.0.0.0 (toutes les interfaces)")
         FormLayout.addRow("Adresse IP:", self.IpInput)
 
-        # Port
+        # Port Control (handshake, heartbeat)
+        ControlPortLayout = QHBoxLayout()
         self.PortInput = QSpinBox()
         self.PortInput.setMinimum(1024)
         self.PortInput.setMaximum(65535)
         self.PortInput.setValue(8765)
-        FormLayout.addRow("Port:", self.PortInput)
+        ControlPortLayout.addWidget(self.PortInput)
+
+        ControlPortNote = QLabel("(handshake, heartbeat)")
+        ControlPortNote.setProperty("class", "hint")
+        ControlPortLayout.addWidget(ControlPortNote)
+        ControlPortLayout.addStretch()
+        FormLayout.addRow("Port Control:", ControlPortLayout)
+
+        # Port Data (transferts de batches)
+        DataPortLayout = QHBoxLayout()
+        self.DataPortInput = QSpinBox()
+        self.DataPortInput.setMinimum(1024)
+        self.DataPortInput.setMaximum(65535)
+        self.DataPortInput.setValue(8766)
+        DataPortLayout.addWidget(self.DataPortInput)
+
+        DataPortNote = QLabel("(transferts de batches)")
+        DataPortNote.setProperty("class", "hint")
+        DataPortLayout.addWidget(DataPortNote)
+        DataPortLayout.addStretch()
+        FormLayout.addRow("Port Data:", DataPortLayout)
 
         MainLayout.addLayout(FormLayout)
 
@@ -304,6 +325,7 @@ class ConfigTab(QWidget):
 
                 self.IpInput.setText(Config.get('ip', '0.0.0.0'))
                 self.PortInput.setValue(Config.get('port', 8765))
+                self.DataPortInput.setValue(Config.get('data_port', 8766))
                 self.PasswordInput.setText(Config.get('password', ''))
                 self.WorkDirInput.setText(Config.get('work_directory', './work'))
                 self.BatchSizeInput.setValue(Config.get('batch_size', 100))
@@ -320,6 +342,7 @@ class ConfigTab(QWidget):
                 # Valeurs par défaut si pas de DB
                 self.IpInput.setText('0.0.0.0')
                 self.PortInput.setValue(8765)
+                self.DataPortInput.setValue(8766)
                 self.PasswordInput.setText('')
                 self.WorkDirInput.setText('./work')
                 self.BatchSizeInput.setValue(100)
@@ -519,17 +542,19 @@ class ConfigTab(QWidget):
 
     def ApplyNetworkChanges(self):
         """
-        Applique les changements d'adresse réseau (IP/Port) au serveur actif.
+        Applique les changements d'adresse réseau (IP/Ports) au serveur actif.
         Utilise le rebind dynamique sans perdre les clients connectés.
         """
         NewIp = self.IpInput.text() or '0.0.0.0'
-        NewPort = self.PortInput.value()
+        NewControlPort = self.PortInput.value()
+        NewDataPort = self.DataPortInput.value()
 
         # Sauvegarde d'abord dans la base de données
         Database = self.ParentWindow.GetDatabase()
         if Database:
             Database.SetParameter('server_ip', NewIp, "Adresse IP d'écoute du serveur")
-            Database.SetParameter('server_port', str(NewPort), "Port d'écoute du serveur")
+            Database.SetParameter('server_port', str(NewControlPort), "Port de contrôle du serveur")
+            Database.SetParameter('server_data_port', str(NewDataPort), "Port de données du serveur")
 
         # Vérifie si le serveur est actif
         if not hasattr(self.ParentWindow, 'Server') or not self.ParentWindow.Server:
@@ -546,8 +571,10 @@ class ConfigTab(QWidget):
         Server = self.ParentWindow.Server
 
         # Vérifie si l'adresse a changé
-        CurrentHost, CurrentPort = Server.NetworkManager.GetAddress()
-        if NewIp == CurrentHost and NewPort == CurrentPort:
+        CurrentHost, CurrentControlPort = Server.NetworkManager.GetControlAddress()
+        _, CurrentDataPort = Server.NetworkManager.GetDataAddress()
+        if (NewIp == CurrentHost and NewControlPort == CurrentControlPort
+                and NewDataPort == CurrentDataPort):
             QMessageBox.information(
                 self,
                 "Information",
@@ -562,7 +589,9 @@ class ConfigTab(QWidget):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                return loop.run_until_complete(Server.RebindNetwork(NewIp, NewPort))
+                return loop.run_until_complete(
+                    Server.RebindNetwork(NewIp, NewControlPort, NewDataPort)
+                )
             finally:
                 loop.close()
 
@@ -572,26 +601,34 @@ class ConfigTab(QWidget):
         RebindThread.join(timeout=5)
 
         # Vérifie le résultat
-        NewCurrentHost, NewCurrentPort = Server.NetworkManager.GetAddress()
-        if NewCurrentHost == NewIp and NewCurrentPort == NewPort:
+        NewCurrentHost, NewCurrentControlPort = Server.NetworkManager.GetControlAddress()
+        _, NewCurrentDataPort = Server.NetworkManager.GetDataAddress()
+        if (NewCurrentHost == NewIp and NewCurrentControlPort == NewControlPort
+                and NewCurrentDataPort == NewDataPort):
             self.ShowSavedIndicator()
             QMessageBox.information(
                 self,
                 "Succes",
                 f"Adresse reseau changee!\n\n"
-                f"Nouvelle adresse: {NewIp}:{NewPort}\n\n"
+                f"Control: {NewIp}:{NewControlPort}\n"
+                f"Data: {NewIp}:{NewDataPort}\n\n"
                 f"Les clients connectes ne sont pas affectes."
             )
-            self.ParentWindow.Logger.info(f"Rebind reseau reussi: {NewIp}:{NewPort}")
+            self.ParentWindow.Logger.info(
+                f"Rebind reseau reussi: Control={NewIp}:{NewControlPort}, Data={NewIp}:{NewDataPort}"
+            )
         else:
             QMessageBox.warning(
                 self,
                 "Echec",
-                f"Impossible de changer l'adresse reseau vers {NewIp}:{NewPort}.\n\n"
-                f"Le port est peut-etre deja utilise.\n"
-                f"Le serveur continue sur {NewCurrentHost}:{NewCurrentPort}."
+                f"Impossible de changer l'adresse reseau.\n\n"
+                f"Un des ports est peut-etre deja utilise.\n"
+                f"Le serveur continue sur Control={NewCurrentHost}:{NewCurrentControlPort}, "
+                f"Data={NewCurrentHost}:{NewCurrentDataPort}."
             )
-            self.ParentWindow.Logger.error(f"Echec du rebind vers {NewIp}:{NewPort}")
+            self.ParentWindow.Logger.error(
+                f"Echec du rebind vers {NewIp}:{NewControlPort}/{NewDataPort}"
+            )
 
     def ShowSavedIndicator(self):
         """Affiche brièvement l'indicateur de sauvegarde"""
@@ -627,6 +664,7 @@ class ConfigTab(QWidget):
         return {
             'ip': self.IpInput.text() or '0.0.0.0',
             'port': self.PortInput.value(),
+            'data_port': self.DataPortInput.value(),
             'password': self.PasswordInput.text(),
             'work_directory': self.WorkDirInput.text() or './work',
             'batch_size': self.BatchSizeInput.value(),

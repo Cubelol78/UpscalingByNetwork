@@ -207,7 +207,7 @@ class BatchDistributor:
     async def SendBatchToClient(self, BatchObj: Batch, VideoObj: Video,
                                ClientId: str) -> bool:
         """
-        Envoie un batch d'images à un client
+        Envoie un batch d'images à un client via le canal Data
 
         Args:
             BatchObj: Objet Batch
@@ -218,6 +218,12 @@ class BatchDistributor:
             True si succès
         """
         try:
+            # Vérifie que le canal Data est connecté
+            ClientInfo = self.ClientManager.Clients.get(ClientId)
+            if not ClientInfo or not ClientInfo.IsDataConnected():
+                self.Logger.warning(f"Canal Data non connecté pour {ClientId}, fallback sur Control")
+                return await self._SendBatchViaControl(BatchObj, VideoObj, ClientId)
+
             # Récupère les chemins des images du batch
             FramePaths = self.VideoProcessor.GetBatchFrames(VideoObj.VideoId, BatchObj)
 
@@ -225,7 +231,7 @@ class BatchDistributor:
                 self.Logger.error(f"Aucune image trouvée pour le batch {BatchObj.BatchId}")
                 return False
 
-            self.Logger.info(f"Envoi de {len(FramePaths)} images au client {ClientId}...")
+            self.Logger.info(f"Envoi de {len(FramePaths)} images au client {ClientId} via Data...")
 
             # Charge et encode les images en base64
             Images = []
@@ -262,15 +268,15 @@ class BatchDistributor:
                 TtaMode=VideoObj.TtaMode
             )
 
-            # Envoie au client
-            Success = await self.ClientManager.SendMessage(
+            # Envoie via le canal Data
+            Success = await self.ClientManager.SendDataMessage(
                 ClientId,
                 Message.ToJson(),
                 Encrypted=True
             )
 
             if Success:
-                self.Logger.info(f"✓ Batch {BatchObj.BatchId} envoyé au client {ClientId}")
+                self.Logger.info(f"✓ Batch {BatchObj.BatchId} envoyé au client {ClientId} (Data)")
             else:
                 self.Logger.error(f"Échec de l'envoi du batch au client {ClientId}")
 
@@ -278,6 +284,74 @@ class BatchDistributor:
 
         except Exception as e:
             self.Logger.error(f"Erreur lors de l'envoi du batch: {e}")
+            return False
+
+    async def _SendBatchViaControl(self, BatchObj: Batch, VideoObj: Video,
+                                   ClientId: str) -> bool:
+        """
+        Fallback: Envoie un batch via le canal Control (compatibilité)
+
+        Args:
+            BatchObj: Objet Batch
+            VideoObj: Objet Video
+            ClientId: ID du client
+
+        Returns:
+            True si succès
+        """
+        try:
+            # Récupère les chemins des images du batch
+            FramePaths = self.VideoProcessor.GetBatchFrames(VideoObj.VideoId, BatchObj)
+
+            if not FramePaths:
+                self.Logger.error(f"Aucune image trouvée pour le batch {BatchObj.BatchId}")
+                return False
+
+            self.Logger.info(f"Envoi de {len(FramePaths)} images au client {ClientId} via Control (fallback)...")
+
+            # Charge et encode les images en base64
+            Images = []
+            for Index, FramePath in enumerate(FramePaths):
+                try:
+                    with open(FramePath, 'rb') as f:
+                        ImageData = f.read()
+                    ImageB64 = base64.b64encode(ImageData).decode('utf-8')
+                    FrameNumber = BatchObj.StartFrame + Index
+                    Images.append({
+                        "id": str(FrameNumber),
+                        "number": FrameNumber,
+                        "data": ImageB64,
+                        "filename": os.path.basename(FramePath)
+                    })
+                except Exception as e:
+                    self.Logger.error(f"Erreur lors du chargement de {FramePath}: {e}")
+                    continue
+
+            Message = BatchAssignment(
+                BatchId=BatchObj.BatchId,
+                VideoId=VideoObj.VideoId,
+                Images=Images,
+                UpscaleFactor=VideoObj.UpscaleFactor,
+                Model=VideoObj.Model,
+                TtaMode=VideoObj.TtaMode
+            )
+
+            # Envoie via Control (fallback)
+            Success = await self.ClientManager.SendMessage(
+                ClientId,
+                Message.ToJson(),
+                Encrypted=True
+            )
+
+            if Success:
+                self.Logger.info(f"✓ Batch {BatchObj.BatchId} envoyé au client {ClientId} (Control fallback)")
+            else:
+                self.Logger.error(f"Échec de l'envoi du batch au client {ClientId}")
+
+            return Success
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de l'envoi du batch (Control): {e}")
             return False
 
     async def ReceiveBatchResult(self, ClientId: str, ResultMessage: BatchResult) -> bool:

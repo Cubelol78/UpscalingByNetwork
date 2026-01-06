@@ -11,7 +11,7 @@ from pathlib import Path
 
 from shared.protocol.messages import (
     HandshakeRequest, HandshakeResponse, AuthRequest, AuthResponse,
-    MessageFactory
+    MessageFactory, DataChannelAuth
 )
 from shared.protocol.encryption import EncryptionHandler
 from shared.utils.logger import GetClientLogger
@@ -505,3 +505,391 @@ class SavedServersManager:
     def GetAllServers(self) -> dict:
         """Récupère tous les serveurs"""
         return self.Servers.copy()
+
+
+# ============================================================================
+# DUAL CONNECTION MANAGER (Architecture dual-port)
+# ============================================================================
+
+class DualConnectionManager:
+    """
+    Gestionnaire de connexion dual-port (Control + Data).
+    Le canal Control gère handshake/heartbeat/status.
+    Le canal Data gère les transferts de batches.
+    """
+
+    def __init__(self):
+        """Initialise le gestionnaire de connexion dual-port"""
+        self.Logger = GetClientLogger()
+
+        # Connexion Control (handshake, heartbeat, status)
+        self.ControlReader = None
+        self.ControlWriter = None
+        self.ControlEncryption = EncryptionHandler()
+        self.ControlConnected = False
+
+        # Connexion Data (transferts de batches)
+        self.DataReader = None
+        self.DataWriter = None
+        self.DataEncryption = EncryptionHandler()
+        self.DataConnected = False
+
+        # État global
+        self.Authenticated = False
+        self.ClientId = None
+        self.ServerAddress = None
+        self.ControlPort = None
+        self.DataPort = None
+
+    async def ConnectToDualPorts(self, Host: str, ControlPort: int, DataPort: int,
+                                  Password: str = "") -> bool:
+        """
+        Connecte aux deux ports du serveur (Control + Data)
+
+        Args:
+            Host: Adresse du serveur
+            ControlPort: Port de contrôle (handshake, heartbeat)
+            DataPort: Port de données (batches)
+            Password: Mot de passe (si requis)
+
+        Returns:
+            True si les deux connexions sont établies
+        """
+        try:
+            self.ServerAddress = Host
+            self.ControlPort = ControlPort
+            self.DataPort = DataPort
+
+            # 1. Connexion au port Control avec handshake complet
+            self.Logger.info(f"Connexion au port Control {Host}:{ControlPort}...")
+            if not await self._ConnectControl(Host, ControlPort, Password):
+                return False
+
+            # 2. Connexion au port Data et authentification
+            self.Logger.info(f"Connexion au port Data {Host}:{DataPort}...")
+            if not await self._ConnectData(Host, DataPort):
+                # Ferme la connexion Control si Data échoue
+                await self._DisconnectControl()
+                return False
+
+            self.Logger.info(f"✓ Connexion dual-port établie (Control: {ControlPort}, Data: {DataPort})")
+            return True
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la connexion dual-port: {e}")
+            await self.Disconnect()
+            return False
+
+    async def _ConnectControl(self, Host: str, Port: int, Password: str) -> bool:
+        """Établit la connexion Control avec handshake et authentification"""
+        try:
+            # Connexion TCP Control
+            self.ControlReader, self.ControlWriter = await asyncio.wait_for(
+                asyncio.open_connection(Host, Port),
+                timeout=NetworkConfig.CONNECTION_TIMEOUT
+            )
+            self.ControlConnected = True
+            self.Logger.info("✓ Connexion TCP Control établie")
+
+            # Handshake
+            if not await self._PerformHandshake():
+                self.Logger.error("Échec du handshake Control")
+                return False
+
+            # Authentification
+            if not await self._Authenticate(Password):
+                self.Logger.error("Échec de l'authentification")
+                return False
+
+            self.Authenticated = True
+            self.Logger.info(f"✓ Client authentifié (ID: {self.ClientId})")
+
+            return True
+
+        except asyncio.TimeoutError:
+            self.Logger.error("Timeout connexion Control")
+            return False
+        except Exception as e:
+            self.Logger.error(f"Erreur connexion Control: {e}")
+            return False
+
+    async def _ConnectData(self, Host: str, Port: int) -> bool:
+        """Établit la connexion Data et s'authentifie avec DataChannelAuth"""
+        try:
+            # Connexion TCP Data
+            self.DataReader, self.DataWriter = await asyncio.wait_for(
+                asyncio.open_connection(Host, Port),
+                timeout=NetworkConfig.CONNECTION_TIMEOUT
+            )
+            self.Logger.info("✓ Connexion TCP Data établie")
+
+            # Importe le contexte de chiffrement depuis Control
+            Context = self.ControlEncryption.ExportEncryptionContext()
+            self.DataEncryption.ImportEncryptionContext(Context)
+            self.Logger.info("✓ Contexte de chiffrement importé sur Data")
+
+            # Envoie DataChannelAuth pour s'identifier
+            AuthMessage = DataChannelAuth(self.ClientId)
+            EncryptedAuth = self.DataEncryption.EncryptMessage(AuthMessage.ToJson())
+
+            # Envoie avec préfixe de taille
+            MessageBytes = EncryptedAuth.encode('utf-8')
+            MessageSize = len(MessageBytes)
+            SizeBytes = MessageSize.to_bytes(4, byteorder='big')
+
+            self.DataWriter.write(SizeBytes + MessageBytes)
+            await self.DataWriter.drain()
+
+            self.DataConnected = True
+            self.Logger.info("✓ Authentification Data envoyée")
+
+            return True
+
+        except asyncio.TimeoutError:
+            self.Logger.error("Timeout connexion Data")
+            return False
+        except Exception as e:
+            self.Logger.error(f"Erreur connexion Data: {e}")
+            return False
+
+    async def _PerformHandshake(self) -> bool:
+        """Effectue le handshake sur le canal Control"""
+        try:
+            self.Logger.info("Handshake avec le serveur...")
+
+            # Génère la clé publique
+            ClientPublicKey = self.ControlEncryption.GenerateKeyPair()
+            SupportedCompression = self.ControlEncryption.GetSupportedCompression()
+
+            Request = HandshakeRequest(
+                PublicKey=ClientPublicKey,
+                ProtocolVersion="1.0",
+                SupportedCompression=SupportedCompression
+            )
+
+            await self._SendControlMessage(Request.ToJson(), Encrypted=False)
+
+            # Attend la réponse
+            ResponseData = await asyncio.wait_for(
+                self._ReceiveControlMessage(Decrypt=False),
+                timeout=NetworkConfig.CONNECTION_TIMEOUT
+            )
+
+            if not ResponseData:
+                return False
+
+            Response = MessageFactory.CreateFromJson(ResponseData)
+            if not isinstance(Response, HandshakeResponse) or not Response.IsSuccess():
+                self.Logger.error(f"Handshake refusé: {Response.Payload.get('message', '')}")
+                return False
+
+            # Configure la clé partagée
+            ServerPublicKey = Response.GetPublicKey()
+            if not self.ControlEncryption.ComputeSharedKey(ServerPublicKey):
+                return False
+
+            # Configure la compression
+            SelectedCompression = Response.GetSelectedCompression()
+            self.ControlEncryption.SetCompression(SelectedCompression)
+
+            # Applique le niveau de compression
+            PerformanceConfig = PerformanceConfigManager()
+            Config = PerformanceConfig.Load()
+            CompressionLevel = Config.get('compression_level', CompressionConfig.LEVEL_DEFAULT)
+            self.ControlEncryption.CompressionHandler.SetLevel(CompressionLevel)
+
+            self.Logger.info(f"✓ Handshake réussi, compression: {SelectedCompression}")
+            return True
+
+        except Exception as e:
+            self.Logger.error(f"Erreur handshake: {e}")
+            return False
+
+    async def _Authenticate(self, Password: str) -> bool:
+        """Authentification sur le canal Control"""
+        try:
+            self.Logger.info("Authentification...")
+
+            Request = AuthRequest(Password=Password)
+            await self._SendControlMessage(Request.ToJson(), Encrypted=True)
+
+            EncryptedResponse = await asyncio.wait_for(
+                self._ReceiveControlMessage(Decrypt=False),
+                timeout=NetworkConfig.CONNECTION_TIMEOUT
+            )
+
+            if not EncryptedResponse:
+                return False
+
+            DecryptedResponse = self.ControlEncryption.DecryptMessage(EncryptedResponse)
+            Response = MessageFactory.CreateFromJson(DecryptedResponse)
+
+            if not isinstance(Response, AuthResponse) or not Response.IsSuccess():
+                self.Logger.error(Response.Payload.get('message', 'Authentification refusée'))
+                return False
+
+            self.ClientId = Response.GetClientId()
+            self.Logger.info("✓ Authentification réussie")
+            return True
+
+        except Exception as e:
+            self.Logger.error(f"Erreur authentification: {e}")
+            return False
+
+    async def SendControlMessage(self, Message: str, Encrypted: bool = True) -> bool:
+        """Envoie un message via le canal Control"""
+        return await self._SendControlMessage(Message, Encrypted)
+
+    async def _SendControlMessage(self, Message: str, Encrypted: bool = True) -> bool:
+        """Envoie un message via Control (interne)"""
+        if not self.ControlConnected:
+            return False
+
+        try:
+            MessageToSend = Message
+            if Encrypted and self.ControlEncryption.IsReady():
+                MessageToSend = self.ControlEncryption.EncryptMessage(Message)
+
+            MessageBytes = MessageToSend.encode('utf-8')
+            MessageSize = len(MessageBytes)
+            SizeBytes = MessageSize.to_bytes(4, byteorder='big')
+
+            self.ControlWriter.write(SizeBytes + MessageBytes)
+            await self.ControlWriter.drain()
+            return True
+
+        except Exception as e:
+            self.Logger.error(f"Erreur envoi Control: {e}")
+            self.ControlConnected = False
+            return False
+
+    async def ReceiveControlMessage(self, Decrypt: bool = True) -> Optional[str]:
+        """Reçoit un message via le canal Control"""
+        return await self._ReceiveControlMessage(Decrypt)
+
+    async def _ReceiveControlMessage(self, Decrypt: bool = True) -> Optional[str]:
+        """Reçoit un message via Control (interne)"""
+        if not self.ControlConnected:
+            return None
+
+        try:
+            SizeBytes = await self.ControlReader.readexactly(4)
+            MessageSize = int.from_bytes(SizeBytes, byteorder='big')
+
+            if MessageSize <= 0 or MessageSize > NetworkConfig.MAX_MESSAGE_SIZE:
+                return None
+
+            MessageBytes = await self.ControlReader.readexactly(MessageSize)
+            ReceivedData = MessageBytes.decode('utf-8')
+
+            if Decrypt and self.ControlEncryption.IsReady():
+                return self.ControlEncryption.DecryptMessage(ReceivedData)
+
+            return ReceivedData
+
+        except Exception as e:
+            self.Logger.error(f"Erreur réception Control: {e}")
+            self.ControlConnected = False
+            return None
+
+    async def SendDataMessage(self, Message: str, Encrypted: bool = True) -> bool:
+        """Envoie un message via le canal Data"""
+        if not self.DataConnected:
+            self.Logger.error("Canal Data non connecté")
+            return False
+
+        try:
+            MessageToSend = Message
+            if Encrypted and self.DataEncryption.IsReady():
+                MessageToSend = self.DataEncryption.EncryptMessage(Message)
+
+            MessageBytes = MessageToSend.encode('utf-8')
+            MessageSize = len(MessageBytes)
+            SizeBytes = MessageSize.to_bytes(4, byteorder='big')
+
+            self.DataWriter.write(SizeBytes + MessageBytes)
+            await self.DataWriter.drain()
+            return True
+
+        except Exception as e:
+            self.Logger.error(f"Erreur envoi Data: {e}")
+            self.DataConnected = False
+            return False
+
+    async def ReceiveDataMessage(self, Decrypt: bool = True, Timeout: float = None) -> Optional[str]:
+        """Reçoit un message via le canal Data"""
+        if not self.DataConnected:
+            return None
+
+        try:
+            if Timeout:
+                SizeBytes = await asyncio.wait_for(
+                    self.DataReader.readexactly(4),
+                    timeout=Timeout
+                )
+            else:
+                SizeBytes = await self.DataReader.readexactly(4)
+
+            MessageSize = int.from_bytes(SizeBytes, byteorder='big')
+
+            if MessageSize <= 0 or MessageSize > NetworkConfig.MAX_MESSAGE_SIZE:
+                return None
+
+            MessageBytes = await self.DataReader.readexactly(MessageSize)
+            ReceivedData = MessageBytes.decode('utf-8')
+
+            if Decrypt and self.DataEncryption.IsReady():
+                return self.DataEncryption.DecryptMessage(ReceivedData)
+
+            return ReceivedData
+
+        except asyncio.TimeoutError:
+            return None
+        except Exception as e:
+            self.Logger.error(f"Erreur réception Data: {e}")
+            self.DataConnected = False
+            return None
+
+    async def _DisconnectControl(self):
+        """Ferme la connexion Control"""
+        if self.ControlWriter:
+            try:
+                self.ControlWriter.close()
+                await self.ControlWriter.wait_closed()
+            except:
+                pass
+        self.ControlConnected = False
+
+    async def _DisconnectData(self):
+        """Ferme la connexion Data"""
+        if self.DataWriter:
+            try:
+                self.DataWriter.close()
+                await self.DataWriter.wait_closed()
+            except:
+                pass
+        self.DataConnected = False
+
+    async def Disconnect(self):
+        """Déconnecte les deux canaux"""
+        await self._DisconnectControl()
+        await self._DisconnectData()
+        self.Authenticated = False
+        self.ClientId = None
+        self.Logger.info("Déconnecté du serveur (dual-port)")
+
+    def IsConnected(self) -> bool:
+        """Vérifie si connecté (les deux canaux)"""
+        return self.ControlConnected and self.DataConnected and self.Authenticated
+
+    def IsControlConnected(self) -> bool:
+        """Vérifie si le canal Control est connecté"""
+        return self.ControlConnected and self.Authenticated
+
+    def IsDataConnected(self) -> bool:
+        """Vérifie si le canal Data est connecté"""
+        return self.DataConnected
+
+    def GetServerInfo(self):
+        """Récupère les informations du serveur"""
+        return (self.ServerAddress, self.ControlPort, self.DataPort)

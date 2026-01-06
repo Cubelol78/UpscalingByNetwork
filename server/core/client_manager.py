@@ -11,7 +11,7 @@ from datetime import datetime
 
 from shared.protocol.messages import (
     HandshakeRequest, HandshakeResponse, AuthRequest, AuthResponse,
-    HeartbeatPing, HeartbeatPong, MessageFactory, ErrorMessage
+    HeartbeatPing, HeartbeatPong, MessageFactory, ErrorMessage, DataChannelAuth
 )
 from shared.protocol.encryption import EncryptionHandler, PasswordHasher
 from shared.protocol.compression import NegotiateCompression
@@ -22,7 +22,7 @@ from server.database.models import ClientHistory
 
 
 class ClientInfo:
-    """Information sur un client connecté"""
+    """Information sur un client connecté (architecture dual-port)"""
 
     def __init__(self, ClientId: str, Reader: asyncio.StreamReader,
                  Writer: asyncio.StreamWriter, IpAddress: str):
@@ -31,13 +31,25 @@ class ClientInfo:
 
         Args:
             ClientId: ID unique du client
-            Reader: StreamReader asyncio
-            Writer: StreamWriter asyncio
+            Reader: StreamReader asyncio (canal Control)
+            Writer: StreamWriter asyncio (canal Control)
             IpAddress: Adresse IP du client
         """
         self.ClientId = ClientId
-        self.Reader = Reader
-        self.Writer = Writer
+
+        # Connexion Control (handshake, heartbeat, status)
+        self.ControlReader = Reader
+        self.ControlWriter = Writer
+
+        # Connexion Data (transferts de batches) - configurée après DataChannelAuth
+        self.DataReader: asyncio.StreamReader = None
+        self.DataWriter: asyncio.StreamWriter = None
+        self.DataConnected = False
+
+        # Alias pour compatibilité descendante (utilise Control par défaut)
+        self.Reader = self.ControlReader
+        self.Writer = self.ControlWriter
+
         self.IpAddress = IpAddress
 
         # Récupérer l'adresse complète (IP, Port) depuis le Writer
@@ -50,6 +62,22 @@ class ClientInfo:
         self.LastHeartbeat = time.time()
         self.ConnectedAt = datetime.now()
         self.Authenticated = False
+
+    def SetDataConnection(self, Reader: asyncio.StreamReader, Writer: asyncio.StreamWriter):
+        """
+        Configure la connexion Data pour ce client
+
+        Args:
+            Reader: StreamReader pour le canal Data
+            Writer: StreamWriter pour le canal Data
+        """
+        self.DataReader = Reader
+        self.DataWriter = Writer
+        self.DataConnected = True
+
+    def IsDataConnected(self) -> bool:
+        """Vérifie si la connexion Data est établie"""
+        return self.DataConnected and self.DataWriter is not None
 
 
 class ClientManager:
@@ -290,7 +318,7 @@ class ClientManager:
 
     async def SendMessage(self, ClientId: str, Message: str, Encrypted: bool = True) -> bool:
         """
-        Envoie un message à un client
+        Envoie un message à un client via le canal Control
 
         Args:
             ClientId: ID du client
@@ -316,6 +344,143 @@ class ClientManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de l'envoi du message au client {ClientId}: {e}")
             return False
+
+    async def SendDataMessage(self, ClientId: str, Message: str, Encrypted: bool = True) -> bool:
+        """
+        Envoie un message à un client via le canal Data (pour les gros transferts)
+
+        Args:
+            ClientId: ID du client
+            Message: Message à envoyer (JSON)
+            Encrypted: Si True, chiffre le message
+
+        Returns:
+            True si succès
+        """
+        if ClientId not in self.Clients:
+            self.Logger.error(f"Client {ClientId} non trouvé")
+            return False
+
+        ClientInfo = self.Clients[ClientId]
+
+        if not ClientInfo.IsDataConnected():
+            self.Logger.error(f"Canal Data non connecté pour le client {ClientId}")
+            return False
+
+        try:
+            MessageToSend = Message
+            if Encrypted and ClientInfo.EncryptionHandler.IsReady():
+                MessageToSend = ClientInfo.EncryptionHandler.EncryptMessage(Message)
+
+            return await self._SendDataMessage(ClientInfo, MessageToSend)
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de l'envoi Data au client {ClientId}: {e}")
+            return False
+
+    async def _SendDataMessage(self, ClientInfo: 'ClientInfo', Message: str) -> bool:
+        """Envoie un message via le canal Data (interne)"""
+        try:
+            if not ClientInfo.DataWriter:
+                self.Logger.error(f"DataWriter non disponible pour {ClientInfo.ClientId}")
+                return False
+
+            # Format: taille (4 bytes) + message
+            MessageBytes = Message.encode('utf-8')
+            MessageSize = len(MessageBytes)
+            SizeBytes = MessageSize.to_bytes(4, byteorder='big')
+
+            ClientInfo.DataWriter.write(SizeBytes + MessageBytes)
+            await ClientInfo.DataWriter.drain()
+
+            return True
+
+        except (ConnectionResetError, BrokenPipeError) as e:
+            self.Logger.error(f"Connexion Data perdue avec {ClientInfo.ClientId}: {e}")
+            return False
+        except Exception as e:
+            self.Logger.error(f"Erreur d'envoi Data au client {ClientInfo.ClientId}: {e}")
+            return False
+
+    async def ReceiveDataMessage(self, ClientId: str, Decrypt: bool = True, Timeout: float = None) -> Optional[str]:
+        """
+        Reçoit un message d'un client via le canal Data
+
+        Args:
+            ClientId: ID du client
+            Decrypt: Si True, déchiffre le message
+            Timeout: Timeout optionnel en secondes
+
+        Returns:
+            Message reçu (JSON) ou None
+        """
+        if ClientId not in self.Clients:
+            self.Logger.error(f"Client {ClientId} non trouvé")
+            return None
+
+        ClientInfo = self.Clients[ClientId]
+
+        if not ClientInfo.IsDataConnected():
+            self.Logger.error(f"Canal Data non connecté pour le client {ClientId}")
+            return None
+
+        try:
+            if Timeout:
+                ReceivedData = await asyncio.wait_for(
+                    self._ReceiveDataMessage(ClientInfo),
+                    timeout=Timeout
+                )
+            else:
+                ReceivedData = await self._ReceiveDataMessage(ClientInfo)
+
+            if not ReceivedData:
+                return None
+
+            if Decrypt and ClientInfo.EncryptionHandler.IsReady():
+                return ClientInfo.EncryptionHandler.DecryptMessage(ReceivedData)
+
+            return ReceivedData
+
+        except asyncio.TimeoutError:
+            self.Logger.warning(f"Timeout de réception Data du client {ClientId}")
+            return None
+        except Exception as e:
+            self.Logger.error(f"Erreur de réception Data du client {ClientId}: {e}")
+            return None
+
+    async def _ReceiveDataMessage(self, ClientInfo: 'ClientInfo') -> Optional[str]:
+        """Reçoit un message via le canal Data (interne)"""
+        try:
+            if not ClientInfo.DataReader:
+                self.Logger.error(f"DataReader non disponible pour {ClientInfo.ClientId}")
+                return None
+
+            # Lit la taille (4 bytes)
+            SizeBytes = await ClientInfo.DataReader.readexactly(4)
+            MessageSize = int.from_bytes(SizeBytes, byteorder='big')
+
+            # Validation de la taille
+            if MessageSize <= 0:
+                self.Logger.error(f"Taille de message Data invalide: {MessageSize}")
+                return None
+
+            if MessageSize > NetworkConfig.MAX_MESSAGE_SIZE:
+                self.Logger.error(f"Message Data trop grand: {MessageSize} bytes")
+                return None
+
+            # Lit le message
+            MessageBytes = await ClientInfo.DataReader.readexactly(MessageSize)
+            return MessageBytes.decode('utf-8')
+
+        except asyncio.IncompleteReadError:
+            self.Logger.warning(f"Connexion Data fermée par le client {ClientInfo.ClientId}")
+            return None
+        except (ConnectionResetError, BrokenPipeError) as e:
+            self.Logger.error(f"Connexion Data perdue avec {ClientInfo.ClientId}: {e}")
+            return None
+        except Exception as e:
+            self.Logger.error(f"Erreur de réception Data: {e}")
+            return None
 
     async def ReceiveMessage(self, ClientId: str, Decrypt: bool = True) -> Optional[str]:
         """
@@ -408,6 +573,99 @@ class ClientManager:
             self.Logger.error(f"Erreur de réception du client {ClientInfo.ClientId}: {e}")
             return None
 
+    async def HandleDataConnection(self, Reader: asyncio.StreamReader,
+                                    Writer: asyncio.StreamWriter) -> bool:
+        """
+        Gère une connexion entrante sur le port Data.
+        Le client doit s'identifier avec un DataChannelAuth contenant son ClientId.
+
+        Args:
+            Reader: StreamReader asyncio
+            Writer: StreamWriter asyncio
+
+        Returns:
+            True si l'association a réussi
+        """
+        PeerName = Writer.get_extra_info('peername')
+        IpAddress = PeerName[0] if PeerName else "unknown"
+
+        self.Logger.info(f"Connexion Data entrante depuis {IpAddress}")
+
+        try:
+            # Attend le message DataChannelAuth (chiffré)
+            # Le client utilise le même contexte de chiffrement que le canal Control
+            SizeBytes = await asyncio.wait_for(
+                Reader.readexactly(4),
+                timeout=NetworkConfig.CONNECTION_TIMEOUT
+            )
+            MessageSize = int.from_bytes(SizeBytes, byteorder='big')
+
+            if MessageSize <= 0 or MessageSize > NetworkConfig.MAX_MESSAGE_SIZE:
+                self.Logger.error(f"Taille de message Data invalide: {MessageSize}")
+                Writer.close()
+                await Writer.wait_closed()
+                return False
+
+            MessageBytes = await Reader.readexactly(MessageSize)
+            EncryptedData = MessageBytes.decode('utf-8')
+
+            # Essaie de trouver le client correspondant pour déchiffrer
+            # On parcourt tous les clients authentifiés de la même IP
+            ClientFound = None
+            DecryptedData = None
+
+            for ClientId, ClientInfo in self.Clients.items():
+                if ClientInfo.IpAddress == IpAddress and ClientInfo.Authenticated:
+                    try:
+                        DecryptedData = ClientInfo.EncryptionHandler.DecryptMessage(EncryptedData)
+                        if DecryptedData:
+                            ClientFound = ClientInfo
+                            break
+                    except:
+                        continue
+
+            if not DecryptedData or not ClientFound:
+                self.Logger.error(f"Impossible de déchiffrer le DataChannelAuth depuis {IpAddress}")
+                Writer.close()
+                await Writer.wait_closed()
+                return False
+
+            # Parse le message
+            Message = MessageFactory.CreateFromJson(DecryptedData)
+            if not isinstance(Message, DataChannelAuth):
+                self.Logger.error(f"Message inattendu sur port Data: {type(Message).__name__}")
+                Writer.close()
+                await Writer.wait_closed()
+                return False
+
+            # Vérifie que le ClientId correspond
+            ClaimedClientId = Message.GetClientId()
+            if ClaimedClientId != ClientFound.ClientId:
+                self.Logger.error(f"ClientId mismatch: {ClaimedClientId} vs {ClientFound.ClientId}")
+                Writer.close()
+                await Writer.wait_closed()
+                return False
+
+            # Association réussie
+            ClientFound.SetDataConnection(Reader, Writer)
+            self.Logger.info(f"Canal Data associé au client {ClientFound.ClientId}")
+
+            return True
+
+        except asyncio.TimeoutError:
+            self.Logger.error(f"Timeout lors de l'authentification Data depuis {IpAddress}")
+            Writer.close()
+            await Writer.wait_closed()
+            return False
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la gestion de connexion Data: {e}")
+            try:
+                Writer.close()
+                await Writer.wait_closed()
+            except:
+                pass
+            return False
+
     async def RemoveClient(self, ClientId: str):
         """
         Retire un client et nettoie les ressources
@@ -430,12 +688,20 @@ class ClientManager:
             except Exception as e:
                 self.Logger.error(f"Erreur dans le callback de déconnexion: {e}")
 
+        # Ferme la connexion Control
         try:
-            # Ferme la connexion
-            ClientInfo.Writer.close()
-            await ClientInfo.Writer.wait_closed()
+            ClientInfo.ControlWriter.close()
+            await ClientInfo.ControlWriter.wait_closed()
         except Exception as e:
-            self.Logger.error(f"Erreur lors de la fermeture de la connexion: {e}")
+            self.Logger.error(f"Erreur lors de la fermeture de la connexion Control: {e}")
+
+        # Ferme la connexion Data si elle existe
+        if ClientInfo.DataConnected and ClientInfo.DataWriter:
+            try:
+                ClientInfo.DataWriter.close()
+                await ClientInfo.DataWriter.wait_closed()
+            except Exception as e:
+                self.Logger.error(f"Erreur lors de la fermeture de la connexion Data: {e}")
 
         # Met à jour l'historique
         History = self.Database.GetClientHistory(ClientId)

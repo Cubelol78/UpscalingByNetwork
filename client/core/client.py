@@ -8,10 +8,11 @@ import time
 import os
 import json
 from typing import Optional
-from asyncio import Queue
+from asyncio import Queue, PriorityQueue
 from pathlib import Path
+from dataclasses import dataclass, field
 
-from client.core.connection import ConnectionManager
+from client.core.connection import ConnectionManager, DualConnectionManager
 from client.core.processor import LocalProcessor
 from client.utils.error_analyzer import GetErrorAnalyzer
 from shared.protocol.messages import (
@@ -20,6 +21,14 @@ from shared.protocol.messages import (
 )
 from shared.utils.logger import GetClientLogger
 from shared.utils.constants import ClientStatus, NetworkConfig
+
+
+@dataclass(order=True)
+class PrioritizedMessage:
+    """Message avec priorité pour la queue d'envoi"""
+    Priority: int
+    Message: str = field(compare=False)
+    # Priorité: 0 = haute (heartbeat), 1 = normale (status), 2 = basse (batch result)
 
 
 class UpscalingClient:
@@ -37,7 +46,10 @@ class UpscalingClient:
             WorkDirectory: Répertoire de travail (défaut: ~/.upscaling_client/)
         """
         self.Logger = GetClientLogger()
-        self.ConnectionManager = ConnectionManager()
+        # Utilise DualConnectionManager pour l'architecture dual-port
+        self.ConnectionManager = DualConnectionManager()
+        # Fallback ConnectionManager pour compatibilité avec anciens serveurs
+        self._UseDualPort = True  # Sera mis à False si connexion dual échoue
 
         # Détermine le répertoire de travail
         if WorkDirectory and WorkDirectory.strip():
@@ -64,22 +76,33 @@ class UpscalingClient:
         self.ResultQueue: Queue = None
         self.SenderTask = None  # Tâche d'envoi en arrière-plan
 
+        # Queue d'envoi prioritaire pour les messages légers (heartbeats, status)
+        # Les gros messages (batch results) passent directement avec un Lock
+        self.OutgoingQueue: PriorityQueue = None
+        self.OutgoingTask = None  # Tâche d'envoi des messages prioritaires
+        self.SendLock: asyncio.Lock = None  # Lock pour synchroniser les envois
+
         # Callback appelé lors d'une déconnexion demandée par le serveur
         self.OnServerDisconnect = None
 
         # Callback appelé lors d'une erreur critique nécessitant déconnexion
         self.OnCriticalError = None
 
+        # Tâche de réception sur le canal Data
+        self.DataReceiveTask = None
+
         self.Logger.info(f"Client initialisé avec répertoire de travail: {self.WorkDirectory}")
 
-    async def Start(self, Host: str, Port: int, Password: str = "") -> bool:
+    async def Start(self, Host: str, Port: int, Password: str = "",
+                    DataPort: int = None) -> bool:
         """
-        Démarre le client et connecte au serveur
+        Démarre le client et connecte au serveur (dual-port)
 
         Args:
             Host: Adresse du serveur
-            Port: Port du serveur
+            Port: Port de contrôle du serveur (handshake, heartbeat)
             Password: Mot de passe (optionnel)
+            DataPort: Port de données du serveur (batches). Si None, utilise Port + 1
 
         Returns:
             True si démarrage réussi
@@ -87,21 +110,36 @@ class UpscalingClient:
         try:
             self.Logger.info("Démarrage du client...")
 
-            # Connecte au serveur
-            if not await self.ConnectionManager.ConnectToServer(Host, Port, Password):
-                self.Logger.error("Impossible de se connecter au serveur")
+            # Par défaut, le port Data est le port Control + 1
+            if DataPort is None:
+                DataPort = Port + 1
+
+            # Connecte aux deux ports (Control + Data)
+            if not await self.ConnectionManager.ConnectToDualPorts(Host, Port, DataPort, Password):
+                self.Logger.error("Impossible de se connecter au serveur (dual-port)")
                 return False
 
+            self._UseDualPort = True
             self.Running = True
             self.Status = ClientStatus.IDLE
+
+            # Lock pour synchroniser les envois (évite conflits heartbeats/batch results)
+            self.SendLock = asyncio.Lock()
+
+            # Initialise la queue d'envoi prioritaire (heartbeats > status)
+            self.OutgoingQueue = asyncio.PriorityQueue()
+            self.OutgoingTask = asyncio.create_task(self._OutgoingMessageLoop())
 
             # Initialise la queue de résultats et démarre le sender en arrière-plan
             self.ResultQueue = asyncio.Queue()
             self.SenderTask = asyncio.create_task(self._SenderLoop())
 
-            self.Logger.info("✓ Client démarré et connecté")
+            # Démarre la réception des batches sur le canal Data
+            self.DataReceiveTask = asyncio.create_task(self._DataReceiveLoop())
 
-            # Lance la boucle principale
+            self.Logger.info("✓ Client démarré et connecté (dual-port)")
+
+            # Lance la boucle principale (Control: heartbeats)
             await self.MainLoop()
 
             return True
@@ -133,11 +171,27 @@ class UpscalingClient:
             except asyncio.TimeoutError:
                 self.Logger.warning("Timeout lors de l'attente de la queue, arrêt forcé")
 
-        # Annule la tâche d'envoi
+        # Annule la tâche d'envoi des résultats
         if self.SenderTask and not self.SenderTask.done():
             self.SenderTask.cancel()
             try:
                 await self.SenderTask
+            except asyncio.CancelledError:
+                pass
+
+        # Annule la tâche d'envoi des messages prioritaires
+        if self.OutgoingTask and not self.OutgoingTask.done():
+            self.OutgoingTask.cancel()
+            try:
+                await self.OutgoingTask
+            except asyncio.CancelledError:
+                pass
+
+        # Annule la tâche de réception Data
+        if self.DataReceiveTask and not self.DataReceiveTask.done():
+            self.DataReceiveTask.cancel()
+            try:
+                await self.DataReceiveTask
             except asyncio.CancelledError:
                 pass
 
@@ -153,35 +207,81 @@ class UpscalingClient:
         self.Logger.info("✓ Client arrêté")
 
     async def MainLoop(self):
-        """Boucle principale du client"""
+        """
+        Boucle principale du client (canal Control).
+        Reçoit les heartbeats et status du serveur.
+        Les batches sont reçus via _DataReceiveLoop().
+        """
         try:
             while self.Running:
-                # Reçoit un message du serveur
+                # Détermine le timeout adapté :
+                # - Si en PROCESSING ou envoi en cours : timeout long (5 min)
+                # - Sinon : timeout court (60s)
+                if self.Status == ClientStatus.PROCESSING or (self.ResultQueue and not self.ResultQueue.empty()):
+                    CommunicationTimeout = NetworkConfig.BATCH_TIMEOUT
+                else:
+                    CommunicationTimeout = NetworkConfig.HEARTBEAT_TIMEOUT * 2
+
+                # Reçoit un message du serveur via Control
                 MessageData = await asyncio.wait_for(
-                    self.ConnectionManager.ReceiveMessage(Decrypt=True),
-                    timeout=NetworkConfig.HEARTBEAT_TIMEOUT * 2
+                    self.ConnectionManager.ReceiveControlMessage(Decrypt=True),
+                    timeout=CommunicationTimeout
                 )
 
                 if not MessageData:
-                    self.Logger.warning("Message vide reçu, déconnexion probable")
+                    self.Logger.warning("Message Control vide reçu, déconnexion probable")
                     break
 
                 # Parse le message
                 Message = MessageFactory.CreateFromJson(MessageData)
 
-                # Traite le message
-                await self._HandleMessage(Message)
+                # Traite le message (Control: heartbeats, disconnect, status)
+                await self._HandleControlMessage(Message)
 
         except asyncio.TimeoutError:
-            self.Logger.error("Timeout de communication avec le serveur")
+            self.Logger.error("Timeout de communication Control avec le serveur")
         except Exception as e:
-            self.Logger.error(f"Erreur dans la boucle principale: {e}")
+            self.Logger.error(f"Erreur dans la boucle principale Control: {e}")
         finally:
             await self.Stop()
 
-    async def _HandleMessage(self, Message):
+    async def _DataReceiveLoop(self):
         """
-        Traite un message reçu du serveur
+        Boucle de réception sur le canal Data.
+        Reçoit les BatchAssignment du serveur.
+        """
+        try:
+            while self.Running:
+                # Reçoit un batch via le canal Data (timeout long)
+                MessageData = await self.ConnectionManager.ReceiveDataMessage(
+                    Decrypt=True,
+                    Timeout=5.0  # Timeout court pour vérifier self.Running régulièrement
+                )
+
+                if not MessageData:
+                    # Timeout ou erreur de connexion
+                    if not self.ConnectionManager.IsDataConnected():
+                        self.Logger.warning("Canal Data déconnecté")
+                        break
+                    continue
+
+                # Parse le message
+                Message = MessageFactory.CreateFromJson(MessageData)
+
+                # On s'attend à recevoir des BatchAssignment sur le canal Data
+                if isinstance(Message, BatchAssignment):
+                    await self._HandleBatchAssignment(Message)
+                else:
+                    self.Logger.warning(f"Message inattendu sur canal Data: {Message.MessageType}")
+
+        except asyncio.CancelledError:
+            self.Logger.info("DataReceiveLoop annulé")
+        except Exception as e:
+            self.Logger.error(f"Erreur dans DataReceiveLoop: {e}")
+
+    async def _HandleControlMessage(self, Message):
+        """
+        Traite un message reçu via le canal Control
 
         Args:
             Message: Message parsé
@@ -193,24 +293,21 @@ class UpscalingClient:
             if isinstance(Message, HeartbeatPing):
                 await self._HandleHeartbeatPing(Message)
 
-            # Batch assignment
-            elif isinstance(Message, BatchAssignment):
-                await self._HandleBatchAssignment(Message)
-
             # Déconnexion demandée par le serveur
             elif isinstance(Message, DisconnectMessage):
                 await self._HandleDisconnect(Message)
 
             # Autres types
             else:
-                self.Logger.debug(f"Message reçu: {MessageType}")
+                self.Logger.debug(f"Message Control reçu: {MessageType}")
 
         except Exception as e:
-            self.Logger.error(f"Erreur lors du traitement du message: {e}")
+            self.Logger.error(f"Erreur lors du traitement du message Control: {e}")
 
     async def _HandleHeartbeatPing(self, PingMessage: HeartbeatPing):
         """
-        Répond au heartbeat ping
+        Répond au heartbeat ping via la queue prioritaire.
+        Les heartbeats ont la priorité la plus haute (0) pour ne jamais être bloqués.
 
         Args:
             PingMessage: Message HeartbeatPing
@@ -224,15 +321,12 @@ class UpscalingClient:
                 ClientStatus=self.Status
             )
 
-            # Envoie au serveur avec retry
-            async def SendPong():
-                return await self.ConnectionManager.SendMessage(Pong.ToJson(), Encrypted=True)
-
-            Success = await self._RetryWithBackoff(SendPong)
-            if Success:
-                self.Logger.debug("Heartbeat pong envoyé")
-            else:
-                self.Logger.warning("Échec de l'envoi du heartbeat pong après plusieurs tentatives")
+            # Met dans la queue prioritaire (priorité 0 = haute)
+            await self.OutgoingQueue.put(PrioritizedMessage(
+                Priority=0,
+                Message=Pong.ToJson()
+            ))
+            self.Logger.debug("Heartbeat pong mis en queue (priorité haute)")
 
         except Exception as e:
             self.Logger.error(f"Erreur lors de la réponse heartbeat: {e}")
@@ -380,15 +474,11 @@ class UpscalingClient:
                 pass
 
         finally:
-            # Remet en idle immédiatement (avant l'envoi)
-            # Permet de recevoir un nouveau batch pendant l'envoi
-            self.Status = ClientStatus.IDLE
+            # Ne passe PAS en IDLE ici - on reste en PROCESSING jusqu'à ce que
+            # le batch result soit effectivement envoyé (voir _SenderLoop)
+            # Cela évite que le serveur timeout le client pendant l'envoi d'un gros batch
             self.CurrentBatch = None
             self.ProcessingTask = None
-
-            # Notifie le serveur immédiatement du changement de statut
-            # Permet au serveur d'envoyer le prochain batch AVANT de recevoir le résultat
-            await self._SendStatusUpdate()
 
     async def _HandleBatchError(self, ErrorMessage: str):
         """
@@ -426,12 +516,19 @@ class UpscalingClient:
         Boucle d'envoi des résultats en arrière-plan.
         Consomme la queue (chemins de fichiers) et envoie les résultats un par un (FIFO).
         Charge les données depuis le disque pour éviter de remplir la RAM.
-        Utilise retry avec backoff en cas d'échec.
+        Utilise un Lock pour synchroniser avec les heartbeats.
+        Passe le client à IDLE après l'envoi réussi.
         """
         while self.Running:
             try:
-                # Attend un chemin de fichier dans la queue (bloquant async)
-                CachePath = await self.ResultQueue.get()
+                # Attend un chemin de fichier dans la queue (timeout pour vérifier self.Running)
+                try:
+                    CachePath = await asyncio.wait_for(
+                        self.ResultQueue.get(),
+                        timeout=1.0
+                    )
+                except asyncio.TimeoutError:
+                    continue
 
                 # Charge le résultat depuis le disque
                 Result = await self._LoadResultFromCache(CachePath)
@@ -444,9 +541,9 @@ class UpscalingClient:
                 BatchId = Result.Payload.get("batch_id", "unknown")
                 self.Logger.info(f"Envoi du résultat batch {BatchId}...")
 
-                # Envoie le résultat au serveur avec retry
+                # Envoie via le canal Data (gros transferts)
                 async def SendResult():
-                    return await self.ConnectionManager.SendMessage(
+                    return await self.ConnectionManager.SendDataMessage(
                         Result.ToJson(),
                         Encrypted=True
                     )
@@ -461,6 +558,12 @@ class UpscalingClient:
 
                     # Supprime le fichier cache après envoi réussi
                     self._DeleteCacheFile(CachePath)
+
+                    # Passe à IDLE et notifie le serveur APRÈS l'envoi réussi
+                    # Cela garantit que le serveur ne timeout pas pendant l'envoi
+                    if self.ResultQueue.empty():
+                        self.Status = ClientStatus.IDLE
+                        await self._SendStatusUpdate()
                 else:
                     # Échec définitif après tous les retries - conserver le cache pour diagnostic
                     self.Logger.error(
@@ -478,26 +581,63 @@ class UpscalingClient:
             except Exception as e:
                 self.Logger.error(f"Erreur dans SenderLoop: {e}")
 
+    async def _OutgoingMessageLoop(self):
+        """
+        Boucle d'envoi des messages prioritaires via le canal Control.
+        Gère les heartbeats et status updates.
+        Les messages sont traités par ordre de priorité (0 = haute, 1 = normale).
+        """
+        while self.Running:
+            try:
+                # Attend un message dans la queue (bloquant async)
+                try:
+                    PrioMsg = await asyncio.wait_for(
+                        self.OutgoingQueue.get(),
+                        timeout=1.0
+                    )
+                except asyncio.TimeoutError:
+                    continue
+
+                # Envoie via le canal Control (heartbeats, status)
+                async def DoSend():
+                    return await self.ConnectionManager.SendControlMessage(
+                        PrioMsg.Message,
+                        Encrypted=True
+                    )
+
+                Success = await self._RetryWithBackoff(DoSend)
+
+                if not Success:
+                    PriorityName = {0: "heartbeat", 1: "status"}.get(PrioMsg.Priority, "unknown")
+                    self.Logger.warning(f"Échec envoi message {PriorityName} après retries")
+
+                self.OutgoingQueue.task_done()
+
+            except asyncio.CancelledError:
+                self.Logger.info("OutgoingMessageLoop annulé")
+                break
+            except Exception as e:
+                self.Logger.error(f"Erreur dans OutgoingMessageLoop: {e}")
+
     async def _SendStatusUpdate(self) -> bool:
         """
-        Envoie une notification de statut au serveur avec retry.
+        Envoie une notification de statut au serveur via la queue prioritaire.
         Permet au serveur de savoir immédiatement quand le client est disponible
         pour un nouveau batch, sans attendre le prochain heartbeat.
 
         Returns:
-            True si envoi réussi, False sinon
+            True (toujours, car mis en queue)
         """
         try:
-            async def DoSend():
-                Update = StatusUpdate(Status=self.Status)
-                return await self.ConnectionManager.SendMessage(Update.ToJson(), Encrypted=True)
+            Update = StatusUpdate(Status=self.Status)
 
-            Success = await self._RetryWithBackoff(DoSend)
-            if Success:
-                self.Logger.debug(f"StatusUpdate envoyé: {self.Status}")
-            else:
-                self.Logger.warning(f"Impossible d'envoyer StatusUpdate ({self.Status}) après {self.RETRY_MAX_ATTEMPTS} tentatives")
-            return Success
+            # Met dans la queue prioritaire (priorité 1 = normale)
+            await self.OutgoingQueue.put(PrioritizedMessage(
+                Priority=1,
+                Message=Update.ToJson()
+            ))
+            self.Logger.debug(f"StatusUpdate mis en queue: {self.Status}")
+            return True
 
         except Exception as e:
             self.Logger.error(f"Erreur envoi StatusUpdate: {e}")
@@ -593,10 +733,13 @@ class UpscalingClient:
         return {
             "running": self.Running,
             "connected": self.ConnectionManager.IsConnected(),
+            "control_connected": self.ConnectionManager.IsControlConnected(),
+            "data_connected": self.ConnectionManager.IsDataConnected(),
             "status": self.Status,
             "current_batch": self.CurrentBatch,
             "server_address": ServerInfo[0],
-            "server_port": ServerInfo[1],
+            "control_port": ServerInfo[1],
+            "data_port": ServerInfo[2] if len(ServerInfo) > 2 else None,
             "client_id": self.ConnectionManager.ClientId
         }
 
@@ -605,19 +748,20 @@ class UpscalingClient:
 # FONCTION D'AIDE POUR LANCER LE CLIENT
 # ============================================================================
 
-async def RunClient(Host: str, Port: int, Password: str = ""):
+async def RunClient(Host: str, Port: int, Password: str = "", DataPort: int = None):
     """
-    Lance le client avec les paramètres donnés
+    Lance le client avec les paramètres donnés (dual-port)
 
     Args:
         Host: Adresse du serveur
-        Port: Port du serveur
+        Port: Port de contrôle du serveur
         Password: Mot de passe (optionnel)
+        DataPort: Port de données (optionnel, défaut: Port + 1)
     """
     Client = UpscalingClient()
 
     try:
-        await Client.Start(Host, Port, Password)
+        await Client.Start(Host, Port, Password, DataPort)
 
     except KeyboardInterrupt:
         print("\n\nInterruption utilisateur")
@@ -635,12 +779,13 @@ if __name__ == "__main__":
 
     # Arguments
     if len(sys.argv) < 3:
-        print("Usage: python client.py <host> <port> [password]")
+        print("Usage: python client.py <host> <control_port> [password] [data_port]")
         sys.exit(1)
 
     Host = sys.argv[1]
     Port = int(sys.argv[2])
     Password = sys.argv[3] if len(sys.argv) > 3 else ""
+    DataPort = int(sys.argv[4]) if len(sys.argv) > 4 else None
 
     # Lance le client
-    asyncio.run(RunClient(Host, Port, Password))
+    asyncio.run(RunClient(Host, Port, Password, DataPort))

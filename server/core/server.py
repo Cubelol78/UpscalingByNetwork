@@ -9,7 +9,7 @@ from typing import Optional
 from pathlib import Path
 
 from server.core.client_manager import ClientManager
-from server.core.network_manager import NetworkManager
+from server.core.network_manager import NetworkManager, DualNetworkManager
 from server.database.db_manager import DatabaseManager
 from shared.utils.logger import GetServerLogger
 from shared.utils.constants import NetworkConfig, PathConfig, ClientStatus
@@ -33,14 +33,15 @@ class UpscalingServer:
         # Configuration
         self.Host = Config.get("server", {}).get("ip", NetworkConfig.DEFAULT_HOST)
         self.Port = Config.get("server", {}).get("port", NetworkConfig.DEFAULT_PORT)
+        self.DataPort = Config.get("server", {}).get("data_port", NetworkConfig.DEFAULT_DATA_PORT)
         self.Password = Config.get("server", {}).get("password", "")
         self.WorkDirectory = Config.get("server", {}).get("work_directory", PathConfig.WORK_DIR)
 
         # Base de données - utilise le chemin par défaut (indépendant du work_directory)
         self.Database = DatabaseManager()  # Utilise GetDefaultDbPath()
 
-        # Gestionnaire de réseau (permet le rebind dynamique IP/Port)
-        self.NetworkManager = NetworkManager(self.Host, self.Port)
+        # Gestionnaire de réseau dual-port (Control + Data)
+        self.NetworkManager = DualNetworkManager(self.Host, self.Port, self.DataPort)
 
         # Gestionnaire de clients
         self.ClientManager = None
@@ -129,11 +130,14 @@ class UpscalingServer:
             return False
 
         try:
-            self.Logger.info(f"Démarrage du serveur sur {self.Host}:{self.Port}...")
+            self.Logger.info(f"Démarrage du serveur sur {self.Host}:{self.Port} (Control) / {self.DataPort} (Data)...")
 
-            # Démarre le serveur TCP via NetworkManager
-            if not await self.NetworkManager.Start(self._HandleClientConnection):
-                self.Logger.error("Échec du démarrage du listener TCP")
+            # Démarre les deux listeners TCP via DualNetworkManager
+            if not await self.NetworkManager.Start(
+                self._HandleControlConnection,
+                self._HandleDataConnection
+            ):
+                self.Logger.error("Échec du démarrage des listeners TCP")
                 return False
 
             self.Running = True
@@ -141,7 +145,7 @@ class UpscalingServer:
             # Démarre le monitoring des heartbeats
             await self.ClientManager.StartHeartbeatMonitoring()
 
-            self.Logger.info(f"✓ Serveur démarré et en écoute sur {self.Host}:{self.Port}")
+            self.Logger.info(f"✓ Serveur démarré - Control: {self.Host}:{self.Port}, Data: {self.Host}:{self.DataPort}")
 
             # Affiche les informations
             self._PrintServerInfo()
@@ -182,10 +186,10 @@ class UpscalingServer:
 
         self.Logger.info("✓ Serveur arrêté")
 
-    async def _HandleClientConnection(self, Reader: asyncio.StreamReader,
-                                     Writer: asyncio.StreamWriter):
+    async def _HandleControlConnection(self, Reader: asyncio.StreamReader,
+                                        Writer: asyncio.StreamWriter):
         """
-        Gère une nouvelle connexion client
+        Gère une nouvelle connexion sur le port Control (handshake, heartbeat, status)
 
         Args:
             Reader: StreamReader asyncio
@@ -198,19 +202,100 @@ class UpscalingServer:
             ClientId = await self.ClientManager.HandleNewConnection(Reader, Writer)
 
             if not ClientId:
-                self.Logger.warning("Échec de la connexion du client")
+                self.Logger.warning("Échec de la connexion du client (Control)")
                 return
 
-            # Boucle de communication avec le client
+            # Boucle de communication Control (heartbeat, status)
             await self._ClientCommunicationLoop(ClientId)
 
         except Exception as e:
-            self.Logger.error(f"Erreur lors de la gestion du client: {e}")
+            self.Logger.error(f"Erreur lors de la gestion du client (Control): {e}")
 
         finally:
             # Nettoie la connexion
             if ClientId:
                 await self.ClientManager.RemoveClient(ClientId)
+
+    async def _HandleDataConnection(self, Reader: asyncio.StreamReader,
+                                    Writer: asyncio.StreamWriter):
+        """
+        Gère une nouvelle connexion sur le port Data (transferts de batches)
+
+        Args:
+            Reader: StreamReader asyncio
+            Writer: StreamWriter asyncio
+        """
+        ClientId = None
+        try:
+            # Le client doit s'identifier avec DataChannelAuth
+            Success = await self.ClientManager.HandleDataConnection(Reader, Writer)
+
+            if not Success:
+                self.Logger.warning("Échec de l'association du canal Data")
+                return
+
+            # Trouve le ClientId associé à cette connexion Data
+            for Cid, ClientInfo in self.ClientManager.Clients.items():
+                if ClientInfo.DataWriter == Writer:
+                    ClientId = Cid
+                    break
+
+            if not ClientId:
+                self.Logger.error("Impossible de trouver le client pour le canal Data")
+                return
+
+            self.Logger.info(f"Canal Data connecté pour le client {ClientId}")
+
+            # Démarre la boucle d'écoute pour les BatchResults
+            await self._DataCommunicationLoop(ClientId)
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la gestion de connexion Data: {e}")
+
+    async def _DataCommunicationLoop(self, ClientId: str):
+        """
+        Boucle de communication Data pour recevoir les BatchResults
+
+        Args:
+            ClientId: ID du client
+        """
+        self.Logger.info(f"Démarrage de la boucle Data pour le client {ClientId}")
+
+        while self.Running:
+            try:
+                # Reçoit un message via le canal Data (timeout long car les transfers sont lourds)
+                MessageData = await self.ClientManager.ReceiveDataMessage(
+                    ClientId,
+                    Decrypt=True,
+                    Timeout=NetworkConfig.BATCH_TIMEOUT
+                )
+
+                if not MessageData:
+                    self.Logger.warning(f"Message Data vide du client {ClientId}")
+                    break
+
+                # Parse le message
+                Message = MessageFactory.CreateFromJson(MessageData)
+
+                # On s'attend à des BatchResult sur le canal Data
+                if isinstance(Message, BatchResult):
+                    self.Logger.info(f"BatchResult reçu via Data du client {ClientId}")
+                    if self.BatchDistributor:
+                        await self.BatchDistributor.ReceiveBatchResult(ClientId, Message)
+                    else:
+                        self.Logger.error("BatchDistributor non configuré - résultat ignoré")
+                else:
+                    self.Logger.warning(f"Message inattendu sur canal Data: {Message.MessageType}")
+
+            except asyncio.TimeoutError:
+                # Timeout normal, on continue d'écouter
+                continue
+
+            except Exception as e:
+                self.Logger.error(f"Erreur dans la boucle Data du client {ClientId}: {e}")
+                break
+
+        self.Logger.info(f"Fin de la boucle Data pour le client {ClientId}")
 
     async def _ClientCommunicationLoop(self, ClientId: str):
         """
@@ -302,11 +387,13 @@ class UpscalingServer:
 
     def _PrintServerInfo(self):
         """Affiche les informations du serveur"""
-        Host, Port = self.NetworkManager.GetAddress()
+        Host, ControlPort = self.NetworkManager.GetControlAddress()
+        _, DataPort = self.NetworkManager.GetDataAddress()
         self.Logger.info("="*60)
         self.Logger.info("SERVEUR D'UPSCALING VIDÉO EN RÉSEAU")
         self.Logger.info("="*60)
-        self.Logger.info(f"Adresse: {Host}:{Port}")
+        self.Logger.info(f"Port Control: {Host}:{ControlPort} (handshake, heartbeat)")
+        self.Logger.info(f"Port Data:    {Host}:{DataPort} (transferts de batches)")
         self.Logger.info(f"Répertoire de travail: {self.WorkDirectory}")
         self.Logger.info(f"Mot de passe configuré: {'Oui' if self.Password else 'Non'}")
         self.Logger.info(f"Base de données: {self.Database.DbPath}")
@@ -319,23 +406,32 @@ class UpscalingServer:
         Returns:
             Dictionnaire avec le statut
         """
-        Host, Port = self.NetworkManager.GetAddress() if self.NetworkManager else (self.Host, self.Port)
+        if self.NetworkManager:
+            Host, ControlPort = self.NetworkManager.GetControlAddress()
+            _, DataPort = self.NetworkManager.GetDataAddress()
+        else:
+            Host = self.Host
+            ControlPort = self.Port
+            DataPort = self.DataPort
+
         return {
             "running": self.Running,
             "host": Host,
-            "port": Port,
+            "port": ControlPort,
+            "data_port": DataPort,
             "connected_clients": self.ClientManager.GetClientCount() if self.ClientManager else 0,
             "work_directory": self.WorkDirectory,
             "database": self.Database.DbPath if self.Database else None
         }
 
-    async def RebindNetwork(self, NewHost: str, NewPort: int) -> bool:
+    async def RebindNetwork(self, NewHost: str, NewControlPort: int, NewDataPort: int = None) -> bool:
         """
-        Change l'adresse IP/Port du serveur à chaud sans perdre les clients connectés.
+        Change l'adresse IP/Ports du serveur à chaud sans perdre les clients connectés.
 
         Args:
             NewHost: Nouvelle adresse IP
-            NewPort: Nouveau port
+            NewControlPort: Nouveau port de contrôle
+            NewDataPort: Nouveau port de données (optionnel, garde l'actuel si None)
 
         Returns:
             True si succès
@@ -344,17 +440,21 @@ class UpscalingServer:
             self.Logger.warning("Le serveur n'est pas en cours d'exécution")
             return False
 
-        self.Logger.info(f"Rebind du serveur vers {NewHost}:{NewPort}")
+        if NewDataPort is None:
+            NewDataPort = self.DataPort
 
-        Success = await self.NetworkManager.Rebind(NewHost, NewPort)
+        self.Logger.info(f"Rebind du serveur vers {NewHost}:{NewControlPort}/{NewDataPort}")
+
+        Success = await self.NetworkManager.Rebind(NewHost, NewControlPort, NewDataPort)
 
         if Success:
             # Met à jour les propriétés internes
             self.Host = NewHost
-            self.Port = NewPort
-            self.Logger.info(f"✓ Serveur rebind sur {NewHost}:{NewPort}")
+            self.Port = NewControlPort
+            self.DataPort = NewDataPort
+            self.Logger.info(f"✓ Serveur rebind - Control: {NewHost}:{NewControlPort}, Data: {NewHost}:{NewDataPort}")
         else:
-            self.Logger.error(f"✗ Échec du rebind vers {NewHost}:{NewPort}")
+            self.Logger.error(f"✗ Échec du rebind vers {NewHost}:{NewControlPort}/{NewDataPort}")
 
         return Success
 
