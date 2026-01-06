@@ -140,9 +140,20 @@ class ClientsTab(QWidget):
                 self.ClientsTable.setItem(RowPosition, 4, QTableWidgetItem(HeartbeatText))
 
                 # Actions (bouton déconnecter)
-                DisconnectBtn = QPushButton("Déconnecter")
+                ActionsWidget = QWidget()
+                ActionsLayout = QHBoxLayout(ActionsWidget)
+                ActionsLayout.setContentsMargins(4, 2, 4, 2)
+                ActionsLayout.setSpacing(4)
+
+                DisconnectBtn = QPushButton("✖")
+                DisconnectBtn.setToolTip("Déconnecter ce client")
+                DisconnectBtn.setProperty("class", "danger")
+                DisconnectBtn.setMaximumWidth(40)
+                DisconnectBtn.setMaximumHeight(28)
                 DisconnectBtn.clicked.connect(lambda checked, cid=ClientId: self.DisconnectClient(cid))
-                self.ClientsTable.setCellWidget(RowPosition, 5, DisconnectBtn)
+                ActionsLayout.addWidget(DisconnectBtn)
+
+                self.ClientsTable.setCellWidget(RowPosition, 5, ActionsWidget)
 
             # Restaurer la sélection
             if RowToSelect >= 0:

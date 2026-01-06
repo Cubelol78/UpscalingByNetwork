@@ -118,7 +118,7 @@ class ClientWindow(QMainWindow):
         self.Tabs.addTab(self.ConnectionTab, "🔌 Connexion")
         self.Tabs.addTab(self.MonitoringTab, "📊 Monitoring")
         self.Tabs.addTab(self.ServersTab, "💾 Serveurs")
-        self.Tabs.addTab(self.PerformanceTab, "⚡ Performances")
+        self.Tabs.addTab(self.PerformanceTab, "⚙️ Configuration")
 
         MainLayout.addWidget(self.Tabs)
 
@@ -277,7 +277,7 @@ class ClientWindow(QMainWindow):
             for Suggestion in Suggestions:
                 Message += f"  - {Suggestion}\n"
 
-            Message += "\nVeuillez ajuster les parametres dans l'onglet Performances "
+            Message += "\nVeuillez ajuster les parametres dans l'onglet Configuration "
             Message += "puis vous reconnecter."
 
         # Affiche une boîte de dialogue critique

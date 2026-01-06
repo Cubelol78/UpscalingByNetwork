@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QGroupBox, QFormLayout, QSpinBox, QCheckBox,
     QPushButton, QComboBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QMessageBox, QProgressDialog, QLineEdit,
-    QFileDialog
+    QFileDialog, QScrollArea
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont
@@ -77,7 +77,13 @@ class PerformanceTab(QWidget):
 
     def SetupUI(self):
         """Configure l'interface utilisateur"""
-        Layout = QVBoxLayout(self)
+        # Layout principal avec scroll
+        MainLayout = QVBoxLayout(self)
+        MainLayout.setContentsMargins(0, 0, 0, 0)
+
+        # Création d'un widget conteneur pour le contenu scrollable
+        ScrollContent = QWidget()
+        ContentLayout = QVBoxLayout(ScrollContent)
 
         # En-tête avec titre et indicateur de sauvegarde
         HeaderLayout = QHBoxLayout()
@@ -96,33 +102,42 @@ class PerformanceTab(QWidget):
         self.SavedIndicator.setProperty("class", "hint-success")
         HeaderLayout.addWidget(self.SavedIndicator)
 
-        Layout.addLayout(HeaderLayout)
+        ContentLayout.addLayout(HeaderLayout)
 
         # Section Apparence (thème)
         AppearanceGroup = self.CreateAppearanceGroup()
-        Layout.addWidget(AppearanceGroup)
+        ContentLayout.addWidget(AppearanceGroup)
 
         # Section Matériel détecté
         HardwareGroup = self.CreateHardwareGroup()
-        Layout.addWidget(HardwareGroup)
+        ContentLayout.addWidget(HardwareGroup)
 
         # Section Configuration GPU
         GpuConfigGroup = self.CreateGpuConfigGroup()
-        Layout.addWidget(GpuConfigGroup)
+        ContentLayout.addWidget(GpuConfigGroup)
 
         # Section Configuration avancée
         AdvancedGroup = self.CreateAdvancedGroup()
-        Layout.addWidget(AdvancedGroup)
+        ContentLayout.addWidget(AdvancedGroup)
 
         # Section Stockage
         StorageGroup = self.CreateStorageGroup()
-        Layout.addWidget(StorageGroup)
+        ContentLayout.addWidget(StorageGroup)
 
         # Barre d'actions
         ActionBar = self.CreateActionBar()
-        Layout.addWidget(ActionBar)
+        ContentLayout.addWidget(ActionBar)
 
-        Layout.addStretch()
+        ContentLayout.addStretch()
+
+        # Création de la zone de scroll
+        ScrollArea = QScrollArea()
+        ScrollArea.setWidget(ScrollContent)
+        ScrollArea.setWidgetResizable(True)
+        ScrollArea.setFrameShape(QScrollArea.NoFrame)
+
+        # Ajout de la zone de scroll au layout principal
+        MainLayout.addWidget(ScrollArea)
 
     def CreateHardwareGroup(self) -> QGroupBox:
         """Crée le groupe d'affichage du matériel détecté"""

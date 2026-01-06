@@ -99,18 +99,25 @@ class ServersTab(QWidget):
                 # Actions
                 ActionsWidget = QWidget()
                 ActionsLayout = QHBoxLayout(ActionsWidget)
-                ActionsLayout.setContentsMargins(0, 0, 0, 0)
+                ActionsLayout.setContentsMargins(4, 2, 4, 2)
+                ActionsLayout.setSpacing(4)
 
                 # Bouton Connecter
-                ConnectBtn = QPushButton("Connecter")
+                ConnectBtn = QPushButton("📡")
+                ConnectBtn.setToolTip("Connecter à ce serveur")
+                ConnectBtn.setMaximumWidth(40)
+                ConnectBtn.setMaximumHeight(28)
                 ConnectBtn.clicked.connect(
                     lambda checked, s=Server: self.ConnectToServer(s)
                 )
                 ActionsLayout.addWidget(ConnectBtn)
 
                 # Bouton Supprimer
-                DeleteBtn = QPushButton("Supprimer")
+                DeleteBtn = QPushButton("🗑️")
+                DeleteBtn.setToolTip("Supprimer ce serveur")
                 DeleteBtn.setProperty("class", "danger")
+                DeleteBtn.setMaximumWidth(40)
+                DeleteBtn.setMaximumHeight(28)
                 DeleteBtn.clicked.connect(
                     lambda checked, name=Server['name']: self.DeleteServer(name)
                 )

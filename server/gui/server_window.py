@@ -110,22 +110,23 @@ class ServerWindow(QMainWindow):
 
         ControlLayout.addStretch()
 
-        # Bouton Start
-        self.StartButton = QPushButton("▶ Démarrer le serveur")
-        self.StartButton.setObjectName("StartButton")
-        self.StartButton.setProperty("class", "primary")
-        self.StartButton.clicked.connect(self.StartServer)
-        ControlLayout.addWidget(self.StartButton)
-
-        # Bouton Stop
-        self.StopButton = QPushButton("⏹ Arrêter le serveur")
-        self.StopButton.setObjectName("StopButton")
-        self.StopButton.setProperty("class", "danger")
-        self.StopButton.clicked.connect(self.StopServer)
-        self.StopButton.setEnabled(False)
-        ControlLayout.addWidget(self.StopButton)
+        # Bouton Toggle ON/OFF
+        self.ToggleServerButton = QPushButton("▶ Démarrer le serveur")
+        self.ToggleServerButton.setObjectName("ToggleServerButton")
+        self.ToggleServerButton.setProperty("class", "primary")
+        self.ToggleServerButton.setCheckable(False)  # Pas de toggle visuel Qt, on gère manuellement
+        self.ToggleServerButton.clicked.connect(self.ToggleServer)
+        self.ToggleServerButton.setMinimumWidth(200)
+        ControlLayout.addWidget(self.ToggleServerButton)
 
         return ControlWidget
+
+    def ToggleServer(self):
+        """Toggle entre démarrer et arrêter le serveur"""
+        if self.IsRunning:
+            self.StopServer()
+        else:
+            self.StartServer()
 
     def StartServer(self):
         """Démarre le serveur"""
@@ -205,8 +206,13 @@ class ServerWindow(QMainWindow):
             self.StatusLabel.setProperty("status", "running")
             self.StatusLabel.style().unpolish(self.StatusLabel)
             self.StatusLabel.style().polish(self.StatusLabel)
-            self.StartButton.setEnabled(False)
-            self.StopButton.setEnabled(True)
+
+            # Mise à jour du bouton toggle
+            self.ToggleServerButton.setText("⏹ Arrêter le serveur")
+            self.ToggleServerButton.setProperty("class", "danger")
+            self.ToggleServerButton.style().unpolish(self.ToggleServerButton)
+            self.ToggleServerButton.style().polish(self.ToggleServerButton)
+
             self.UpdateStatusBar(f"Serveur démarré sur {GuiConfig['ip']}:{GuiConfig['port']}")
 
             self.Logger.info("Serveur démarré avec succès")
@@ -257,8 +263,13 @@ class ServerWindow(QMainWindow):
             self.StatusLabel.setProperty("status", "stopped")
             self.StatusLabel.style().unpolish(self.StatusLabel)
             self.StatusLabel.style().polish(self.StatusLabel)
-            self.StartButton.setEnabled(True)
-            self.StopButton.setEnabled(False)
+
+            # Mise à jour du bouton toggle
+            self.ToggleServerButton.setText("▶ Démarrer le serveur")
+            self.ToggleServerButton.setProperty("class", "primary")
+            self.ToggleServerButton.style().unpolish(self.ToggleServerButton)
+            self.ToggleServerButton.style().polish(self.ToggleServerButton)
+
             self.UpdateStatusBar("Serveur arrêté")
 
             self.Logger.info("Serveur arrêté avec succès")
