@@ -598,6 +598,7 @@ class DualConnectionManager:
         self.ServerAddress = None
         self.ControlPort = None
         self.DataPort = None
+        self.Password = None  # Stockage du mot de passe pour la reconnexion
 
     async def ConnectToDualPorts(self, Host: str, ControlPort: int, DataPort: int,
                                   Password: str = "") -> bool:
@@ -617,6 +618,7 @@ class DualConnectionManager:
             self.ServerAddress = Host
             self.ControlPort = ControlPort
             self.DataPort = DataPort
+            self.Password = Password  # Stocke le mot de passe pour la reconnexion
 
             # 1. Connexion au port Control avec handshake complet
             self.Logger.info(f"Connexion au port Control {Host}:{ControlPort}...")
