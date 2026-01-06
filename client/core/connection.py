@@ -518,6 +518,9 @@ class DualConnectionManager:
     Le canal Data gère les transferts de batches.
     """
 
+    # Attribut de classe pour accès aux serveurs sauvegardés (compatibilité)
+    SavedServers = SavedServersWrapper()
+
     def __init__(self):
         """Initialise le gestionnaire de connexion dual-port"""
         self.Logger = GetClientLogger()
