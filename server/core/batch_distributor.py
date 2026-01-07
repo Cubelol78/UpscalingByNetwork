@@ -432,22 +432,19 @@ class BatchDistributor:
                 ErrorMsg = ResultMessage.Payload.get("error_message", "Erreur inconnue")
                 self.Logger.error(f"Batch {BatchId} échoué: {ErrorMsg}")
 
-                # Marque comme failed et retry
-                BatchObj.Status = BatchStatus.FAILED
-                BatchObj.ErrorMessage = ErrorMsg
+                # Incrémente le compteur de retry (statistiques uniquement)
                 BatchObj.RetryCount += 1
-                self.Database.UpdateBatch(BatchObj)
+                BatchObj.ErrorMessage = ErrorMsg
 
                 # Retire du tracking
                 if BatchId in self.ActiveBatches:
                     del self.ActiveBatches[BatchId]
 
-                # Retry si possible
-                if BatchObj.RetryCount < Limits.MAX_RETRY_ATTEMPTS:
-                    self.Logger.info(f"Retry du batch {BatchId} ({BatchObj.RetryCount}/{Limits.MAX_RETRY_ATTEMPTS})")
-                    BatchObj.Status = BatchStatus.PENDING
-                    BatchObj.AssignedClientId = None
-                    self.Database.UpdateBatch(BatchObj)
+                # Toujours remettre en PENDING pour retry (pas de limite)
+                self.Logger.warning(f"⟳ Batch {BatchId} remis en file d'attente (tentative #{BatchObj.RetryCount})")
+                BatchObj.Status = BatchStatus.PENDING
+                BatchObj.AssignedClientId = None
+                self.Database.UpdateBatch(BatchObj)
 
                 # Remet le client en idle si pas d'autres batches
                 self._SetClientIdleIfNoOtherBatches(ClientId)
@@ -458,21 +455,22 @@ class BatchDistributor:
 
             if not UpscaledImages:
                 self.Logger.error(f"Batch {BatchId}: Aucune image upscalée reçue")
-                # Marque comme échec et retry
-                BatchObj.Status = BatchStatus.FAILED
-                BatchObj.ErrorMessage = "Aucune image reçue du client"
+
+                # Incrémente le compteur de retry (statistiques uniquement)
                 BatchObj.RetryCount += 1
-                self.Database.UpdateBatch(BatchObj)
+                BatchObj.ErrorMessage = "Aucune image reçue du client"
 
-                if BatchObj.RetryCount < Limits.MAX_RETRY_ATTEMPTS:
-                    self.Logger.info(f"Retry du batch {BatchId} ({BatchObj.RetryCount}/{Limits.MAX_RETRY_ATTEMPTS})")
-                    BatchObj.Status = BatchStatus.PENDING
-                    BatchObj.AssignedClientId = None
-                    self.Database.UpdateBatch(BatchObj)
-
-                # Retire du tracking et remet le client en idle si pas d'autres batches
+                # Retire du tracking
                 if BatchId in self.ActiveBatches:
                     del self.ActiveBatches[BatchId]
+
+                # Toujours remettre en PENDING pour retry (pas de limite)
+                self.Logger.warning(f"⟳ Batch {BatchId} remis en file d'attente (tentative #{BatchObj.RetryCount})")
+                BatchObj.Status = BatchStatus.PENDING
+                BatchObj.AssignedClientId = None
+                self.Database.UpdateBatch(BatchObj)
+
+                # Remet le client en idle si pas d'autres batches
                 self._SetClientIdleIfNoOtherBatches(ClientId)
                 return False
 
@@ -512,19 +510,22 @@ class BatchDistributor:
             if SavedCount == 0:
                 # Échec total - aucune image sauvegardée
                 self.Logger.error(f"Batch {BatchId}: Échec total - 0/{ReceivedCount} images sauvegardées")
-                BatchObj.Status = BatchStatus.FAILED
-                BatchObj.ErrorMessage = "Aucune image sauvegardée sur le serveur"
+
+                # Incrémente le compteur de retry (statistiques uniquement)
                 BatchObj.RetryCount += 1
-                self.Database.UpdateBatch(BatchObj)
+                BatchObj.ErrorMessage = "Aucune image sauvegardée sur le serveur"
 
-                if BatchObj.RetryCount < Limits.MAX_RETRY_ATTEMPTS:
-                    self.Logger.info(f"Retry du batch {BatchId} ({BatchObj.RetryCount}/{Limits.MAX_RETRY_ATTEMPTS})")
-                    BatchObj.Status = BatchStatus.PENDING
-                    BatchObj.AssignedClientId = None
-                    self.Database.UpdateBatch(BatchObj)
-
+                # Retire du tracking
                 if BatchId in self.ActiveBatches:
                     del self.ActiveBatches[BatchId]
+
+                # Toujours remettre en PENDING pour retry (pas de limite)
+                self.Logger.warning(f"⟳ Batch {BatchId} remis en file d'attente (tentative #{BatchObj.RetryCount})")
+                BatchObj.Status = BatchStatus.PENDING
+                BatchObj.AssignedClientId = None
+                self.Database.UpdateBatch(BatchObj)
+
+                # Remet le client en idle si pas d'autres batches
                 self._SetClientIdleIfNoOtherBatches(ClientId)
                 return False
 
@@ -646,10 +647,8 @@ class BatchDistributor:
                 del self.ActiveBatches[BatchId]
                 return
 
-            # Marque comme timeout
-            BatchObj.Status = BatchStatus.TIMEOUT
+            # Incrémente le compteur de retry (statistiques uniquement)
             BatchObj.RetryCount += 1
-            self.Database.UpdateBatch(BatchObj)
 
             # Retire du tracking
             del self.ActiveBatches[BatchId]
@@ -658,15 +657,12 @@ class BatchDistributor:
             # Le heartbeat monitoring se charge de déconnecter les clients inactifs
             self._SetClientIdleIfNoOtherBatches(ClientId)
 
-            # Retry si possible
-            if BatchObj.RetryCount < Limits.MAX_RETRY_ATTEMPTS:
-                self.Logger.info(f"Retry du batch {BatchId} ({BatchObj.RetryCount}/{Limits.MAX_RETRY_ATTEMPTS})")
-                await asyncio.sleep(Limits.RETRY_DELAY)
-                BatchObj.Status = BatchStatus.PENDING
-                BatchObj.AssignedClientId = None
-                self.Database.UpdateBatch(BatchObj)
-            else:
-                self.Logger.error(f"Batch {BatchId} a atteint le maximum de tentatives ({Limits.MAX_RETRY_ATTEMPTS})")
+            # Toujours remettre en PENDING pour retry (pas de limite)
+            self.Logger.warning(f"⟳ Batch {BatchId} remis en file d'attente après timeout (tentative #{BatchObj.RetryCount})")
+            await asyncio.sleep(Limits.RETRY_DELAY)
+            BatchObj.Status = BatchStatus.PENDING
+            BatchObj.AssignedClientId = None
+            self.Database.UpdateBatch(BatchObj)
 
         except Exception as e:
             self.Logger.error(f"Erreur lors de la gestion du timeout: {e}")
