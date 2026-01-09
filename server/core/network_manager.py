@@ -234,7 +234,8 @@ class DualNetworkManager:
             self.ControlServer = await asyncio.start_server(
                 self._FilteredControlHandler,
                 self.Host,
-                self.ControlPort
+                self.ControlPort,
+                backlog=128  # Support 128 connexions simultanées
             )
             self.Logger.info(f"Control listener démarré sur {self.Host}:{self.ControlPort}")
 
@@ -242,7 +243,8 @@ class DualNetworkManager:
             self.DataServer = await asyncio.start_server(
                 self._FilteredDataHandler,
                 self.Host,
-                self.DataPort
+                self.DataPort,
+                backlog=128  # Support 128 connexions simultanées
             )
             self.Logger.info(f"Data listener démarré sur {self.Host}:{self.DataPort}")
 

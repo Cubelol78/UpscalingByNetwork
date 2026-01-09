@@ -13,7 +13,7 @@ from pathlib import Path
 
 from shared.protocol.messages import (
     HandshakeRequest, HandshakeResponse, AuthRequest, AuthResponse,
-    MessageFactory, DataChannelAuth
+    MessageFactory, DataChannelAuth, DataChannelAuthResponse
 )
 from shared.protocol.encryption import EncryptionHandler
 from shared.utils.logger import GetClientLogger
@@ -705,9 +705,26 @@ class DualConnectionManager:
 
             self.DataWriter.write(SizeBytes + MessageBytes)
             await self.DataWriter.drain()
+            self.Logger.info("✓ Authentification Data envoyée")
+
+            # Attend la confirmation du serveur
+            ResponseData = await asyncio.wait_for(
+                self.ReceiveDataMessage(Decrypt=True, Timeout=10),
+                timeout=10
+            )
+
+            if not ResponseData:
+                self.Logger.error("Pas de réponse du serveur pour Data association")
+                return False
+
+            Response = MessageFactory.CreateFromJson(ResponseData)
+            if not isinstance(Response, DataChannelAuthResponse) or not Response.IsSuccess():
+                ErrorMsg = Response.GetErrorMessage() if isinstance(Response, DataChannelAuthResponse) else "Type de réponse invalide"
+                self.Logger.error(f"Data association échouée: {ErrorMsg}")
+                return False
 
             self.DataConnected = True
-            self.Logger.info("✓ Authentification Data envoyée")
+            self.Logger.info("✓ Canal Data confirmé par le serveur")
 
             return True
 

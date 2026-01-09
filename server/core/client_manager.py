@@ -11,7 +11,8 @@ from datetime import datetime
 
 from shared.protocol.messages import (
     HandshakeRequest, HandshakeResponse, AuthRequest, AuthResponse,
-    HeartbeatPing, HeartbeatPong, MessageFactory, ErrorMessage, DataChannelAuth
+    HeartbeatPing, HeartbeatPong, MessageFactory, ErrorMessage, DataChannelAuth,
+    DataChannelAuthResponse
 )
 from shared.protocol.encryption import EncryptionHandler, PasswordHasher
 from shared.protocol.compression import NegotiateCompression
@@ -62,6 +63,7 @@ class ClientInfo:
         self.LastHeartbeat = time.time()
         self.ConnectedAt = datetime.now()
         self.Authenticated = False
+        self.HeartbeatEnabled = False  # Active seulement après connexion Data
 
     def SetDataConnection(self, Reader: asyncio.StreamReader, Writer: asyncio.StreamWriter):
         """
@@ -74,6 +76,7 @@ class ClientInfo:
         self.DataReader = Reader
         self.DataWriter = Writer
         self.DataConnected = True
+        self.HeartbeatEnabled = True  # Active le heartbeat maintenant que Data est connecté
 
     def IsDataConnected(self) -> bool:
         """Vérifie si la connexion Data est établie"""
@@ -95,6 +98,7 @@ class ClientManager:
         self.ServerPassword = ServerPassword
         self.Database = Database
         self.Clients: Dict[str, ClientInfo] = {}
+        self.PendingDataConnections: Dict[str, ClientInfo] = {}  # Clients en attente de connexion Data
         self.Logger = GetModuleLogger("ClientManager")
         self.HeartbeatTask = None
         self.Running = False
@@ -155,6 +159,10 @@ class ClientManager:
                 ConnectedAt=ClientInfo_obj.ConnectedAt
             )
             self.Database.AddClientHistory(History)
+
+            # Enregistre pour la future connexion Data (recherche O(1))
+            self.PendingDataConnections[ClientId] = ClientInfo_obj
+            self.Logger.debug(f"Client {ClientId} enregistré en attente de connexion Data")
 
             return ClientId
 
@@ -609,13 +617,14 @@ class ClientManager:
             MessageBytes = await Reader.readexactly(MessageSize)
             EncryptedData = MessageBytes.decode('utf-8')
 
-            # Essaie de trouver le client correspondant pour déchiffrer
-            # On parcourt tous les clients authentifiés de la même IP
+            # Optimisation: essaie d'abord avec les clients en attente de connexion Data
+            # Cela réduit la complexité de O(n) à O(p) où p << n
             ClientFound = None
             DecryptedData = None
 
-            for ClientId, ClientInfo in self.Clients.items():
-                if ClientInfo.IpAddress == IpAddress and ClientInfo.Authenticated:
+            # Essaie d'abord avec les clients dans PendingDataConnections (O(p))
+            for ClientId, ClientInfo in self.PendingDataConnections.items():
+                if ClientInfo.IpAddress == IpAddress:
                     try:
                         DecryptedData = ClientInfo.EncryptionHandler.DecryptMessage(EncryptedData)
                         if DecryptedData:
@@ -623,6 +632,18 @@ class ClientManager:
                             break
                     except:
                         continue
+
+            # Si pas trouvé, essaie avec tous les clients (fallback pour reconnexions)
+            if not ClientFound:
+                for ClientId, ClientInfo in self.Clients.items():
+                    if ClientInfo.IpAddress == IpAddress and ClientInfo.Authenticated:
+                        try:
+                            DecryptedData = ClientInfo.EncryptionHandler.DecryptMessage(EncryptedData)
+                            if DecryptedData:
+                                ClientFound = ClientInfo
+                                break
+                        except:
+                            continue
 
             if not DecryptedData or not ClientFound:
                 self.Logger.error(f"Impossible de déchiffrer le DataChannelAuth depuis {IpAddress}")
@@ -646,9 +667,20 @@ class ClientManager:
                 await Writer.wait_closed()
                 return False
 
+            # Retire des PendingDataConnections (connexion Data établie)
+            if ClaimedClientId in self.PendingDataConnections:
+                del self.PendingDataConnections[ClaimedClientId]
+                self.Logger.debug(f"Client {ClaimedClientId} retiré de PendingDataConnections")
+
             # Association réussie
             ClientFound.SetDataConnection(Reader, Writer)
             self.Logger.info(f"Canal Data associé au client {ClientFound.ClientId}")
+
+            # Envoie une confirmation au client
+            AckMessage = DataChannelAuthResponse(Success=True)
+            EncryptedAck = ClientFound.EncryptionHandler.EncryptMessage(AckMessage.ToJson())
+            await self._SendDataMessage(ClientFound, EncryptedAck)
+            self.Logger.debug(f"Confirmation Data envoyée au client {ClientFound.ClientId}")
 
             return True
 
@@ -679,6 +711,11 @@ class ClientManager:
         ClientInfo = self.Clients.get(ClientId)
         if not ClientInfo:
             return
+
+        # Nettoie PendingDataConnections si le client était en attente
+        if ClientId in self.PendingDataConnections:
+            del self.PendingDataConnections[ClientId]
+            self.Logger.debug(f"Client {ClientId} retiré de PendingDataConnections lors du nettoyage")
 
         # Appelle le callback de déconnexion AVANT de fermer
         # Permet de réallouer les batches assignés au client
@@ -790,6 +827,10 @@ class ClientManager:
                 ClientsToRemove = []
                 for ClientId, ClientInfo in list(self.Clients.items()):
                     if not ClientInfo.Authenticated:
+                        continue
+
+                    # Skip si le heartbeat n'est pas encore activé (en attente de connexion Data)
+                    if not ClientInfo.HeartbeatEnabled:
                         continue
 
                     # Envoie un ping

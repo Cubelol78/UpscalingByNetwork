@@ -43,6 +43,7 @@ class MessageType:
 
     # Authentification canal Data
     DATA_CHANNEL_AUTH = "data_channel_auth"
+    DATA_CHANNEL_AUTH_RESPONSE = "data_channel_auth_response"
 
 
 # ============================================================================
@@ -142,8 +143,10 @@ class NetworkConfig:
     MAX_MESSAGE_SIZE = 5 * 1024 * 1024 * 1024  # 5 GB - Les batches d'images upscalées peuvent être très lourds
     HEARTBEAT_INTERVAL = 10  # secondes
     HEARTBEAT_TIMEOUT = 30  # secondes
-    CONNECTION_TIMEOUT = 60  # secondes
-    BATCH_TIMEOUT = 300  # 5 minutes
+    CONNECTION_TIMEOUT = 15  # secondes - Réduit de 60s pour feedback rapide
+    HANDSHAKE_TIMEOUT = 10  # secondes - Timeout spécifique pour handshake
+    AUTH_TIMEOUT = 10  # secondes - Timeout spécifique pour authentification
+    BATCH_TIMEOUT = 600  # 10 minutes - Augmenté pour Real-ESRGAN sur GPU faibles
 
     # Reconnexion automatique
     RECONNECT_ENABLED = True  # Active la reconnexion automatique

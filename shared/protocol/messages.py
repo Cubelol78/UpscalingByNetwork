@@ -510,6 +510,30 @@ class DataChannelAuth(BaseMessage):
         return self.Payload.get("client_id", "")
 
 
+class DataChannelAuthResponse(BaseMessage):
+    """Réponse du serveur après authentification du canal Data"""
+
+    def __init__(self, Success: bool = True, ErrorMessage: str = ""):
+        """
+        Args:
+            Success: True si l'association a réussi
+            ErrorMessage: Message d'erreur en cas d'échec
+        """
+        Payload = {
+            "success": Success,
+            "error_message": ErrorMessage
+        }
+        super().__init__(MessageType.DATA_CHANNEL_AUTH_RESPONSE, Payload)
+
+    def IsSuccess(self) -> bool:
+        """Vérifie si l'association a réussi"""
+        return self.Payload.get("success", False)
+
+    def GetErrorMessage(self) -> str:
+        """Récupère le message d'erreur"""
+        return self.Payload.get("error_message", "")
+
+
 # ============================================================================
 # FACTORY DE MESSAGES
 # ============================================================================
@@ -537,6 +561,7 @@ class MessageFactory:
         MessageType.ERROR_MESSAGE: ErrorMessage,
         MessageType.DISCONNECT: DisconnectMessage,
         MessageType.DATA_CHANNEL_AUTH: DataChannelAuth,
+        MessageType.DATA_CHANNEL_AUTH_RESPONSE: DataChannelAuthResponse,
     }
 
     @classmethod

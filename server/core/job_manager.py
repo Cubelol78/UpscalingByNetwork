@@ -306,7 +306,9 @@ class JobManager:
             self.Database.UpdateVideo(VideoObj)
 
             # Extrait les métadonnées, audio, sous-titres
-            VideoData = self.VideoProcessor.ExtractVideoData(
+            # MODIFIÉ: Exécute dans un thread séparé pour ne pas bloquer l'event loop
+            VideoData = await asyncio.to_thread(
+                self.VideoProcessor.ExtractVideoData,
                 VideoObj.VideoPath,
                 VideoObj.VideoId
             )
@@ -334,7 +336,9 @@ class JobManager:
             self.Database.UpdateVideo(VideoObj)
 
             # Découpe la vidéo en images
-            Success = self.VideoProcessor.VideoToFrames(
+            # MODIFIÉ: Exécute le découpage dans un thread séparé (opération la plus longue)
+            Success = await asyncio.to_thread(
+                self.VideoProcessor.VideoToFrames,
                 VideoObj.VideoPath,
                 VideoObj.VideoId
             )
@@ -343,7 +347,9 @@ class JobManager:
                 return False
 
             # Crée les batches
-            Batches = self.VideoProcessor.CreateBatches(
+            # MODIFIÉ: CreateBatches est aussi CPU-bound, exécuter dans un thread
+            Batches = await asyncio.to_thread(
+                self.VideoProcessor.CreateBatches,
                 VideoObj.VideoId,
                 self.BatchSize
             )
@@ -413,7 +419,9 @@ class JobManager:
             self.Database.UpdateVideo(VideoObj)
 
             # Réassemble la vidéo
-            OutputPath = self.VideoProcessor.ReassembleVideo(
+            # MODIFIÉ: Exécute le réassemblage dans un thread séparé
+            OutputPath = await asyncio.to_thread(
+                self.VideoProcessor.ReassembleVideo,
                 VideoObj.VideoId,
                 VideoObj.Framerate,
                 VideoObj.UpscaleFactor
@@ -443,7 +451,9 @@ class JobManager:
                 return False
 
             # Encode en AV1
-            AV1Path = self.VideoProcessor.EncodeToAV1(
+            # MODIFIÉ: Encodage AV1 très long, exécuter dans un thread
+            AV1Path = await asyncio.to_thread(
+                self.VideoProcessor.EncodeToAV1,
                 VideoObj.OutputPath,
                 VideoObj.VideoId
             )
