@@ -8,7 +8,8 @@ import os
 from datetime import datetime
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
-from typing import Optional
+from typing import Optional, List
+from collections import deque
 
 
 class ColoredFormatter(logging.Formatter):
@@ -32,15 +33,74 @@ class ColoredFormatter(logging.Formatter):
         return super().format(Record)
 
 
+class MemoryLogHandler(logging.Handler):
+    """
+    Handler qui garde les N derniers logs en mémoire pour affichage dans le GUI
+    """
+
+    def __init__(self, MaxLogs: int = 100):
+        """
+        Initialise le handler
+
+        Args:
+            MaxLogs: Nombre maximum de logs à garder en mémoire
+        """
+        super().__init__()
+        self.MaxLogs = MaxLogs
+        self.LogBuffer = deque(maxlen=MaxLogs)
+
+    def emit(self, Record):
+        """
+        Ajoute un log au buffer en mémoire
+
+        Args:
+            Record: LogRecord à sauvegarder
+        """
+        try:
+            # Formate le log
+            Message = self.format(Record)
+            # Ajoute au buffer (automatiquement supprime le plus ancien si plein)
+            self.LogBuffer.append({
+                'time': datetime.fromtimestamp(Record.created),
+                'level': Record.levelname,
+                'message': Record.getMessage(),
+                'formatted': Message
+            })
+        except Exception:
+            self.handleError(Record)
+
+    def GetRecentLogs(self, Count: Optional[int] = None) -> List[dict]:
+        """
+        Récupère les logs récents
+
+        Args:
+            Count: Nombre de logs à retourner (None = tous)
+
+        Returns:
+            Liste de dictionnaires contenant les logs
+        """
+        if Count is None:
+            return list(self.LogBuffer)
+        else:
+            # Retourne les Count derniers logs
+            return list(self.LogBuffer)[-Count:]
+
+    def Clear(self):
+        """Vide le buffer de logs"""
+        self.LogBuffer.clear()
+
+
 class LoggerManager:
     """Gestionnaire centralisé des loggers"""
 
     _Loggers = {}
+    _MemoryHandlers = {}  # Stocke les MemoryHandlers pour chaque logger
 
     @classmethod
     def GetLogger(cls, Name: str, LogDir: Optional[str] = None,
                   LogFile: Optional[str] = None, ConsoleOutput: bool = True,
-                  FileOutput: bool = True, Level: int = logging.INFO) -> logging.Logger:
+                  FileOutput: bool = True, Level: int = logging.INFO,
+                  MemoryOutput: bool = False, MaxMemoryLogs: int = 100) -> logging.Logger:
         """
         Récupère ou crée un logger configuré
 
@@ -51,6 +111,8 @@ class LoggerManager:
             ConsoleOutput: Afficher dans la console
             FileOutput: Écrire dans un fichier
             Level: Niveau de logging
+            MemoryOutput: Garder les logs en mémoire pour le GUI
+            MaxMemoryLogs: Nombre maximum de logs à garder en mémoire
 
         Returns:
             Logger configuré
@@ -111,6 +173,14 @@ class LoggerManager:
             FileHandler.setFormatter(DetailedFormat)
             Logger.addHandler(FileHandler)
 
+        # Handler mémoire pour le GUI
+        if MemoryOutput:
+            MemoryHandler = MemoryLogHandler(MaxLogs=MaxMemoryLogs)
+            MemoryHandler.setLevel(Level)
+            MemoryHandler.setFormatter(DetailedFormat)
+            Logger.addHandler(MemoryHandler)
+            cls._MemoryHandlers[Name] = MemoryHandler
+
         # Stocker le logger
         cls._Loggers[Name] = Logger
 
@@ -123,6 +193,33 @@ class LoggerManager:
             cls._Loggers[Name].setLevel(Level)
             for Handler in cls._Loggers[Name].handlers:
                 Handler.setLevel(Level)
+
+    @classmethod
+    def GetRecentLogs(cls, Name: str, Count: Optional[int] = None) -> List[dict]:
+        """
+        Récupère les logs récents d'un logger
+
+        Args:
+            Name: Nom du logger
+            Count: Nombre de logs à retourner (None = tous)
+
+        Returns:
+            Liste de dictionnaires contenant les logs
+        """
+        if Name in cls._MemoryHandlers:
+            return cls._MemoryHandlers[Name].GetRecentLogs(Count)
+        return []
+
+    @classmethod
+    def ClearLogs(cls, Name: str):
+        """
+        Vide le buffer de logs d'un logger
+
+        Args:
+            Name: Nom du logger
+        """
+        if Name in cls._MemoryHandlers:
+            cls._MemoryHandlers[Name].Clear()
 
     @classmethod
     def CloseAll(cls):
@@ -150,12 +247,13 @@ def GetServerLogger(Level: int = logging.INFO) -> logging.Logger:
     )
 
 
-def GetClientLogger(Level: int = logging.INFO) -> logging.Logger:
+def GetClientLogger(Level: int = logging.INFO, MemoryOutput: bool = True) -> logging.Logger:
     """
     Récupère le logger du client
 
     Args:
         Level: Niveau de logging
+        MemoryOutput: Active le stockage des logs en mémoire pour le GUI (défaut: True)
 
     Returns:
         Logger configuré pour le client
@@ -163,7 +261,9 @@ def GetClientLogger(Level: int = logging.INFO) -> logging.Logger:
     return LoggerManager.GetLogger(
         Name="Client",
         LogFile="client.log",
-        Level=Level
+        Level=Level,
+        MemoryOutput=MemoryOutput,
+        MaxMemoryLogs=100  # Garde les 100 derniers logs en mémoire
     )
 
 

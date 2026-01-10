@@ -110,8 +110,21 @@ def UpdateDependencies():
         return False
 
 
-def AskYesNo(Question):
-    """Demande une réponse oui/non à l'utilisateur"""
+def AskYesNo(Question, AutoAccept=False):
+    """
+    Demande une réponse oui/non à l'utilisateur
+
+    Args:
+        Question: Question à poser
+        AutoAccept: Si True, accepte automatiquement sans demander
+
+    Returns:
+        True pour oui, False pour non
+    """
+    if AutoAccept:
+        print(f"{Question} (oui/non): oui [auto-accepté]")
+        return True
+
     while True:
         Response = input(f"{Question} (oui/non): ").strip().lower()
         if Response in ["oui", "o", "yes", "y"]:
@@ -165,8 +178,29 @@ def RestartInVenv(VenvPath, Args):
             return False
 
 
-def ChooseMode(CliMode):
-    """Demande à l'utilisateur quel mode lancer (serveur ou client)"""
+def ChooseMode(CliMode, PresetMode=None):
+    """
+    Demande à l'utilisateur quel mode lancer (serveur ou client)
+
+    Args:
+        CliMode: True pour mode CLI, False pour GUI
+        PresetMode: Mode prédéfini ("server" ou "client"), None pour demander
+
+    Returns:
+        "server" ou "client"
+    """
+    # Si un mode est déjà spécifié, le retourner directement
+    if PresetMode:
+        if PresetMode in ("server", "client"):
+            ModeStr = "Serveur" if PresetMode == "server" else "Client"
+            GuiCliStr = "CLI" if CliMode else "GUI"
+            print(f"\nMode: {ModeStr} ({GuiCliStr})")
+            return PresetMode
+        else:
+            print(f"⚠ Mode invalide spécifié: {PresetMode}")
+            print("Modes valides: --server ou --client")
+            # Continue pour demander interactivement
+
     if CliMode:
         print("\nMode CLI activé")
         print("Choisissez le mode:")
@@ -197,12 +231,13 @@ def ChooseMode(CliMode):
                 print("Choix invalide. Veuillez choisir 1 ou 2")
 
 
-def CheckFirewallPermissions(AppName: str) -> bool:
+def CheckFirewallPermissions(AppName: str, AutoAccept: bool = False) -> bool:
     """
     Vérifie et configure les permissions pare-feu sur Windows
 
     Args:
         AppName: Nom de l'application pour les règles
+        AutoAccept: Si True, configure automatiquement le pare-feu
 
     Returns:
         True si on peut continuer
@@ -217,9 +252,15 @@ def CheckFirewallPermissions(AppName: str) -> bool:
 
     print(f"⚠ Pare-feu: {Message}")
 
-    # Demande à l'utilisateur
-    Response = input("\nVoulez-vous configurer le pare-feu automatiquement ? (oui/non): ").strip().lower()
-    if Response in ("oui", "o", "yes", "y"):
+    # Demande à l'utilisateur (ou auto-accepte)
+    if AutoAccept:
+        print("Voulez-vous configurer le pare-feu automatiquement ? (oui/non): oui [auto-accepté]")
+        ShouldConfigure = True
+    else:
+        Response = input("\nVoulez-vous configurer le pare-feu automatiquement ? (oui/non): ").strip().lower()
+        ShouldConfigure = Response in ("oui", "o", "yes", "y")
+
+    if ShouldConfigure:
         if RunAsAdmin():
             print("Relancement en mode administrateur...")
             sys.exit(0)
@@ -230,14 +271,20 @@ def CheckFirewallPermissions(AppName: str) -> bool:
     return True
 
 
-def LaunchServer(CliMode):
-    """Lance le serveur"""
+def LaunchServer(CliMode, AutoAccept=False):
+    """
+    Lance le serveur
+
+    Args:
+        CliMode: True pour mode CLI
+        AutoAccept: Auto-accepte la configuration du pare-feu
+    """
     print("\n" + "="*60)
     print("Lancement du serveur d'upscaling")
     print("="*60)
 
     # Vérification du pare-feu Windows
-    CheckFirewallPermissions("UpscalingServer")
+    CheckFirewallPermissions("UpscalingServer", AutoAccept)
 
     if CliMode:
         try:
@@ -257,14 +304,20 @@ def LaunchServer(CliMode):
             sys.exit(1)
 
 
-def LaunchClient(CliMode):
-    """Lance le client"""
+def LaunchClient(CliMode, AutoAccept=False):
+    """
+    Lance le client
+
+    Args:
+        CliMode: True pour mode CLI
+        AutoAccept: Auto-accepte la configuration du pare-feu
+    """
     print("\n" + "="*60)
     print("Lancement du client d'upscaling")
     print("="*60)
 
     # Vérification du pare-feu Windows
-    CheckFirewallPermissions("UpscalingClient")
+    CheckFirewallPermissions("UpscalingClient", AutoAccept)
 
     if CliMode:
         try:
@@ -293,14 +346,63 @@ def Main():
 
     # Parse arguments
     Parser = argparse.ArgumentParser(
-        description="Système d'upscaling vidéo distribué avec Real-ESRGAN"
+        description="Système d'upscaling vidéo distribué avec Real-ESRGAN",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Exemples d'utilisation:
+  python main.py                    Lancement interactif (GUI par défaut)
+  python main.py --cli              Lancement interactif en mode CLI
+  python main.py --server           Lancement direct du serveur (GUI)
+  python main.py --server --cli     Lancement direct du serveur (CLI)
+  python main.py --client           Lancement direct du client (GUI)
+  python main.py --client --cli     Lancement direct du client (CLI)
+  python main.py --server --yes     Serveur avec auto-acceptation (venv, pare-feu)
+  python main.py --client -y        Client avec auto-acceptation (raccourci)
+        """
     )
     Parser.add_argument(
         "--cli",
         action="store_true",
         help="Lance l'interface en ligne de commande au lieu de la GUI"
     )
+    Parser.add_argument(
+        "--server",
+        action="store_true",
+        help="Lance directement le serveur sans demander"
+    )
+    Parser.add_argument(
+        "--client",
+        action="store_true",
+        help="Lance directement le client sans demander"
+    )
+
+    # Groupe d'arguments pour auto-acceptation (multiples variantes)
+    AutoGroup = Parser.add_mutually_exclusive_group()
+    AutoGroup.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        dest="auto_accept",
+        help="Accepte automatiquement toutes les demandes (création venv, pare-feu)"
+    )
+    AutoGroup.add_argument(
+        "--oui",
+        action="store_true",
+        dest="auto_accept",
+        help="Alias pour --yes"
+    )
+
     Args = Parser.parse_args()
+
+    # Validation: ne peut pas spécifier à la fois --server et --client
+    if Args.server and Args.client:
+        Parser.error("Impossible de spécifier --server et --client en même temps")
+
+    # Détermine le mode préselectionné
+    PresetMode = None
+    if Args.server:
+        PresetMode = "server"
+    elif Args.client:
+        PresetMode = "client"
 
     # Vérification environnement virtuel
     VenvPath = os.path.join(os.path.dirname(__file__), "venv")
@@ -314,11 +416,11 @@ def Main():
             RestartInVenv(VenvPath, sys.argv[1:])
             # Si on arrive ici, le relancement a échoué
             print("\n⚠ Impossible de relancer dans le venv")
-            if not AskYesNo("Voulez-vous continuer sans environnement virtuel?"):
+            if not AskYesNo("Voulez-vous continuer sans environnement virtuel?", Args.auto_accept):
                 sys.exit(1)
         else:
             print("\n⚠ Aucun environnement virtuel Python détecté")
-            if AskYesNo("Voulez-vous créer un environnement Python pour ce logiciel?"):
+            if AskYesNo("Voulez-vous créer un environnement Python pour ce logiciel?", Args.auto_accept):
                 if CreateVirtualEnv(VenvPath):
                     if InstallDependencies(VenvPath):
                         print("\n✓ Environnement prêt. Redémarrage dans le venv...")
@@ -328,11 +430,11 @@ def Main():
                         print("\n⚠ Impossible de relancer dans le venv")
                     else:
                         print("\n✗ Impossible d'installer les dépendances")
-                        if not AskYesNo("Voulez-vous continuer quand même?"):
+                        if not AskYesNo("Voulez-vous continuer quand même?", Args.auto_accept):
                             sys.exit(1)
                 else:
                     print("\n✗ Impossible de créer l'environnement virtuel")
-                    if not AskYesNo("Voulez-vous continuer quand même?"):
+                    if not AskYesNo("Voulez-vous continuer quand même?", Args.auto_accept):
                         sys.exit(1)
             else:
                 print("Tentative de lancement sans environnement virtuel...")
@@ -343,13 +445,13 @@ def Main():
         UpdateDependencies()
 
     # Choix du mode
-    Mode = ChooseMode(Args.cli)
+    Mode = ChooseMode(Args.cli, PresetMode)
 
     # Lancement du module approprié
     if Mode == "server":
-        LaunchServer(Args.cli)
+        LaunchServer(Args.cli, Args.auto_accept)
     elif Mode == "client":
-        LaunchClient(Args.cli)
+        LaunchClient(Args.cli, Args.auto_accept)
     else:
         print(f"✗ Mode inconnu: {Mode}")
         sys.exit(1)

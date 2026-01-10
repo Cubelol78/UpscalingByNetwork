@@ -192,8 +192,52 @@ class MonitoringTab(QWidget):
                         f"💤 En attente d'un nouveau batch...{SuccessRate}"
                     )
 
+                # Mettre à jour les logs récents
+                self.UpdateLogs(Client)
+
         except Exception as e:
             self.ParentWindow.Logger.error(f"Erreur lors du rafraîchissement du monitoring: {e}")
+
+    def UpdateLogs(self, Client):
+        """
+        Met à jour l'affichage des logs récents
+
+        Args:
+            Client: Instance du client
+        """
+        try:
+            # Récupère les 20 derniers logs
+            RecentLogs = Client.GetRecentLogs(Count=20)
+
+            if not RecentLogs:
+                self.LogsTextEdit.setPlainText("Aucun log disponible")
+                return
+
+            # Formate les logs pour l'affichage
+            LogLines = []
+            for Log in RecentLogs:
+                # Format: HH:MM:SS | LEVEL | Message
+                Time = Log['time'].strftime('%H:%M:%S')
+                Level = Log['level']
+                Message = Log['message']
+
+                # Limite la longueur du message pour l'affichage
+                if len(Message) > 80:
+                    Message = Message[:77] + "..."
+
+                LogLine = f"{Time} | {Level:8s} | {Message}"
+                LogLines.append(LogLine)
+
+            # Affiche les logs (plus récent en bas)
+            self.LogsTextEdit.setPlainText("\n".join(LogLines))
+
+            # Scroll vers le bas pour voir les logs les plus récents
+            self.LogsTextEdit.verticalScrollBar().setValue(
+                self.LogsTextEdit.verticalScrollBar().maximum()
+            )
+
+        except Exception as e:
+            self.LogsTextEdit.setPlainText(f"Erreur lors de la récupération des logs: {e}")
 
     def ResetStats(self):
         """Réinitialise les statistiques"""

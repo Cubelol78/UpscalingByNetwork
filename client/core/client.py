@@ -664,8 +664,10 @@ class UpscalingClient:
                         self.Logger.info(f"✓ Résultat batch {BatchId} envoyé avec succès")
                         # Incrémente les statistiques
                         self.BatchesProcessed += 1
-                        ImageCount = len(Result.Payload.get("images", []))
+                        # Utilise image_count du Payload (déjà calculé dans BatchResult)
+                        ImageCount = Result.Payload.get("image_count", 0)
                         self.ImagesProcessed += ImageCount
+                        self.Logger.debug(f"Images traitées: +{ImageCount} (total: {self.ImagesProcessed})")
                     else:
                         self.Logger.warning(f"✗ Résultat batch {BatchId} (échec) envoyé")
                         self.BatchesFailed += 1
@@ -864,6 +866,19 @@ class UpscalingClient:
             "images_processed": self.ImagesProcessed,
             "queue_size": QueueSize  # Batches en attente d'envoi
         }
+
+    def GetRecentLogs(self, Count: int = 20) -> list:
+        """
+        Récupère les logs récents du client
+
+        Args:
+            Count: Nombre de logs à retourner
+
+        Returns:
+            Liste des logs récents
+        """
+        from shared.utils.logger import LoggerManager
+        return LoggerManager.GetRecentLogs("Client", Count)
 
 
 # ============================================================================
