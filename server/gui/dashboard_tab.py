@@ -46,21 +46,19 @@ class DashboardTab(QWidget):
 
         GridLayout = QGridLayout()
 
-        # Labels des statistiques
-        self.ClientsConnectedLabel = self.CreateStatLabel("0", "Clients connectés")
+        # Labels des statistiques (supprimé "Clients connectés" - inutile)
         self.ClientsActiveLabel = self.CreateStatLabel("0", "Clients actifs")
         self.VideosQueuedLabel = self.CreateStatLabel("0", "Vidéos en attente")
         self.VideosProcessingLabel = self.CreateStatLabel("0", "Vidéos en traitement")
         self.BatchesPendingLabel = self.CreateStatLabel("0", "Batchs en attente")
         self.BatchesCompletedLabel = self.CreateStatLabel("0", "Batchs complétés")
 
-        # Disposition en grille 2x3
-        GridLayout.addWidget(self.ClientsConnectedLabel[0], 0, 0)
-        GridLayout.addWidget(self.ClientsActiveLabel[0], 0, 1)
-        GridLayout.addWidget(self.VideosQueuedLabel[0], 1, 0)
-        GridLayout.addWidget(self.VideosProcessingLabel[0], 1, 1)
-        GridLayout.addWidget(self.BatchesPendingLabel[0], 2, 0)
-        GridLayout.addWidget(self.BatchesCompletedLabel[0], 2, 1)
+        # Disposition en grille 2x3 (une colonne de moins)
+        GridLayout.addWidget(self.ClientsActiveLabel[0], 0, 0)
+        GridLayout.addWidget(self.VideosQueuedLabel[0], 0, 1)
+        GridLayout.addWidget(self.VideosProcessingLabel[0], 1, 0)
+        GridLayout.addWidget(self.BatchesPendingLabel[0], 1, 1)
+        GridLayout.addWidget(self.BatchesCompletedLabel[0], 2, 0)
 
         Group.setLayout(GridLayout)
         return Group
@@ -115,16 +113,42 @@ class DashboardTab(QWidget):
             if not Database or not Server:
                 return
 
-            # Récupérer les statistiques
+            # Récupérer les statistiques depuis la base de données
             Stats = Database.GetStatistics()
 
-            # Mettre à jour les labels
-            self.ClientsConnectedLabel[1].setText(str(Stats.get('total_clients', 0)))
-            self.ClientsActiveLabel[1].setText(str(Stats.get('active_clients', 0)))
-            self.VideosQueuedLabel[1].setText(str(Stats.get('queued_videos', 0)))
-            self.VideosProcessingLabel[1].setText(str(Stats.get('processing_videos', 0)))
-            self.BatchesPendingLabel[1].setText(str(Stats.get('pending_batches', 0)))
-            self.BatchesCompletedLabel[1].setText(str(Stats.get('completed_batches', 0)))
+            # Extraire les données par statut
+            VideosByStatus = Stats.get('videos_by_status', {})
+            BatchesByStatus = Stats.get('batches_by_status', {})
+
+            # Clients actifs (depuis le ClientManager du serveur)
+            ActiveClients = 0
+            if Server and hasattr(Server, 'ClientManager'):
+                ActiveClients = len(Server.ClientManager.Clients)
+
+            # Mettre à jour les labels avec les vraies données
+            self.ClientsActiveLabel[1].setText(str(ActiveClients))
+
+            # Vidéos en attente (status = queued)
+            QueuedVideos = VideosByStatus.get('queued', 0)
+            self.VideosQueuedLabel[1].setText(str(QueuedVideos))
+
+            # Vidéos en traitement (status = extracting, distributing, processing, reassembling, encoding)
+            ProcessingVideos = (
+                VideosByStatus.get('extracting', 0) +
+                VideosByStatus.get('distributing', 0) +
+                VideosByStatus.get('processing', 0) +
+                VideosByStatus.get('reassembling', 0) +
+                VideosByStatus.get('encoding', 0)
+            )
+            self.VideosProcessingLabel[1].setText(str(ProcessingVideos))
+
+            # Batchs en attente (status = pending)
+            PendingBatches = BatchesByStatus.get('pending', 0)
+            self.BatchesPendingLabel[1].setText(str(PendingBatches))
+
+            # Batchs complétés (status = completed)
+            CompletedBatches = BatchesByStatus.get('completed', 0)
+            self.BatchesCompletedLabel[1].setText(str(CompletedBatches))
 
             # Mettre à jour l'activité récente
             RecentActivity = self.GetRecentActivity(Database)

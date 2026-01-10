@@ -53,6 +53,10 @@ class JobsTab(QWidget):
 
         self.JobsTable.setAlternatingRowColors(True)
 
+        # Active la sélection multiple (Ctrl+clic ou Shift+clic)
+        self.JobsTable.setSelectionMode(QTableWidget.ExtendedSelection)
+        self.JobsTable.setSelectionBehavior(QTableWidget.SelectRows)
+
         # Connecter le signal de sélection
         self.JobsTable.itemSelectionChanged.connect(self.OnSelectionChanged)
 
@@ -80,7 +84,18 @@ class JobsTab(QWidget):
         self.CancelVideoButton.setEnabled(False)
         ActionLayout.addWidget(self.CancelVideoButton)
 
+        self.DeleteVideoButton = QPushButton("🗑️ Supprimer de la BDD")
+        self.DeleteVideoButton.setObjectName("DeleteVideoButton")
+        self.DeleteVideoButton.setProperty("class", "danger")
+        self.DeleteVideoButton.clicked.connect(self.DeleteSelectedVideo)
+        self.DeleteVideoButton.setEnabled(False)
+        ActionLayout.addWidget(self.DeleteVideoButton)
+
         ActionLayout.addStretch()
+
+        # Label de pagination
+        self.PaginationLabel = QLabel("Affichage: 0-0 sur 0")
+        ActionLayout.addWidget(self.PaginationLabel)
 
         self.RefreshButton = QPushButton("🔄 Rafraîchir")
         self.RefreshButton.clicked.connect(self.Refresh)
@@ -95,24 +110,49 @@ class JobsTab(QWidget):
 
             if not Database:
                 self.JobsTable.setRowCount(0)
+                self.PaginationLabel.setText("Affichage: 0-0 sur 0")
                 return
 
-            # Sauvegarder la sélection actuelle
-            SelectedVideoId = None
-            CurrentRow = self.JobsTable.currentRow()
-            if CurrentRow >= 0:
-                IdItem = self.JobsTable.item(CurrentRow, 0)
+            # Sauvegarder toutes les sélections actuelles (support multi-sélection)
+            SelectedVideoIds = []
+            SelectedRows = self.JobsTable.selectionModel().selectedRows()
+            for RowIndex in SelectedRows:
+                Row = RowIndex.row()
+                IdItem = self.JobsTable.item(Row, 0)
                 if IdItem:
-                    SelectedVideoId = IdItem.data(Qt.UserRole)
+                    SelectedVideoIds.append(IdItem.data(Qt.UserRole))
 
-            # Récupérer tous les jobs
-            Videos = Database.GetAllVideos()
+            # Récupérer tous les jobs (limite à 100 pour éviter surcharge RAM)
+            MaxJobs = 100
+            Videos = Database.GetAllVideos(Limit=MaxJobs)
+
+            # Récupérer le nombre total (pour info pagination)
+            Stats = Database.GetStatistics()
+            TotalVideos = Stats.get('total_videos', 0)
 
             # Vider le tableau
             self.JobsTable.setRowCount(0)
 
+            # Mettre à jour le label de pagination
+            DisplayedCount = len(Videos)
+            if DisplayedCount > 0:
+                self.PaginationLabel.setText(f"Affichage: 1-{DisplayedCount} sur {TotalVideos}")
+                if TotalVideos > MaxJobs:
+                    self.PaginationLabel.setStyleSheet("color: orange; font-weight: bold;")
+                    self.PaginationLabel.setToolTip(
+                        f"⚠️ Seuls les {MaxJobs} jobs les plus récents sont affichés.\n"
+                        f"Total dans la BDD: {TotalVideos}\n"
+                        "Supprimez les anciens jobs pour libérer de la mémoire."
+                    )
+                else:
+                    self.PaginationLabel.setStyleSheet("")
+                    self.PaginationLabel.setToolTip("")
+            else:
+                self.PaginationLabel.setText("Affichage: 0-0 sur 0")
+                self.PaginationLabel.setStyleSheet("")
+
             # Remplir le tableau
-            RowToSelect = -1
+            RowsToSelect = []  # Liste des lignes à re-sélectionner
             for Video in Videos:
                 RowPosition = self.JobsTable.rowCount()
                 self.JobsTable.insertRow(RowPosition)
@@ -123,9 +163,9 @@ class JobsTab(QWidget):
                 IdItem.setData(Qt.UserRole, Video.VideoId)
                 self.JobsTable.setItem(RowPosition, 0, IdItem)
 
-                # Vérifier si c'est la ligne précédemment sélectionnée
-                if SelectedVideoId and Video.VideoId == SelectedVideoId:
-                    RowToSelect = RowPosition
+                # Vérifier si cette ligne était sélectionnée avant le refresh
+                if Video.VideoId in SelectedVideoIds:
+                    RowsToSelect.append(RowPosition)
 
                 # Nom du fichier vidéo
                 VideoName = Video.VideoPath.split('/')[-1]
@@ -164,9 +204,9 @@ class JobsTab(QWidget):
                     TtaItem.setForeground(QColor("white"))
                 self.JobsTable.setItem(RowPosition, 7, TtaItem)
 
-            # Restaurer la sélection
-            if RowToSelect >= 0:
-                self.JobsTable.selectRow(RowToSelect)
+            # Restaurer toutes les sélections
+            for RowIndex in RowsToSelect:
+                self.JobsTable.selectRow(RowIndex)
 
         except Exception as e:
             self.ParentWindow.Logger.error(f"Erreur lors du rafraîchissement des jobs: {e}")
@@ -229,30 +269,56 @@ class JobsTab(QWidget):
 
     def OnSelectionChanged(self):
         """Gère le changement de sélection dans le tableau"""
-        SelectedRow = self.JobsTable.currentRow()
-        self.CancelVideoButton.setEnabled(SelectedRow >= 0)
+        SelectedRows = self.JobsTable.selectionModel().selectedRows()
+        HasSelection = len(SelectedRows) > 0
+        self.CancelVideoButton.setEnabled(HasSelection)
+        self.DeleteVideoButton.setEnabled(HasSelection)
+
+        # Met à jour le texte des boutons selon le nombre de sélections
+        if len(SelectedRows) > 1:
+            self.CancelVideoButton.setText(f"❌ Annuler ({len(SelectedRows)} vidéos)")
+            self.DeleteVideoButton.setText(f"🗑️ Supprimer ({len(SelectedRows)} vidéos)")
+        else:
+            self.CancelVideoButton.setText("❌ Annuler la vidéo")
+            self.DeleteVideoButton.setText("🗑️ Supprimer de la BDD")
 
     def CancelSelectedVideo(self):
-        """Annule la vidéo sélectionnée"""
+        """Annule la ou les vidéos sélectionnées"""
         try:
-            SelectedRow = self.JobsTable.currentRow()
-            if SelectedRow < 0:
+            # Récupérer toutes les vidéos sélectionnées
+            SelectedRows = self.JobsTable.selectionModel().selectedRows()
+            if not SelectedRows:
                 return
 
-            # Récupérer l'ID de la vidéo
-            IdItem = self.JobsTable.item(SelectedRow, 0)
-            if not IdItem:
-                return
+            VideosToCancel = []
+            for RowIndex in SelectedRows:
+                Row = RowIndex.row()
+                IdItem = self.JobsTable.item(Row, 0)
+                VideoNameItem = self.JobsTable.item(Row, 1)
+                if IdItem and VideoNameItem:
+                    VideosToCancel.append({
+                        'id': IdItem.data(Qt.UserRole),
+                        'name': VideoNameItem.text()
+                    })
 
-            VideoId = IdItem.data(Qt.UserRole)
-            VideoName = self.JobsTable.item(SelectedRow, 1).text()
+            if not VideosToCancel:
+                return
 
             # Confirmation
+            if len(VideosToCancel) == 1:
+                Message = f"Voulez-vous vraiment annuler le traitement de:\n{VideosToCancel[0]['name']}?\n\n"
+            else:
+                VideoList = "\n".join([f"• {v['name']}" for v in VideosToCancel[:5]])
+                if len(VideosToCancel) > 5:
+                    VideoList += f"\n... et {len(VideosToCancel) - 5} autres"
+                Message = f"Voulez-vous vraiment annuler le traitement de {len(VideosToCancel)} vidéos?\n\n{VideoList}\n\n"
+
+            Message += "Les fichiers temporaires seront supprimés."
+
             Reply = QMessageBox.question(
                 self,
                 "Confirmation",
-                f"Voulez-vous vraiment annuler le traitement de:\n{VideoName}?\n\n"
-                "Les fichiers temporaires seront supprimés.",
+                Message,
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No
             )
@@ -260,30 +326,158 @@ class JobsTab(QWidget):
             if Reply != QMessageBox.Yes:
                 return
 
-            # Annuler via le JobManager
+            # Annuler toutes les vidéos via le JobManager
             JobManager = self.ParentWindow.GetJobManager()
-            if JobManager:
-                Success = JobManager.CancelVideo(VideoId)
+            if not JobManager:
+                raise Exception("JobManager non disponible")
+
+            SuccessCount = 0
+            FailCount = 0
+            for Video in VideosToCancel:
+                Success = JobManager.CancelVideo(Video['id'])
                 if Success:
-                    self.ParentWindow.Logger.info(f"Vidéo annulée: {VideoName}")
+                    SuccessCount += 1
+                    self.ParentWindow.Logger.info(f"Vidéo annulée: {Video['name']}")
+                else:
+                    FailCount += 1
+
+            # Message de résultat
+            if SuccessCount > 0:
+                if FailCount == 0:
                     QMessageBox.information(
                         self,
                         "Succès",
-                        f"Le traitement de la vidéo a été annulé:\n{VideoName}"
+                        f"{SuccessCount} vidéo(s) annulée(s) avec succès."
                     )
                 else:
                     QMessageBox.warning(
                         self,
-                        "Avertissement",
-                        "Impossible d'annuler la vidéo. Elle est peut-être déjà terminée."
+                        "Partiellement réussi",
+                        f"{SuccessCount} vidéo(s) annulée(s).\n{FailCount} échec(s) (peut-être déjà terminées)."
                     )
-                self.Refresh()
             else:
-                raise Exception("JobManager non disponible")
+                QMessageBox.warning(
+                    self,
+                    "Échec",
+                    "Aucune vidéo n'a pu être annulée."
+                )
+
+            self.Refresh()
 
         except Exception as e:
             self.ParentWindow.Logger.error(f"Erreur lors de l'annulation: {e}")
-            QMessageBox.critical(self, "Erreur", f"Impossible d'annuler la vidéo:\n{str(e)}")
+            QMessageBox.critical(self, "Erreur", f"Impossible d'annuler les vidéos:\n{str(e)}")
+
+    def DeleteSelectedVideo(self):
+        """Supprime définitivement la ou les vidéos sélectionnées de la base de données"""
+        try:
+            # Récupérer toutes les vidéos sélectionnées
+            SelectedRows = self.JobsTable.selectionModel().selectedRows()
+            if not SelectedRows:
+                return
+
+            VideosToDelete = []
+            HasActiveJobs = False
+            for RowIndex in SelectedRows:
+                Row = RowIndex.row()
+                IdItem = self.JobsTable.item(Row, 0)
+                VideoNameItem = self.JobsTable.item(Row, 1)
+                VideoStatusItem = self.JobsTable.item(Row, 2)
+                if IdItem and VideoNameItem and VideoStatusItem:
+                    VideoStatus = VideoStatusItem.text().lower()
+                    VideosToDelete.append({
+                        'id': IdItem.data(Qt.UserRole),
+                        'name': VideoNameItem.text(),
+                        'status': VideoStatus
+                    })
+                    # Vérifier si au moins un job est actif
+                    if VideoStatus in ['processing', 'extracting', 'distributing', 'reassembling', 'encoding']:
+                        HasActiveJobs = True
+
+            if not VideosToDelete:
+                return
+
+            # Vérifier si des jobs sont en cours
+            if HasActiveJobs:
+                QMessageBox.warning(
+                    self,
+                    "Impossible",
+                    "Impossible de supprimer certaines vidéos car elles sont actuellement en cours de traitement.\n\n"
+                    "Annulez d'abord le traitement avant de supprimer."
+                )
+                return
+
+            # Confirmation avec avertissement fort
+            if len(VideosToDelete) == 1:
+                Message = f"Voulez-vous vraiment SUPPRIMER DÉFINITIVEMENT:\n{VideosToDelete[0]['name']}?\n\n"
+            else:
+                VideoList = "\n".join([f"• {v['name']}" for v in VideosToDelete[:5]])
+                if len(VideosToDelete) > 5:
+                    VideoList += f"\n... et {len(VideosToDelete) - 5} autres"
+                Message = f"Voulez-vous vraiment SUPPRIMER DÉFINITIVEMENT {len(VideosToDelete)} vidéos?\n\n{VideoList}\n\n"
+
+            Message += (
+                "⚠️ Cette action est IRRÉVERSIBLE!\n"
+                "• Les vidéos seront supprimées de la base de données\n"
+                "• Tous les batches associés seront supprimés\n"
+                "• Les fichiers temporaires resteront (suppression manuelle recommandée)\n\n"
+                "Êtes-vous absolument sûr?"
+            )
+
+            Reply = QMessageBox.question(
+                self,
+                "⚠️ Confirmation de suppression",
+                Message,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+
+            if Reply != QMessageBox.Yes:
+                return
+
+            # Supprimer toutes les vidéos via la base de données
+            Database = self.ParentWindow.GetDatabase()
+            if not Database:
+                raise Exception("Base de données non disponible")
+
+            SuccessCount = 0
+            FailCount = 0
+            for Video in VideosToDelete:
+                Success = Database.DeleteVideo(Video['id'])
+                if Success:
+                    SuccessCount += 1
+                    self.ParentWindow.Logger.info(f"Vidéo supprimée de la BDD: {Video['name']}")
+                else:
+                    FailCount += 1
+
+            # Message de résultat
+            if SuccessCount > 0:
+                if FailCount == 0:
+                    QMessageBox.information(
+                        self,
+                        "Succès",
+                        f"{SuccessCount} vidéo(s) supprimée(s) de la base de données.\n\n"
+                        "Note: Les fichiers temporaires n'ont pas été supprimés.\n"
+                        "Vous pouvez les supprimer manuellement si nécessaire."
+                    )
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Partiellement réussi",
+                        f"{SuccessCount} vidéo(s) supprimée(s).\n{FailCount} échec(s)."
+                    )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Échec",
+                    "Aucune vidéo n'a pu être supprimée."
+                )
+
+            self.Refresh()
+
+        except Exception as e:
+            self.ParentWindow.Logger.error(f"Erreur lors de la suppression: {e}")
+            QMessageBox.critical(self, "Erreur", f"Impossible de supprimer les vidéos:\n{str(e)}")
 
 
 class AddVideoDialog(QDialog):

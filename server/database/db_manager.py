@@ -400,6 +400,33 @@ class DatabaseManager:
             self.Logger.error(f"Erreur lors de la mise à jour de la vidéo: {e}")
             return False
 
+    def DeleteVideo(self, VideoId: str) -> bool:
+        """
+        Supprime une vidéo et tous ses batches associés de la base de données
+
+        Args:
+            VideoId: ID de la vidéo à supprimer
+
+        Returns:
+            True si succès
+        """
+        try:
+            Cursor = self.Connection.cursor()
+
+            # Supprime d'abord tous les batches associés (contrainte de clé étrangère)
+            Cursor.execute("DELETE FROM batches WHERE video_id = ?", (VideoId,))
+
+            # Puis supprime la vidéo
+            Cursor.execute("DELETE FROM videos WHERE video_id = ?", (VideoId,))
+
+            self.Connection.commit()
+            self.Logger.info(f"Vidéo supprimée de la BDD: {VideoId}")
+            return True
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la suppression de la vidéo {VideoId}: {e}")
+            return False
+
     def GetQueuedVideos(self) -> List[Video]:
         """
         Récupère toutes les vidéos en attente
