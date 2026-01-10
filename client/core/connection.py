@@ -63,9 +63,9 @@ def ConfigureSocket(Writer: asyncio.StreamWriter, Logger):
         # Désactive l'algorithme de Nagle pour réduire la latence
         Sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-        # Augmente les buffers de réception/envoi pour les gros transferts
-        Sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2 * 1024 * 1024)  # 2MB
-        Sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 2 * 1024 * 1024)  # 2MB
+        # Augmente les buffers de réception/envoi pour les gros transferts (BatchResults avec images)
+        Sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 * 1024 * 1024)  # 8MB (était 2MB)
+        Sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8 * 1024 * 1024)  # 8MB (était 2MB)
 
     except Exception as e:
         Logger.warning(f"Impossible de configurer le socket: {e}")

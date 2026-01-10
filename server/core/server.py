@@ -55,9 +55,9 @@ def ConfigureSocket(Writer: asyncio.StreamWriter, Logger):
         # Désactive Nagle pour réduire la latence
         Sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-        # Augmente les buffers pour les gros transferts
-        Sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2 * 1024 * 1024)  # 2MB
-        Sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 2 * 1024 * 1024)  # 2MB
+        # Augmente les buffers pour les gros transferts (BatchResults avec images)
+        Sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 * 1024 * 1024)  # 8MB (était 2MB)
+        Sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8 * 1024 * 1024)  # 8MB (était 2MB)
 
     except Exception as e:
         Logger.debug(f"Configuration socket: {e}")
@@ -316,15 +316,17 @@ class UpscalingServer:
 
         while self.Running:
             try:
-                # Reçoit un message via le canal Data (timeout long car les transfers sont lourds)
+                # Reçoit un message via le canal Data
+                # Pas de timeout fixe - on attend tant que le client est connecté
                 MessageData = await self.ClientManager.ReceiveDataMessage(
                     ClientId,
                     Decrypt=True,
-                    Timeout=NetworkConfig.BATCH_TIMEOUT
+                    Timeout=None  # Pas de timeout - le heartbeat Control détectera les déconnexions
                 )
 
                 if not MessageData:
-                    self.Logger.warning(f"Message Data vide du client {ClientId}")
+                    # Client déconnecté proprement (connexion fermée)
+                    self.Logger.info(f"Connexion Data fermée par le client {ClientId}")
                     break
 
                 # Parse le message
@@ -334,14 +336,16 @@ class UpscalingServer:
                 if isinstance(Message, BatchResult):
                     self.Logger.info(f"BatchResult reçu via Data du client {ClientId}")
                     if self.BatchDistributor:
-                        await self.BatchDistributor.ReceiveBatchResult(ClientId, Message)
+                        # Traite le BatchResult dans une tâche séparée pour ne pas bloquer la lecture
+                        # Cela permet de continuer à lire d'autres messages pendant le traitement
+                        asyncio.create_task(self.BatchDistributor.ReceiveBatchResult(ClientId, Message))
                     else:
                         self.Logger.error("BatchDistributor non configuré - résultat ignoré")
                 else:
                     self.Logger.warning(f"Message inattendu sur canal Data: {Message.MessageType}")
 
             except asyncio.TimeoutError:
-                # Timeout normal, on continue d'écouter
+                # Ne devrait jamais arriver avec Timeout=None
                 continue
 
             except Exception as e:
