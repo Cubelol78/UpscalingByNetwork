@@ -708,10 +708,29 @@ class DualConnectionManager:
             self.Logger.info("✓ Authentification Data envoyée")
 
             # Attend la confirmation du serveur
-            ResponseData = await asyncio.wait_for(
-                self.ReceiveDataMessage(Decrypt=True, Timeout=10),
-                timeout=10
-            )
+            # NOTE: On ne peut pas utiliser ReceiveDataMessage() ici car DataConnected n'est pas encore True
+            # Il faut lire directement depuis le DataReader
+            try:
+                SizeBytes = await asyncio.wait_for(
+                    self.DataReader.readexactly(4),
+                    timeout=10
+                )
+                ResponseSize = int.from_bytes(SizeBytes, byteorder='big')
+
+                if ResponseSize <= 0 or ResponseSize > NetworkConfig.MAX_MESSAGE_SIZE:
+                    self.Logger.error("Taille de réponse Data invalide")
+                    return False
+
+                ResponseBytes = await self.DataReader.readexactly(ResponseSize)
+                EncryptedResponse = ResponseBytes.decode('utf-8')
+                ResponseData = self.DataEncryption.DecryptMessage(EncryptedResponse)
+
+            except asyncio.TimeoutError:
+                self.Logger.error("Timeout en attente de confirmation Data")
+                return False
+            except Exception as e:
+                self.Logger.error(f"Erreur lors de la réception de confirmation Data: {e}")
+                return False
 
             if not ResponseData:
                 self.Logger.error("Pas de réponse du serveur pour Data association")

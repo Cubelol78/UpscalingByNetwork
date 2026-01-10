@@ -667,6 +667,17 @@ class ClientManager:
                 await Writer.wait_closed()
                 return False
 
+            # Vérifie que le client est toujours dans self.Clients
+            # (Il pourrait être dans PendingDataConnections pendant le délai de grâce mais déjà déconnecté)
+            if ClaimedClientId not in self.Clients:
+                self.Logger.warning(f"Client {ClaimedClientId} n'est plus connecté (Control fermé pendant délai de grâce)")
+                # Nettoie PendingDataConnections immédiatement
+                if ClaimedClientId in self.PendingDataConnections:
+                    del self.PendingDataConnections[ClaimedClientId]
+                Writer.close()
+                await Writer.wait_closed()
+                return False
+
             # Retire des PendingDataConnections (connexion Data établie)
             if ClaimedClientId in self.PendingDataConnections:
                 del self.PendingDataConnections[ClaimedClientId]
@@ -712,10 +723,22 @@ class ClientManager:
         if not ClientInfo:
             return
 
-        # Nettoie PendingDataConnections si le client était en attente
-        if ClientId in self.PendingDataConnections:
+        # Ne nettoie PAS immédiatement PendingDataConnections
+        # Si Data n'est pas connecté, la connexion pourrait être en cours
+        # Laisse un délai de grâce de 5s pour permettre à Data de se connecter
+        if ClientId in self.PendingDataConnections and not ClientInfo.DataConnected:
+            async def DelayedCleanup():
+                await asyncio.sleep(5)
+                if ClientId in self.PendingDataConnections:
+                    del self.PendingDataConnections[ClientId]
+                    self.Logger.debug(f"Client {ClientId} retiré de PendingDataConnections après délai")
+
+            asyncio.create_task(DelayedCleanup())
+            self.Logger.debug(f"Délai de grâce de 5s pour Data du client {ClientId}")
+        elif ClientId in self.PendingDataConnections:
+            # Data déjà connecté, on peut supprimer immédiatement
             del self.PendingDataConnections[ClientId]
-            self.Logger.debug(f"Client {ClientId} retiré de PendingDataConnections lors du nettoyage")
+            self.Logger.debug(f"Client {ClientId} retiré de PendingDataConnections (Data connecté)")
 
         # Appelle le callback de déconnexion AVANT de fermer
         # Permet de réallouer les batches assignés au client
