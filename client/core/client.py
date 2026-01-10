@@ -76,6 +76,10 @@ class UpscalingClient:
         self.BatchesFailed = 0     # Nombre de batches échoués
         self.ImagesProcessed = 0   # Nombre total d'images traitées
 
+        # Progression du batch en cours (pour le GUI)
+        self.CurrentBatchProgress = 0  # Nombre d'images traitées dans le batch actuel
+        self.CurrentBatchTotal = 0     # Nombre total d'images dans le batch actuel
+
         # File d'attente pour les résultats à envoyer (découplage traitement/envoi)
         # La queue contient des chemins de fichiers (pas les données en RAM)
         self.ResultQueue: Queue = None
@@ -538,10 +542,21 @@ class UpscalingClient:
             Payload: Données du batch
         """
         try:
+            # Initialise la progression du batch
+            Images = Payload.get("images", [])
+            self.CurrentBatchTotal = len(Images)
+            self.CurrentBatchProgress = 0
+
+            # Callback de progression pour mettre à jour CurrentBatchProgress
+            def ProgressCallback(Current, Total):
+                self.CurrentBatchProgress = Current
+                self.CurrentBatchTotal = Total
+
             # Traite le batch dans un thread séparé (Real-ESRGAN est bloquant)
             Result = await asyncio.to_thread(
                 self.LocalProcessor.ProcessBatch,
-                Payload
+                Payload,
+                ProgressCallback  # Passe le callback de progression
             )
 
             if not Result:
@@ -588,6 +603,9 @@ class UpscalingClient:
             # Cela évite que le serveur timeout le client pendant l'envoi d'un gros batch
             self.CurrentBatch = None
             self.ProcessingTask = None
+            # Réinitialise la progression
+            self.CurrentBatchProgress = 0
+            self.CurrentBatchTotal = 0
 
     async def _HandleBatchError(self, ErrorMessage: str):
         """
@@ -864,7 +882,10 @@ class UpscalingClient:
             "batches_processed": self.BatchesProcessed,
             "batches_failed": self.BatchesFailed,
             "images_processed": self.ImagesProcessed,
-            "queue_size": QueueSize  # Batches en attente d'envoi
+            "queue_size": QueueSize,  # Batches en attente d'envoi
+            # Progression du batch en cours
+            "batch_progress": self.CurrentBatchProgress,
+            "batch_total": self.CurrentBatchTotal
         }
 
     def GetRecentLogs(self, Count: int = 20) -> list:

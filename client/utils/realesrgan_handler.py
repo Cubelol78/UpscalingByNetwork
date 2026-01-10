@@ -7,6 +7,8 @@ Supporte les options de performance: tile-size, GPU selection, threads, TTA
 import os
 import subprocess
 import platform
+import time
+import threading
 from typing import Optional, List, Dict, Tuple
 from pathlib import Path
 
@@ -234,7 +236,7 @@ class RealESRGANHandler:
             OutputDir: Répertoire de sortie
             ScaleFactor: Facteur d'upscaling
             Model: Nom du modèle
-            ProgressCallback: Fonction appelée à la fin (total, total)
+            ProgressCallback: Fonction appelée pour chaque image traitée (current, total)
 
         Returns:
             Tuple (UpscaledImages, ErrorDetails):
@@ -253,8 +255,11 @@ class RealESRGANHandler:
 
             self.Logger.info(f"Upscaling dossier: {InputDir} -> {OutputDir} ({Total} images)")
 
-            # Utilise le mode dossier de Real-ESRGAN (une seule commande)
-            Success, ErrorDetails = self.UpscaleDirectory(InputDir, OutputDir, ScaleFactor, Model)
+            # Utilise le mode dossier de Real-ESRGAN (une seule commande) avec callback
+            Success, ErrorDetails = self.UpscaleDirectory(
+                InputDir, OutputDir, ScaleFactor, Model,
+                TotalImages=Total, ProgressCallback=ProgressCallback
+            )
 
             if not Success:
                 self.Logger.error("Échec de l'upscaling en mode dossier")
@@ -271,10 +276,6 @@ class RealESRGANHandler:
                 else:
                     self.Logger.warning(f"Image manquante après upscaling: {Basename}")
 
-            # Callback de progression (appelé une fois à la fin)
-            if ProgressCallback:
-                ProgressCallback(Total, Total)
-
             self.Logger.info(f"✓ {len(UpscaledImages)}/{Total} images upscalées avec succès")
             return UpscaledImages, ""
 
@@ -284,15 +285,18 @@ class RealESRGANHandler:
             return [], ErrorMsg
 
     def UpscaleDirectory(self, InputDir: str, OutputDir: str,
-                        ScaleFactor: int = 4, Model: str = "realesr-animevideov3") -> Tuple[bool, str]:
+                        ScaleFactor: int = 4, Model: str = "realesr-animevideov3",
+                        TotalImages: int = None, ProgressCallback=None) -> Tuple[bool, str]:
         """
-        Upscale toutes les images d'un dossier en une seule commande
+        Upscale toutes les images d'un dossier en une seule commande avec suivi en temps réel
 
         Args:
             InputDir: Dossier contenant les images d'entrée
             OutputDir: Dossier de sortie
             ScaleFactor: Facteur d'upscaling (2, 3, ou 4)
             Model: Nom du modèle à utiliser
+            TotalImages: Nombre total d'images (pour calculer le pourcentage)
+            ProgressCallback: Fonction appelée pour chaque image (current, total)
 
         Returns:
             Tuple (Success, ErrorDetails):
@@ -314,20 +318,109 @@ class RealESRGANHandler:
             # Log la commande complète pour diagnostic
             self.Logger.info(f"Commande Real-ESRGAN: {' '.join(Command)}")
 
-            # Exécute Real-ESRGAN
-            Result = subprocess.run(
+            # Fonction qui surveille le dossier de sortie pour compter les images traitées
+            StopMonitoring = threading.Event()
+            MonitoredCount = [0]  # Liste mutable pour partager entre threads
+
+            def MonitorOutputDirectory():
+                """Surveille le dossier de sortie et compte les fichiers créés"""
+                LastCount = 0
+                LastLogTime = time.time()
+
+                while not StopMonitoring.is_set():
+                    try:
+                        # Compte les fichiers dans le dossier de sortie
+                        if os.path.exists(OutputDir):
+                            Files = [f for f in os.listdir(OutputDir) if os.path.isfile(os.path.join(OutputDir, f))]
+                            CurrentCount = len(Files)
+
+                            if CurrentCount > LastCount:
+                                MonitoredCount[0] = CurrentCount
+                                LastCount = CurrentCount
+
+                                # Affiche la progression en temps réel
+                                if TotalImages:
+                                    Progress = (CurrentCount / TotalImages) * 100
+                                    print(f"\r⟳ Progression: {CurrentCount}/{TotalImages} images ({Progress:.1f}%)", end='', flush=True)
+
+                                    # Log toutes les 10 images ou toutes les 5 secondes
+                                    CurrentTime = time.time()
+                                    if CurrentCount % 10 == 0 or (CurrentTime - LastLogTime) >= 5:
+                                        print()  # Nouvelle ligne
+                                        self.Logger.info(f"⟳ Progression: {CurrentCount}/{TotalImages} images ({Progress:.1f}%)")
+                                        LastLogTime = CurrentTime
+                                else:
+                                    print(f"\r⟳ Progression: {CurrentCount} images", end='', flush=True)
+
+                                # Appelle le callback
+                                if ProgressCallback:
+                                    ProgressCallback(CurrentCount, TotalImages or CurrentCount)
+
+                        # Vérifie toutes les 0.5 secondes
+                        time.sleep(0.5)
+                    except Exception as e:
+                        self.Logger.debug(f"Erreur monitoring: {e}")
+                        break
+
+            # Démarre le thread de surveillance
+            MonitorThread = threading.Thread(target=MonitorOutputDirectory, daemon=True)
+            MonitorThread.start()
+
+            # Exécute Real-ESRGAN et capture la sortie
+            Process = subprocess.Popen(
                 Command,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
+                bufsize=1,
+                universal_newlines=True,
                 cwd=os.path.dirname(self.ExecutablePath)
             )
 
-            if Result.returncode == 0:
-                self.Logger.info(f"✓ Dossier upscalé: {InputDir}")
+            AllOutput = []
+            FirstLines = 0
+
+            # Lit la sortie ligne par ligne (pour capturer les erreurs et infos GPU)
+            for Line in iter(Process.stdout.readline, ''):
+                if not Line:
+                    break
+
+                Line = Line.strip()
+                AllOutput.append(Line)
+
+                if not Line:
+                    continue
+
+                # Affiche les 5 premières lignes (infos GPU)
+                if FirstLines < 5:
+                    self.Logger.info(f"[Real-ESRGAN] {Line}")
+                    FirstLines += 1
+
+            # Attend la fin du processus
+            ReturnCode = Process.wait()
+
+            # Arrête le thread de surveillance
+            StopMonitoring.set()
+            MonitorThread.join(timeout=2)
+
+            # Nouvelle ligne finale
+            print()
+
+            # Récupère le compte final
+            CurrentImage = MonitoredCount[0]
+
+            if ReturnCode == 0:
+                # Log final avec le nombre d'images traitées
+                if TotalImages:
+                    self.Logger.info(f"✓ Real-ESRGAN terminé: {CurrentImage}/{TotalImages} images upscalées")
+                else:
+                    self.Logger.info(f"✓ Real-ESRGAN terminé: {CurrentImage} images upscalées")
                 return True, ""
             else:
-                self.Logger.error(f"Erreur Real-ESRGAN: {Result.stderr}")
-                return False, Result.stderr
+                # Affiche les dernières lignes de sortie en cas d'erreur
+                ErrorMsg = '\n'.join(AllOutput[-10:]) if AllOutput else "Erreur inconnue"
+                self.Logger.error(f"Erreur Real-ESRGAN (code {ReturnCode}): {ErrorMsg}")
+                return False, ErrorMsg
 
         except Exception as e:
             ErrorMsg = f"Erreur lors de l'upscaling du dossier: {e}"

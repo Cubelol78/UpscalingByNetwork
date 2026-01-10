@@ -102,9 +102,9 @@ class Video:
         )
 
     def UpdateProgress(self):
-        """Calcule et met à jour la progression"""
+        """Calcule et met à jour la progression en pourcentage (0-100)"""
         if self.TotalBatches > 0:
-            self.Progress = self.CompletedBatches / self.TotalBatches
+            self.Progress = (self.CompletedBatches / self.TotalBatches) * 100
         else:
             self.Progress = 0.0
 

@@ -96,12 +96,13 @@ class LocalProcessor:
         CurrentConfig['tta_mode'] = TtaMode
         self.RealESRGANHandler.SetPerformanceConfig(CurrentConfig)
 
-    def ProcessBatch(self, BatchData: Dict[str, Any]) -> Optional[BatchResult]:
+    def ProcessBatch(self, BatchData: Dict[str, Any], ProgressCallback=None) -> Optional[BatchResult]:
         """
         Traite un batch d'images
 
         Args:
             BatchData: Données du batch (depuis BatchAssignment)
+            ProgressCallback: Callback optionnel appelé avec (current, total) pour la progression
 
         Returns:
             BatchResult ou None si erreur
@@ -147,7 +148,8 @@ class LocalProcessor:
                 SavedImages,
                 OutputDir,
                 UpscaleFactor,
-                Model
+                Model,
+                ProgressCallback
             )
 
             if not UpscaledImages:
@@ -218,7 +220,7 @@ class LocalProcessor:
             return []
 
     def _UpscaleImages(self, ImagePaths: List[str], OutputDir: str,
-                      UpscaleFactor: int, Model: str) -> Tuple[List[str], str]:
+                      UpscaleFactor: int, Model: str, ExternalProgressCallback=None) -> Tuple[List[str], str]:
         """
         Upscale les images avec Real-ESRGAN
 
@@ -227,6 +229,7 @@ class LocalProcessor:
             OutputDir: Répertoire de sortie
             UpscaleFactor: Facteur d'upscaling
             Model: Modèle à utiliser
+            ExternalProgressCallback: Callback externe pour la progression (pour le GUI)
 
         Returns:
             Tuple (UpscaledPaths, ErrorDetails):
@@ -236,18 +239,13 @@ class LocalProcessor:
         try:
             self.Logger.info(f"Upscaling de {len(ImagePaths)} images...")
 
-            # Définit le callback de progression
-            def ProgressCallback(Current, Total):
-                Progress = (Current / Total) * 100
-                self.Logger.info(f"Progression: {Current}/{Total} ({Progress:.1f}%)")
-
-            # Upscale les images
+            # Upscale les images avec le callback externe pour le GUI
             UpscaledPaths, ErrorDetails = self.RealESRGANHandler.UpscaleBatchList(
                 ImagePaths,
                 OutputDir,
                 UpscaleFactor,
                 Model,
-                ProgressCallback
+                ExternalProgressCallback  # Passe directement le callback du client
             )
 
             return UpscaledPaths, ErrorDetails

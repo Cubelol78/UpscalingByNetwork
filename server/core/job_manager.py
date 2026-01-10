@@ -286,8 +286,8 @@ class JobManager:
             self.Logger.info(f"Sortie: {VideoObj.OutputPath}")
             self.Logger.info("="*60)
 
-            # Cleanup optionnel
-            # self.VideoProcessor.CleanupVideoData(VideoId, KeepOutput=True)
+            # Nettoyage des fichiers temporaires (garde la vidéo de sortie)
+            self.VideoProcessor.CleanupVideoData(VideoId, KeepOutput=True)
 
             self.CurrentJobId = None
             return True

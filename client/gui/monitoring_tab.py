@@ -4,7 +4,7 @@ Onglet Monitoring - Surveillance de l'activité du client
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QGroupBox, QGridLayout, QTextEdit
+    QGroupBox, QGridLayout, QTextEdit, QProgressBar
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
@@ -79,6 +79,17 @@ class MonitoringTab(QWidget):
         self.ActivityLabel.setContentsMargins(20, 20, 20, 20)
 
         Layout.addWidget(self.ActivityLabel)
+
+        # Barre de progression du batch en cours
+        self.BatchProgressBar = QProgressBar()
+        self.BatchProgressBar.setMinimum(0)
+        self.BatchProgressBar.setMaximum(100)
+        self.BatchProgressBar.setValue(0)
+        self.BatchProgressBar.setTextVisible(True)
+        self.BatchProgressBar.setFormat("Aucun batch en cours")
+        self.BatchProgressBar.setVisible(False)  # Caché par défaut
+        Layout.addWidget(self.BatchProgressBar)
+
         Group.setLayout(Layout)
 
         return Group
@@ -169,6 +180,10 @@ class MonitoringTab(QWidget):
                 }.get(ClientStatus, 'Inconnu')
                 self.StatusLabel[1].setText(StatusText)
 
+                # Récupère la progression du batch en cours
+                BatchProgress = Status.get('batch_progress', 0)
+                BatchTotal = Status.get('batch_total', 0)
+
                 # Mettre à jour l'activité avec plus de détails
                 if CurrentBatch:
                     ActivityText = f"⚙️ Traitement du batch {CurrentBatch[:16]}...\n"
@@ -176,11 +191,22 @@ class MonitoringTab(QWidget):
                     if QueueSize > 0:
                         ActivityText += f"📤 {QueueSize} batch(s) en attente d'envoi"
                     self.ActivityLabel.setText(ActivityText)
+
+                    # Affiche la barre de progression si un batch est en cours
+                    if BatchTotal > 0:
+                        self.BatchProgressBar.setVisible(True)
+                        self.BatchProgressBar.setMaximum(BatchTotal)
+                        self.BatchProgressBar.setValue(BatchProgress)
+                        ProgressPercent = (BatchProgress / BatchTotal) * 100
+                        self.BatchProgressBar.setFormat(f"{BatchProgress}/{BatchTotal} images ({ProgressPercent:.1f}%)")
+                    else:
+                        self.BatchProgressBar.setVisible(False)
                 elif QueueSize > 0:
                     self.ActivityLabel.setText(
                         f"📤 Envoi de {QueueSize} batch(s) traité(s)...\n"
                         f"Statut: {StatusText}"
                     )
+                    self.BatchProgressBar.setVisible(False)
                 else:
                     SuccessRate = ""
                     if BatchesProcessed + BatchesFailed > 0:
@@ -191,6 +217,7 @@ class MonitoringTab(QWidget):
                     self.ActivityLabel.setText(
                         f"💤 En attente d'un nouveau batch...{SuccessRate}"
                     )
+                    self.BatchProgressBar.setVisible(False)
 
                 # Mettre à jour les logs récents
                 self.UpdateLogs(Client)
@@ -249,3 +276,7 @@ class MonitoringTab(QWidget):
         self.StatusLabel[1].setText("Inactif")
         self.ActivityLabel.setText("Aucune activité")
         self.LogsTextEdit.setPlainText("Déconnecté - aucun log disponible")
+        # Réinitialise et cache la barre de progression
+        self.BatchProgressBar.setVisible(False)
+        self.BatchProgressBar.setValue(0)
+        self.BatchProgressBar.setFormat("Aucun batch en cours")
