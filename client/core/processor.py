@@ -7,6 +7,7 @@ Supporte la configuration de performance pour Real-ESRGAN
 import os
 import base64
 import shutil
+import concurrent.futures
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 
@@ -181,7 +182,7 @@ class LocalProcessor:
 
     def _SaveImages(self, Images: List[Dict], OutputDir: str) -> List[str]:
         """
-        Sauvegarde les images reçues en base64
+        Sauvegarde les images reçues en base64 (parallélisé)
 
         Args:
             Images: Liste d'images [{id, number, data, filename}]
@@ -190,17 +191,16 @@ class LocalProcessor:
         Returns:
             Liste des chemins des images sauvegardées
         """
-        SavedPaths = []
-
-        try:
-            for ImageData in Images:
+        def SaveSingleImage(ImageData: Dict) -> Optional[str]:
+            """Décode et sauvegarde une seule image"""
+            try:
                 ImageId = ImageData.get("id", "unknown")
                 ImageB64 = ImageData.get("data")
                 Filename = ImageData.get("filename", f"frame_{ImageId}.png")
 
                 if not ImageB64:
                     self.Logger.warning(f"Image {ImageId} sans données, ignorée")
-                    continue
+                    return None
 
                 # Décode l'image
                 ImageBytes = base64.b64decode(ImageB64)
@@ -210,9 +210,29 @@ class LocalProcessor:
                 with open(OutputPath, 'wb') as f:
                     f.write(ImageBytes)
 
-                SavedPaths.append(OutputPath)
+                return OutputPath
 
-            self.Logger.info(f"✓ {len(SavedPaths)} images sauvegardées")
+            except Exception as e:
+                self.Logger.error(f"Erreur lors de la sauvegarde de l'image {ImageData.get('id', 'unknown')}: {e}")
+                return None
+
+        try:
+            # Parallélise le décodage et l'écriture avec ThreadPoolExecutor
+            # Utilise min(32, nb_cpu * 2) workers pour éviter de surcharger le système
+            MaxWorkers = min(32, (os.cpu_count() or 4) * 2)
+
+            SavedPaths = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=MaxWorkers) as executor:
+                # Soumet toutes les tâches
+                Futures = [executor.submit(SaveSingleImage, ImageData) for ImageData in Images]
+
+                # Récupère les résultats
+                for Future in concurrent.futures.as_completed(Futures):
+                    Result = Future.result()
+                    if Result:
+                        SavedPaths.append(Result)
+
+            self.Logger.info(f"✓ {len(SavedPaths)} images sauvegardées (décodage parallèle avec {MaxWorkers} threads)")
             return SavedPaths
 
         except Exception as e:
@@ -257,7 +277,7 @@ class LocalProcessor:
     def _LoadUpscaledImages(self, UpscaledPaths: List[str],
                            OriginalImages: List[Dict]) -> List[Dict]:
         """
-        Charge les images upscalées et les encode en base64
+        Charge les images upscalées et les encode en base64 (parallélisé)
 
         Args:
             UpscaledPaths: Chemins des images upscalées
@@ -266,16 +286,15 @@ class LocalProcessor:
         Returns:
             Liste d'images [{id, number, data, filename}]
         """
-        ResultImages = []
+        # Crée un mapping filename -> original data
+        FilenameMap = {
+            img.get("filename"): img
+            for img in OriginalImages
+        }
 
-        try:
-            # Crée un mapping filename -> original data
-            FilenameMap = {
-                img.get("filename"): img
-                for img in OriginalImages
-            }
-
-            for UpscaledPath in UpscaledPaths:
+        def LoadAndEncodeSingleImage(UpscaledPath: str) -> Optional[Dict]:
+            """Charge et encode une seule image"""
+            try:
                 Filename = os.path.basename(UpscaledPath)
 
                 # Récupère les métadonnées originales
@@ -289,14 +308,33 @@ class LocalProcessor:
                 ImageB64 = base64.b64encode(ImageBytes).decode('utf-8')
 
                 # Crée l'objet résultat
-                ResultImages.append({
+                return {
                     "id": OriginalData.get("id"),
                     "number": OriginalData.get("number"),
                     "data": ImageB64,
                     "filename": Filename
-                })
+                }
 
-            self.Logger.info(f"✓ {len(ResultImages)} images chargées")
+            except Exception as e:
+                self.Logger.error(f"Erreur lors du chargement de l'image {UpscaledPath}: {e}")
+                return None
+
+        try:
+            # Parallélise le chargement et l'encodage avec ThreadPoolExecutor
+            MaxWorkers = min(32, (os.cpu_count() or 4) * 2)
+
+            ResultImages = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=MaxWorkers) as executor:
+                # Soumet toutes les tâches
+                Futures = [executor.submit(LoadAndEncodeSingleImage, Path) for Path in UpscaledPaths]
+
+                # Récupère les résultats
+                for Future in concurrent.futures.as_completed(Futures):
+                    Result = Future.result()
+                    if Result:
+                        ResultImages.append(Result)
+
+            self.Logger.info(f"✓ {len(ResultImages)} images chargées (encodage parallèle avec {MaxWorkers} threads)")
             return ResultImages
 
         except Exception as e:

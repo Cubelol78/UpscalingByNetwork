@@ -7,6 +7,7 @@ import asyncio
 import os
 import base64
 import time
+import concurrent.futures
 from typing import Optional, Dict, List
 from datetime import datetime
 from PIL import Image
@@ -313,9 +314,9 @@ class BatchDistributor:
 
             self.Logger.info(f"Envoi de {len(FramePaths)} images au client {ClientId} via Data...")
 
-            # Charge et encode les images en base64
-            Images = []
-            for Index, FramePath in enumerate(FramePaths):
+            # Charge et encode les images en base64 (parallélisé)
+            def LoadAndEncodeImage(Index: int, FramePath: str) -> Optional[Dict]:
+                """Charge et encode une seule image"""
                 try:
                     # Lit l'image
                     with open(FramePath, 'rb') as f:
@@ -327,16 +328,36 @@ class BatchDistributor:
                     # Numéro de frame absolu
                     FrameNumber = BatchObj.StartFrame + Index
 
-                    Images.append({
+                    return {
                         "id": str(FrameNumber),
                         "number": FrameNumber,
                         "data": ImageB64,
                         "filename": os.path.basename(FramePath)
-                    })
+                    }
 
                 except Exception as e:
                     self.Logger.error(f"Erreur lors du chargement de {FramePath}: {e}")
-                    continue
+                    return None
+
+            # Parallélise le chargement et l'encodage
+            MaxWorkers = min(32, (os.cpu_count() or 4) * 2)
+            Images = []
+
+            Loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=MaxWorkers) as executor:
+                # Soumet toutes les tâches
+                Tasks = [
+                    Loop.run_in_executor(executor, LoadAndEncodeImage, Index, FramePath)
+                    for Index, FramePath in enumerate(FramePaths)
+                ]
+
+                # Attend tous les résultats
+                Results = await asyncio.gather(*Tasks)
+
+                # Filtre les None (erreurs)
+                Images = [img for img in Results if img is not None]
+
+            self.Logger.debug(f"✓ {len(Images)} images encodées (parallèle avec {MaxWorkers} threads)")
 
             # Crée le message BatchAssignment
             Message = BatchAssignment(
@@ -389,23 +410,43 @@ class BatchDistributor:
 
             self.Logger.info(f"Envoi de {len(FramePaths)} images au client {ClientId} via Control (fallback)...")
 
-            # Charge et encode les images en base64
-            Images = []
-            for Index, FramePath in enumerate(FramePaths):
+            # Charge et encode les images en base64 (parallélisé)
+            def LoadAndEncodeImage(Index: int, FramePath: str) -> Optional[Dict]:
+                """Charge et encode une seule image"""
                 try:
                     with open(FramePath, 'rb') as f:
                         ImageData = f.read()
                     ImageB64 = base64.b64encode(ImageData).decode('utf-8')
                     FrameNumber = BatchObj.StartFrame + Index
-                    Images.append({
+                    return {
                         "id": str(FrameNumber),
                         "number": FrameNumber,
                         "data": ImageB64,
                         "filename": os.path.basename(FramePath)
-                    })
+                    }
                 except Exception as e:
                     self.Logger.error(f"Erreur lors du chargement de {FramePath}: {e}")
-                    continue
+                    return None
+
+            # Parallélise le chargement et l'encodage
+            MaxWorkers = min(32, (os.cpu_count() or 4) * 2)
+            Images = []
+
+            Loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=MaxWorkers) as executor:
+                # Soumet toutes les tâches
+                Tasks = [
+                    Loop.run_in_executor(executor, LoadAndEncodeImage, Index, FramePath)
+                    for Index, FramePath in enumerate(FramePaths)
+                ]
+
+                # Attend tous les résultats
+                Results = await asyncio.gather(*Tasks)
+
+                # Filtre les None (erreurs)
+                Images = [img for img in Results if img is not None]
+
+            self.Logger.debug(f"✓ {len(Images)} images encodées (parallèle avec {MaxWorkers} threads)")
 
             Message = BatchAssignment(
                 BatchId=BatchObj.BatchId,
