@@ -348,6 +348,7 @@ class ServerCLI:
         click.echo(f"  Repertoire de travail: {DbConfig.get('work_directory', 'N/A')}")
         click.echo(f"  Taille batch: {DbConfig.get('batch_size', 'N/A')}")
         click.echo(f"  Compression reseau: {DbConfig.get('compression_level', 5)}/10")
+        click.echo(f"  Envois concurrents: {DbConfig.get('max_concurrent_batches', 3)}")
         click.echo(f"\n  Base de donnees: {self.Database.DbPath}")
 
 

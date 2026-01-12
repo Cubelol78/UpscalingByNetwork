@@ -28,6 +28,7 @@ DEFAULT_PARAMETERS = {
     "work_directory": ("./work", "Répertoire de travail pour les fichiers"),
     "batch_size": ("100", "Nombre d'images par batch"),
     "compression_level": ("5", "Niveau de compression réseau (1=rapide, 10=max)"),
+    "max_concurrent_batches": ("3", "Nombre maximum d'envois simultanés de batches"),
 }
 
 
@@ -264,7 +265,8 @@ class DatabaseManager:
             'password': self.GetParameter('server_password', ''),
             'work_directory': self.GetParameter('work_directory', './work'),
             'batch_size': self.GetParameterInt('batch_size', 100),
-            'compression_level': self.GetParameterInt('compression_level', 5)
+            'compression_level': self.GetParameterInt('compression_level', 5),
+            'max_concurrent_batches': self.GetParameterInt('max_concurrent_batches', 3)
         }
 
     def SaveServerConfig(self, Config: Dict[str, Any]) -> bool:
@@ -292,6 +294,8 @@ class DatabaseManager:
                 self.SetParameter('batch_size', str(Config['batch_size']), "Nombre d'images par batch")
             if 'compression_level' in Config:
                 self.SetParameter('compression_level', str(Config['compression_level']), "Niveau de compression réseau (1=rapide, 10=max)")
+            if 'max_concurrent_batches' in Config:
+                self.SetParameter('max_concurrent_batches', str(Config['max_concurrent_batches']), "Nombre maximum d'envois simultanés de batches")
             return True
         except Exception as e:
             self.Logger.error(f"Erreur lors de la sauvegarde de la configuration: {e}")

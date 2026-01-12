@@ -49,7 +49,7 @@ class PerformancePresets:
     MIN_TILE_SIZE = 32
     MAX_TILE_SIZE = 2048
     MIN_THREADS = 1
-    MAX_THREADS = 16
+    MAX_THREADS = 999  # Pas de limite pratique
 
 
 class PerformanceConfigManager:

@@ -44,6 +44,12 @@ class BatchDistributor:
         self.Running = False
         self.DistributionTask = None
 
+        # Semaphore pour limiter les envois concurrents
+        from shared.utils.constants import Limits
+        MaxConcurrent = self.Database.GetParameterInt('max_concurrent_batches', Limits.MAX_CONCURRENT_BATCH_SENDS)
+        self.SendSemaphore = asyncio.Semaphore(MaxConcurrent)
+        self.Logger.info(f"Distributeur initialisé avec max {MaxConcurrent} envois concurrents")
+
     async def StartDistribution(self, VideoId: str):
         """
         Démarre la distribution des batches pour une vidéo
@@ -106,15 +112,27 @@ class BatchDistributor:
                     await asyncio.sleep(2)
                     continue
 
-                # Distribue les batches aux clients disponibles
-                for BatchObj in PendingBatches[:len(AvailableClients)]:
-                    ClientId = AvailableClients.pop(0)
+                # Distribue les batches aux clients disponibles (concurrent)
+                BatchesToAssign = PendingBatches[:len(AvailableClients)]
+                AssignmentTasks = []
 
-                    # Assigne le batch
-                    await self.AssignBatch(BatchObj.BatchId, ClientId, VideoId)
+                for BatchObj in BatchesToAssign:
+                    ClientId = AvailableClients.pop(0)
+                    # Crée une tâche pour chaque assignation
+                    Task = self._AssignBatchConcurrent(BatchObj.BatchId, ClientId, VideoId)
+                    AssignmentTasks.append(Task)
 
                     if not AvailableClients:
                         break
+
+                # Attend que tous les envois se terminent (avec gestion d'erreurs)
+                if AssignmentTasks:
+                    Results = await asyncio.gather(*AssignmentTasks, return_exceptions=True)
+
+                    # Log les erreurs sans arrêter la boucle
+                    for Index, Result in enumerate(Results):
+                        if isinstance(Result, Exception):
+                            self.Logger.error(f"Erreur lors de l'assignation du batch #{Index}: {Result}")
 
                 # Vérifie les timeouts
                 await self._CheckTimeouts()
@@ -250,6 +268,21 @@ class BatchDistributor:
         except Exception as e:
             self.Logger.error(f"Erreur lors de l'attribution du batch: {e}")
             return False
+
+    async def _AssignBatchConcurrent(self, BatchId: str, ClientId: str, VideoId: str) -> bool:
+        """
+        Wrapper pour AssignBatch qui utilise le semaphore pour limiter la concurrence.
+
+        Args:
+            BatchId: ID du batch
+            ClientId: ID du client
+            VideoId: ID de la vidéo
+
+        Returns:
+            True si succès
+        """
+        async with self.SendSemaphore:
+            return await self.AssignBatch(BatchId, ClientId, VideoId)
 
     async def SendBatchToClient(self, BatchObj: Batch, VideoObj: Video,
                                ClientId: str) -> bool:
@@ -720,6 +753,26 @@ class BatchDistributor:
             self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.IDLE)
         else:
             self.Logger.debug(f"Client {ClientId} a d'autres batches actifs, conserve statut PROCESSING")
+
+    def UpdateMaxConcurrentBatches(self, NewLimit: int):
+        """
+        Met à jour dynamiquement la limite d'envois concurrents.
+        Pas de limite maximale technique imposée.
+
+        Args:
+            NewLimit: Nouvelle limite (minimum 1)
+        """
+        try:
+            # Validation minimale
+            NewLimit = max(1, NewLimit)
+
+            # Crée un nouveau semaphore avec la nouvelle limite
+            self.SendSemaphore = asyncio.Semaphore(NewLimit)
+
+            self.Logger.info(f"Limite d'envois concurrents mise à jour: {NewLimit}")
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la mise à jour de la limite concurrente: {e}")
 
     def CancelVideoProcessing(self, VideoId: str):
         """

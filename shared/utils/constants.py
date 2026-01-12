@@ -140,7 +140,7 @@ class NetworkConfig:
     DEFAULT_PORT = 8765
     DEFAULT_DATA_PORT = 8766  # Port dédié aux transferts de données (batches)
     DEFAULT_HOST = "0.0.0.0"
-    MAX_MESSAGE_SIZE = 5 * 1024 * 1024 * 1024  # 5 GB - Les batches d'images upscalées peuvent être très lourds
+    MAX_MESSAGE_SIZE = 10 * 1024 * 1024 * 1024  # 10 GB - Les batches d'images upscalées peuvent être très lourds
     HEARTBEAT_INTERVAL = 10  # secondes
     HEARTBEAT_TIMEOUT = 30  # secondes
     CONNECTION_TIMEOUT = 15  # secondes - Réduit de 60s pour feedback rapide
@@ -233,7 +233,7 @@ class PerformanceConfig:
     MIN_TILE_SIZE = 32
     MAX_TILE_SIZE = 2048
     MIN_THREADS = 1
-    MAX_THREADS = 16
+    MAX_THREADS = 999  # Pas de limite pratique
 
     # Threads par défaut
     DEFAULT_LOAD_THREADS = 1
@@ -306,5 +306,6 @@ class Limits:
     MIN_BATCH_SIZE = 10
     MAX_VIDEO_SIZE = 100 * 1024 * 1024 * 1024  # 100 GB
     MAX_CONCURRENT_JOBS = 10
+    MAX_CONCURRENT_BATCH_SENDS = 3  # Limite par défaut des envois simultanés
     MAX_RETRY_ATTEMPTS = 3
     RETRY_DELAY = 5  # secondes

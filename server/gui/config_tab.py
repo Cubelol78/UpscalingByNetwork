@@ -53,6 +53,11 @@ class ConfigTab(QWidget):
         self.CompressionLevelAutoSaveTimer.setSingleShot(True)
         self.CompressionLevelAutoSaveTimer.timeout.connect(self.AutoSaveCompressionLevel)
 
+        # Timer pour debounce de l'auto-save du max_concurrent_batches
+        self.MaxConcurrentBatchesAutoSaveTimer = QTimer()
+        self.MaxConcurrentBatchesAutoSaveTimer.setSingleShot(True)
+        self.MaxConcurrentBatchesAutoSaveTimer.timeout.connect(self.AutoSaveMaxConcurrentBatches)
+
         # Timer pour masquer l'indicateur "Sauvegardé"
         self.SavedIndicatorTimer = QTimer()
         self.SavedIndicatorTimer.setSingleShot(True)
@@ -279,6 +284,23 @@ class ConfigTab(QWidget):
 
         FormLayout.addRow("Compression reseau:", CompressionLayout)
 
+        # Envois concurrents de batches (dynamique, auto-save)
+        ConcurrentLayout = QHBoxLayout()
+        self.MaxConcurrentBatchesInput = QSpinBox()
+        self.MaxConcurrentBatchesInput.setMinimum(1)
+        self.MaxConcurrentBatchesInput.setMaximum(999)  # Pas de limite pratique
+        self.MaxConcurrentBatchesInput.setValue(3)
+        self.MaxConcurrentBatchesInput.setToolTip("Nombre de batches envoyés simultanément aux clients")
+        self.MaxConcurrentBatchesInput.valueChanged.connect(self.OnMaxConcurrentBatchesChanged)
+        ConcurrentLayout.addWidget(self.MaxConcurrentBatchesInput)
+
+        ConcurrentNote = QLabel("(envois simultanes)")
+        ConcurrentNote.setProperty("class", "hint")
+        ConcurrentLayout.addWidget(ConcurrentNote)
+        ConcurrentLayout.addStretch()
+
+        FormLayout.addRow("Envois concurrents:", ConcurrentLayout)
+
         # Répertoire de travail (auto-save, mais nécessite redémarrage)
         WorkDirLayout = QHBoxLayout()
         self.WorkDirInput = QLineEdit()
@@ -330,6 +352,7 @@ class ConfigTab(QWidget):
                 self.WorkDirInput.setText(Config.get('work_directory', './work'))
                 self.BatchSizeInput.setValue(Config.get('batch_size', 100))
                 self.CompressionLevelInput.setValue(Config.get('compression_level', 5))
+                self.MaxConcurrentBatchesInput.setValue(Config.get('max_concurrent_batches', 3))
 
                 # Charger le thème
                 ThemeValue = Database.GetParameter('theme', ThemeManager.THEME_AUTO)
@@ -347,6 +370,7 @@ class ConfigTab(QWidget):
                 self.WorkDirInput.setText('./work')
                 self.BatchSizeInput.setValue(100)
                 self.CompressionLevelInput.setValue(5)
+                self.MaxConcurrentBatchesInput.setValue(3)
                 self.ThemeComboBox.setCurrentIndex(0)  # Auto par défaut
 
         except Exception as e:
@@ -540,6 +564,49 @@ class ConfigTab(QWidget):
         except Exception as e:
             self.ParentWindow.Logger.error(f"Erreur lors de la propagation du niveau de compression: {e}")
 
+    def OnMaxConcurrentBatchesChanged(self, Value: int):
+        """Appelé quand le nombre d'envois concurrents change - déclenche l'auto-save"""
+        if self.IsLoading:
+            return
+
+        # Redémarre le timer de debounce
+        self.MaxConcurrentBatchesAutoSaveTimer.stop()
+        self.MaxConcurrentBatchesAutoSaveTimer.start(self.AUTOSAVE_DELAY_MS)
+
+    def AutoSaveMaxConcurrentBatches(self):
+        """Sauvegarde automatique du nombre d'envois concurrents et propagation au serveur actif"""
+        try:
+            Database = self.ParentWindow.GetDatabase()
+            NewLimit = self.MaxConcurrentBatchesInput.value()
+
+            if Database:
+                Database.SetParameter('max_concurrent_batches', str(NewLimit),
+                                    "Nombre maximum d'envois simultanés de batches")
+
+            # Propager au serveur actif
+            self.PropagateMaxConcurrentBatchesToServer(NewLimit)
+
+            # Affiche l'indicateur "Sauvegardé"
+            self.ShowSavedIndicator()
+
+            self.ParentWindow.Logger.info(f"Limite d'envois concurrents mise à jour: {NewLimit}")
+
+        except Exception as e:
+            self.ParentWindow.Logger.error(f"Erreur lors de l'auto-save de max_concurrent_batches: {e}")
+
+    def PropagateMaxConcurrentBatchesToServer(self, NewLimit: int):
+        """Propage la limite d'envois concurrents au serveur actif"""
+        try:
+            if hasattr(self.ParentWindow, 'Server') and self.ParentWindow.Server:
+                Server = self.ParentWindow.Server
+
+                if hasattr(Server, 'BatchDistributor') and Server.BatchDistributor:
+                    Server.BatchDistributor.UpdateMaxConcurrentBatches(NewLimit)
+                    self.ParentWindow.Logger.info(f"Limite propagée au serveur actif: {NewLimit}")
+
+        except Exception as e:
+            self.ParentWindow.Logger.error(f"Erreur lors de la propagation: {e}")
+
     def ApplyNetworkChanges(self):
         """
         Applique les changements d'adresse réseau (IP/Ports) au serveur actif.
@@ -650,12 +717,14 @@ class ConfigTab(QWidget):
         self.PasswordAutoSaveTimer.stop()
         self.WorkDirAutoSaveTimer.stop()
         self.CompressionLevelAutoSaveTimer.stop()
+        self.MaxConcurrentBatchesAutoSaveTimer.stop()
 
         # Force l'exécution des auto-saves
         self.AutoSaveBatchSize()
         self.AutoSavePassword()
         self.AutoSaveWorkDirectory()
         self.AutoSaveCompressionLevel()
+        self.AutoSaveMaxConcurrentBatches()
 
         self.ParentWindow.Logger.info("Configuration sauvegardee (force)")
 
@@ -668,5 +737,6 @@ class ConfigTab(QWidget):
             'password': self.PasswordInput.text(),
             'work_directory': self.WorkDirInput.text() or './work',
             'batch_size': self.BatchSizeInput.value(),
-            'compression_level': self.CompressionLevelInput.value()
+            'compression_level': self.CompressionLevelInput.value(),
+            'max_concurrent_batches': self.MaxConcurrentBatchesInput.value()
         }
