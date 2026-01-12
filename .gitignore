@@ -348,3 +348,4 @@ docker-data/
 
 
 !realesrgan*
+!realcugan-ncnn-vulkan*
