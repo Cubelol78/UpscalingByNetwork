@@ -13,11 +13,11 @@ from datetime import datetime
 from PIL import Image
 import io
 
-# Enregistre le support AVIF pour la réception des images
+# Enregistre le support AVIF/HEIF pour la réception des images
 try:
     import pillow_heif
-    pillow_heif.register_avif_opener()
-except ImportError:
+    pillow_heif.register_heif_opener()  # Inclut AVIF et HEIF
+except (ImportError, AttributeError):
     pass  # Support AVIF non disponible, les images seront en PNG
 
 from server.core.client_manager import ClientManager

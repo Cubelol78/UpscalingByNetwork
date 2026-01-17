@@ -344,7 +344,9 @@ def RunServerGUI():
     # Charger la préférence de thème depuis la base de données
     try:
         TempDb = DatabaseManager()
+        TempDb.Connect()
         ThemePreference = TempDb.GetParameter("theme", ThemeManager.THEME_AUTO)
+        TempDb.Close()
     except Exception:
         ThemePreference = ThemeManager.THEME_AUTO
 

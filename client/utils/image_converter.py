@@ -30,10 +30,10 @@ class ImageConverter:
         """Vérifie si le support AVIF est disponible"""
         try:
             import pillow_heif
-            pillow_heif.register_avif_opener()
+            pillow_heif.register_heif_opener()  # Inclut AVIF et HEIF
             self.Logger.info("Support AVIF via pillow-heif actif")
             return True
-        except ImportError:
+        except (ImportError, AttributeError):
             pass
 
         try:
