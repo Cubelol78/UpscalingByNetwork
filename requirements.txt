@@ -13,6 +13,9 @@ click>=8.1.7
 # Utilitaires
 pillow>=10.0.0
 
+# Support AVIF pour optimisation transferts réseau
+pillow-heif>=0.14.0
+
 # Détection matérielle
 psutil>=5.9.0
 

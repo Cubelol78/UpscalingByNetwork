@@ -232,7 +232,7 @@ class VideoProcessor:
             self.Logger.error(f"Erreur lors de la récupération des frames du batch: {e}")
             return []
 
-    def ReassembleVideo(self, VideoId: str, Fps: float, UpscaleFactor: int) -> Optional[str]:
+    def ReassembleVideo(self, VideoId: str, Fps: float, UpscaleFactor: int, OriginalVideoName: str = None) -> Optional[str]:
         """
         Réassemble les images upscalées en vidéo finale
 
@@ -240,6 +240,7 @@ class VideoProcessor:
             VideoId: ID de la vidéo
             Fps: Framerate de la vidéo
             UpscaleFactor: Facteur d'upscaling utilisé
+            OriginalVideoName: Nom original de la vidéo (sans extension)
 
         Returns:
             Chemin de la vidéo finale ou None
@@ -295,10 +296,16 @@ class VideoProcessor:
                 ]
 
             # Réintègre audio et sous-titres
+            # Construit le nom de fichier avec le nom original si disponible
+            if OriginalVideoName:
+                OutputFileName = f"{OriginalVideoName}_{VideoId}_x{UpscaleFactor}.mp4"
+            else:
+                OutputFileName = f"{VideoId}_x{UpscaleFactor}.mp4"
+
             FinalVideoPath = os.path.join(
                 self.WorkDirectory,
                 PathConfig.OUTPUT_DIR,
-                f"{VideoId}_x{UpscaleFactor}.mp4"
+                OutputFileName
             )
 
             if AudioTracks or Subtitles:
@@ -328,22 +335,29 @@ class VideoProcessor:
             self.Logger.error(f"Erreur lors du réassemblage: {e}")
             return None
 
-    def EncodeToAV1(self, InputPath: str, VideoId: str) -> Optional[str]:
+    def EncodeToAV1(self, InputPath: str, VideoId: str, OriginalVideoName: str = None) -> Optional[str]:
         """
         Encode la vidéo finale en AV1
 
         Args:
             InputPath: Chemin de la vidéo d'entrée
             VideoId: ID de la vidéo
+            OriginalVideoName: Nom original de la vidéo (sans extension)
 
         Returns:
             Chemin de la vidéo AV1 ou None
         """
         try:
+            # Construit le nom de fichier avec le nom original si disponible
+            if OriginalVideoName:
+                OutputFileName = f"{OriginalVideoName}_{VideoId}_av1.mp4"
+            else:
+                OutputFileName = f"{VideoId}_av1.mp4"
+
             OutputPath = os.path.join(
                 self.WorkDirectory,
                 PathConfig.OUTPUT_DIR,
-                f"{VideoId}_av1.mp4"
+                OutputFileName
             )
 
             self.Logger.info("Encodage en AV1...")

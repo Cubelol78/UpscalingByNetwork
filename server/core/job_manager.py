@@ -420,11 +420,15 @@ class JobManager:
 
             # Réassemble la vidéo
             # MODIFIÉ: Exécute le réassemblage dans un thread séparé
+            # Extrait le nom original de la vidéo (sans extension)
+            OriginalVideoName = os.path.splitext(os.path.basename(VideoObj.VideoPath))[0]
+
             OutputPath = await asyncio.to_thread(
                 self.VideoProcessor.ReassembleVideo,
                 VideoObj.VideoId,
                 VideoObj.Framerate,
-                VideoObj.UpscaleFactor
+                VideoObj.UpscaleFactor,
+                OriginalVideoName
             )
 
             if not OutputPath:
@@ -452,10 +456,14 @@ class JobManager:
 
             # Encode en AV1
             # MODIFIÉ: Encodage AV1 très long, exécuter dans un thread
+            # Extrait le nom original de la vidéo (sans extension)
+            OriginalVideoName = os.path.splitext(os.path.basename(VideoObj.VideoPath))[0]
+
             AV1Path = await asyncio.to_thread(
                 self.VideoProcessor.EncodeToAV1,
                 VideoObj.OutputPath,
-                VideoObj.VideoId
+                VideoObj.VideoId,
+                OriginalVideoName
             )
 
             if AV1Path:

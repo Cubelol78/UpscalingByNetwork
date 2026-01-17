@@ -277,64 +277,84 @@ class LocalProcessor:
     def _LoadUpscaledImages(self, UpscaledPaths: List[str],
                            OriginalImages: List[Dict]) -> List[Dict]:
         """
-        Charge les images upscalées et les encode en base64 (parallélisé)
+        Charge les images upscalées, les convertit au format de transfert,
+        et les encode en base64 (parallélisé)
 
         Args:
             UpscaledPaths: Chemins des images upscalées
             OriginalImages: Images originales (pour récupérer les métadonnées)
 
         Returns:
-            Liste d'images [{id, number, data, filename}]
+            Liste d'images [{id, number, data, filename, format}]
         """
+        from client.utils.image_converter import ImageConverter
+
         # Crée un mapping filename -> original data
         FilenameMap = {
             img.get("filename"): img
             for img in OriginalImages
         }
 
-        def LoadAndEncodeSingleImage(UpscaledPath: str) -> Optional[Dict]:
-            """Charge et encode une seule image"""
+        # Configuration du format de transfert
+        TransferFormat = self.PerformanceConfig.get('transfer_format', 'png')
+        TransferQuality = self.PerformanceConfig.get('transfer_quality', 95)
+        TransferLossless = self.PerformanceConfig.get('transfer_lossless', False)
+
+        # Initialise le convertisseur
+        Converter = ImageConverter()
+
+        # Vérifie le support AVIF et ajuste si nécessaire
+        if TransferFormat == 'avif' and not Converter.IsAvifSupported():
+            self.Logger.warning("AVIF non supporté, utilisation de PNG")
+            TransferFormat = 'png'
+
+        def LoadConvertAndEncodeSingleImage(UpscaledPath: str) -> Optional[Dict]:
+            """Charge, convertit et encode une seule image"""
             try:
-                Filename = os.path.basename(UpscaledPath)
+                OriginalFilename = os.path.basename(UpscaledPath)
+                OriginalData = FilenameMap.get(OriginalFilename, {})
 
-                # Récupère les métadonnées originales
-                OriginalData = FilenameMap.get(Filename, {})
-
-                # Lit l'image upscalée
-                with open(UpscaledPath, 'rb') as f:
-                    ImageBytes = f.read()
+                # Convertit vers le format de transfert
+                ImageBytes, NewExt = Converter.ConvertToFormat(
+                    UpscaledPath,
+                    TransferFormat,
+                    TransferQuality,
+                    TransferLossless
+                )
 
                 # Encode en base64
                 ImageB64 = base64.b64encode(ImageBytes).decode('utf-8')
 
-                # Crée l'objet résultat
+                # Nouveau nom de fichier avec extension correcte
+                BaseName = os.path.splitext(OriginalFilename)[0]
+                NewFilename = f"{BaseName}{NewExt}"
+
                 return {
                     "id": OriginalData.get("id"),
                     "number": OriginalData.get("number"),
                     "data": ImageB64,
-                    "filename": Filename
+                    "filename": NewFilename,
+                    "format": TransferFormat
                 }
 
             except Exception as e:
-                self.Logger.error(f"Erreur lors du chargement de l'image {UpscaledPath}: {e}")
+                self.Logger.error(f"Erreur chargement/conversion {UpscaledPath}: {e}")
                 return None
 
         try:
-            # Parallélise le chargement et l'encodage avec ThreadPoolExecutor
             MaxWorkers = min(32, (os.cpu_count() or 4) * 2)
 
             ResultImages = []
             with concurrent.futures.ThreadPoolExecutor(max_workers=MaxWorkers) as executor:
-                # Soumet toutes les tâches
-                Futures = [executor.submit(LoadAndEncodeSingleImage, Path) for Path in UpscaledPaths]
+                Futures = [executor.submit(LoadConvertAndEncodeSingleImage, Path) for Path in UpscaledPaths]
 
-                # Récupère les résultats
                 for Future in concurrent.futures.as_completed(Futures):
                     Result = Future.result()
                     if Result:
                         ResultImages.append(Result)
 
-            self.Logger.info(f"✓ {len(ResultImages)} images chargées (encodage parallèle avec {MaxWorkers} threads)")
+            self.Logger.info(f"✓ {len(ResultImages)} images converties en {TransferFormat.upper()} "
+                           f"(encodage parallèle avec {MaxWorkers} threads)")
             return ResultImages
 
         except Exception as e:

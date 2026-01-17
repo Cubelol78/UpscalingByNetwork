@@ -13,6 +13,13 @@ from datetime import datetime
 from PIL import Image
 import io
 
+# Enregistre le support AVIF pour la réception des images
+try:
+    import pillow_heif
+    pillow_heif.register_avif_opener()
+except ImportError:
+    pass  # Support AVIF non disponible, les images seront en PNG
+
 from server.core.client_manager import ClientManager
 from server.core.video_processor import VideoProcessor
 from server.database.db_manager import DatabaseManager
@@ -641,7 +648,8 @@ class BatchDistributor:
 
     async def _SaveUpscaledImage(self, ImageData: dict, UpscaledDir: str) -> bool:
         """
-        Sauvegarde une image upscalée dans un thread séparé pour ne pas bloquer l'event loop
+        Sauvegarde une image upscalée, en la reconvertissant en PNG si nécessaire
+        pour la compatibilité avec FFmpeg
 
         Args:
             ImageData: Dictionnaire contenant les données de l'image
@@ -655,17 +663,29 @@ class BatchDistributor:
             try:
                 FrameNumber = ImageData.get("number")
                 ImageB64 = ImageData.get("data")
+                ReceivedFormat = ImageData.get("format", "png")
 
                 if not ImageB64:
                     raise ValueError("Données d'image manquantes")
 
-                Filename = ImageData.get("filename", f"frame_{FrameNumber:08d}.png")
-
                 # Décode l'image (opération CPU intensive)
                 ImageBytes = base64.b64decode(ImageB64)
 
-                # Sauvegarde (opération I/O bloquante)
+                # Nom de fichier toujours en PNG pour FFmpeg
+                Filename = f"frame_{FrameNumber:08d}.png"
                 OutputPath = os.path.join(UpscaledDir, Filename)
+
+                # Si le format reçu n'est pas PNG, convertit en PNG
+                if ReceivedFormat != "png":
+                    try:
+                        Buffer = io.BytesIO(ImageBytes)
+                        with Image.open(Buffer) as Img:
+                            Img.save(OutputPath, format='PNG')
+                        return True
+                    except Exception as e:
+                        self.Logger.warning(f"Échec conversion {ReceivedFormat}->PNG: {e}")
+
+                # Sauvegarde directe (PNG ou fallback)
                 with open(OutputPath, 'wb') as f:
                     f.write(ImageBytes)
 

@@ -68,7 +68,11 @@ class PerformanceConfigManager:
         "output_format": "png",
         "first_run": True,
         "compression_level": CompressionConfig.LEVEL_DEFAULT,  # Niveau de compression réseau (1-10)
-        "work_directory": ""  # Vide = utilise ~/.upscaling_client/ par défaut
+        "work_directory": "",  # Vide = utilise ~/.upscaling_client/ par défaut
+        # Configuration du format de transfert réseau
+        "transfer_format": "avif",    # Format pour les transferts (png, avif, webp)
+        "transfer_quality": 95,       # Qualité AVIF/WebP (1-100, 95 = quasi-lossless)
+        "transfer_lossless": False    # Si True, utilise compression lossless
     }
 
     def __init__(self, ConfigDir: Optional[str] = None):
