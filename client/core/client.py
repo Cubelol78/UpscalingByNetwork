@@ -68,17 +68,22 @@ class UpscalingClient:
 
         self.Running = False
         self.Status = ClientStatus.IDLE
+
+        # Pipeline multi-batch : permet de recevoir un batch pendant l'envoi du précédent
+        self.ActiveBatches = {}       # {BatchId: {"status": str, "progress": int, "total": int}}
+        self.ProcessingTasks = {}     # {BatchId: asyncio.Task}
+        self.MaxConcurrentBatches = 2 # Chargé depuis config dans Start()
+        self.GpuLock = None           # asyncio.Lock() - Un seul upscaling GPU à la fois
+
+        # Rétrocompatibilité pour GUI existant (pointe vers le premier batch actif)
         self.CurrentBatch = None
-        self.ProcessingTask = None  # Tâche de traitement en arrière-plan
+        self.CurrentBatchProgress = 0
+        self.CurrentBatchTotal = 0
 
         # Statistiques de session
         self.BatchesProcessed = 0  # Nombre de batches traités avec succès
         self.BatchesFailed = 0     # Nombre de batches échoués
         self.ImagesProcessed = 0   # Nombre total d'images traitées
-
-        # Progression du batch en cours (pour le GUI)
-        self.CurrentBatchProgress = 0  # Nombre d'images traitées dans le batch actuel
-        self.CurrentBatchTotal = 0     # Nombre total d'images dans le batch actuel
 
         # File d'attente pour les résultats à envoyer (découplage traitement/envoi)
         # La queue contient des chemins de fichiers (pas les données en RAM)
@@ -142,6 +147,20 @@ class UpscalingClient:
 
             # Lock pour synchroniser les envois (évite conflits heartbeats/batch results)
             self.SendLock = asyncio.Lock()
+
+            # Lock GPU pour pipeline multi-batch (un seul upscaling à la fois)
+            self.GpuLock = asyncio.Lock()
+
+            # Charge la configuration max_concurrent_batches
+            try:
+                from client.utils.performance_config import PerformanceConfigManager
+                ConfigManager = PerformanceConfigManager()
+                Config = ConfigManager.Load()
+                self.MaxConcurrentBatches = Config.get('max_concurrent_batches', 2)
+                self.Logger.info(f"Pipeline multi-batch: max {self.MaxConcurrentBatches} batches simultanés")
+            except Exception as e:
+                self.Logger.warning(f"Config multi-batch non chargée, défaut: 2 ({e})")
+                self.MaxConcurrentBatches = 2
 
             # Initialise la queue d'envoi prioritaire (heartbeats > status)
             self.OutgoingQueue = asyncio.PriorityQueue()
@@ -504,7 +523,7 @@ class UpscalingClient:
 
     async def _HandleBatchAssignment(self, Assignment: BatchAssignment):
         """
-        Traite un batch d'images assigné
+        Traite un batch d'images assigné (mode pipeline multi-batch)
         Lance le traitement en arrière-plan pour ne pas bloquer les heartbeats
 
         Args:
@@ -512,29 +531,57 @@ class UpscalingClient:
         """
         try:
             BatchId = Assignment.GetBatchId()
-            self.CurrentBatch = BatchId
+            ImageCount = Assignment.Payload.get('image_count', 0)
 
-            self.Logger.info(f"Nouveau batch reçu: {BatchId}")
-            self.Logger.info(f"  Nombre d'images: {Assignment.Payload.get('image_count')}")
+            # Vérifie si on peut accepter un nouveau batch (pipeline)
+            if len(self.ActiveBatches) >= self.MaxConcurrentBatches:
+                self.Logger.warning(f"Limite de batches atteinte ({self.MaxConcurrentBatches}), "
+                                  f"batch {BatchId} refusé")
+                return
 
-            # Met à jour le statut
+            self.Logger.info(f"Nouveau batch reçu: {BatchId} "
+                           f"(actifs: {len(self.ActiveBatches) + 1}/{self.MaxConcurrentBatches})")
+            self.Logger.info(f"  Nombre d'images: {ImageCount}")
+
+            # Ajoute le batch aux batches actifs
+            self.ActiveBatches[BatchId] = {
+                "status": "received",
+                "progress": 0,
+                "total": ImageCount
+            }
+
+            # Rétrocompatibilité GUI : pointe vers le premier batch actif
+            if self.CurrentBatch is None:
+                self.CurrentBatch = BatchId
+                self.CurrentBatchTotal = ImageCount
+                self.CurrentBatchProgress = 0
+
+            # Met à jour le statut global
             self.Status = ClientStatus.PROCESSING
 
-            # Lance le traitement en tâche de fond pour ne pas bloquer la réception des heartbeats
-            self.ProcessingTask = asyncio.create_task(
+            # Lance le traitement en tâche de fond
+            Task = asyncio.create_task(
                 self._ProcessBatchAsync(BatchId, Assignment.Payload)
             )
+            self.ProcessingTasks[BatchId] = Task
 
         except Exception as e:
             self.Logger.error(f"Erreur lors du traitement du batch: {e}")
-            self.Status = ClientStatus.IDLE
-            self.CurrentBatch = None
+            # Nettoie si erreur
+            if BatchId in self.ActiveBatches:
+                del self.ActiveBatches[BatchId]
+            if BatchId in self.ProcessingTasks:
+                del self.ProcessingTasks[BatchId]
+            # Passe à IDLE si plus de batches actifs
+            if not self.ActiveBatches:
+                self.Status = ClientStatus.IDLE
+                self.CurrentBatch = None
 
     async def _ProcessBatchAsync(self, BatchId: str, Payload: dict):
         """
-        Traite un batch de manière asynchrone dans un thread séparé.
+        Traite un batch de manière asynchrone avec pipeline multi-batch.
+        Utilise GpuLock pour garantir un seul upscaling GPU à la fois.
         Sauvegarde le résultat sur disque et ajoute le chemin à la queue.
-        Permet de recevoir un nouveau batch pendant l'envoi du précédent.
         Analyse les erreurs et déclenche une déconnexion si critique.
 
         Args:
@@ -544,20 +591,44 @@ class UpscalingClient:
         try:
             # Initialise la progression du batch
             Images = Payload.get("images", [])
-            self.CurrentBatchTotal = len(Images)
-            self.CurrentBatchProgress = 0
+            ImageCount = len(Images)
 
-            # Callback de progression pour mettre à jour CurrentBatchProgress
+            # Met à jour le statut dans ActiveBatches
+            if BatchId in self.ActiveBatches:
+                self.ActiveBatches[BatchId]["status"] = "waiting_gpu"
+                self.ActiveBatches[BatchId]["total"] = ImageCount
+
+            # Rétrocompatibilité GUI
+            if self.CurrentBatch == BatchId:
+                self.CurrentBatchTotal = ImageCount
+                self.CurrentBatchProgress = 0
+
+            # Callback de progression
             def ProgressCallback(Current, Total):
-                self.CurrentBatchProgress = Current
-                self.CurrentBatchTotal = Total
+                if BatchId in self.ActiveBatches:
+                    self.ActiveBatches[BatchId]["progress"] = Current
+                # Rétrocompatibilité GUI (pour le premier batch)
+                if self.CurrentBatch == BatchId:
+                    self.CurrentBatchProgress = Current
+                    self.CurrentBatchTotal = Total
 
-            # Traite le batch dans un thread séparé (Real-ESRGAN est bloquant)
-            Result = await asyncio.to_thread(
-                self.LocalProcessor.ProcessBatch,
-                Payload,
-                ProgressCallback  # Passe le callback de progression
-            )
+            # ACQUIERT LE LOCK GPU (pipeline: attend si un autre batch upscale)
+            self.Logger.debug(f"Batch {BatchId}: attente du GPU...")
+            async with self.GpuLock:
+                if BatchId in self.ActiveBatches:
+                    self.ActiveBatches[BatchId]["status"] = "upscaling"
+                self.Logger.info(f"Batch {BatchId}: upscaling en cours...")
+
+                # Traite le batch dans un thread séparé (Real-ESRGAN est bloquant)
+                Result = await asyncio.to_thread(
+                    self.LocalProcessor.ProcessBatch,
+                    Payload,
+                    ProgressCallback
+                )
+
+            # GPU libéré, continue avec la sauvegarde et queue
+            if BatchId in self.ActiveBatches:
+                self.ActiveBatches[BatchId]["status"] = "sending"
 
             if not Result:
                 self.Logger.error(f"Échec du traitement du batch {BatchId}")
@@ -582,9 +653,7 @@ class UpscalingClient:
 
         except Exception as e:
             self.Logger.error(f"Erreur lors du traitement async du batch: {e}")
-            # Analyse l'erreur d'exception
             await self._HandleBatchError(str(e))
-            # En cas d'erreur, ajoute quand même un résultat d'échec à la queue
             try:
                 ErrorResult = BatchResult(
                     BatchId=BatchId,
@@ -598,14 +667,30 @@ class UpscalingClient:
                 pass
 
         finally:
-            # Ne passe PAS en IDLE ici - on reste en PROCESSING jusqu'à ce que
-            # le batch result soit effectivement envoyé (voir _SenderLoop)
-            # Cela évite que le serveur timeout le client pendant l'envoi d'un gros batch
-            self.CurrentBatch = None
-            self.ProcessingTask = None
-            # Réinitialise la progression
-            self.CurrentBatchProgress = 0
-            self.CurrentBatchTotal = 0
+            # Nettoie le batch des structures multi-batch
+            if BatchId in self.ActiveBatches:
+                del self.ActiveBatches[BatchId]
+            if BatchId in self.ProcessingTasks:
+                del self.ProcessingTasks[BatchId]
+
+            # Met à jour CurrentBatch pour pointer vers le prochain batch actif
+            if self.CurrentBatch == BatchId:
+                if self.ActiveBatches:
+                    # Pointe vers le premier batch restant
+                    NextBatch = next(iter(self.ActiveBatches))
+                    self.CurrentBatch = NextBatch
+                    self.CurrentBatchProgress = self.ActiveBatches[NextBatch].get("progress", 0)
+                    self.CurrentBatchTotal = self.ActiveBatches[NextBatch].get("total", 0)
+                else:
+                    self.CurrentBatch = None
+                    self.CurrentBatchProgress = 0
+                    self.CurrentBatchTotal = 0
+
+            # Passe à IDLE seulement si plus aucun batch actif ET queue vide
+            # (le _SenderLoop gère aussi le passage à IDLE après envoi)
+            if not self.ActiveBatches and (not self.ResultQueue or self.ResultQueue.empty()):
+                self.Status = ClientStatus.IDLE
+                self.Logger.debug("Plus de batches actifs, passage à IDLE")
 
     async def _HandleBatchError(self, ErrorMessage: str):
         """
@@ -695,9 +780,11 @@ class UpscalingClient:
 
                     # Passe à IDLE et notifie le serveur APRÈS l'envoi réussi
                     # Cela garantit que le serveur ne timeout pas pendant l'envoi
-                    if self.ResultQueue.empty():
+                    # Multi-batch: ne passe à IDLE que si plus aucun batch actif
+                    if self.ResultQueue.empty() and not self.ActiveBatches:
                         self.Status = ClientStatus.IDLE
                         await self._SendStatusUpdate()
+                        self.Logger.debug("Queue vide et plus de batches actifs, passage à IDLE")
                 else:
                     # Échec définitif après tous les retries - conserver le cache pour diagnostic
                     self.Logger.error(

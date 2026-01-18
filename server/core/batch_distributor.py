@@ -190,7 +190,11 @@ class BatchDistributor:
 
     def _GetAvailableClients(self) -> List[str]:
         """
-        Récupère les clients disponibles (idle avec canal Data connecté)
+        Récupère les clients disponibles pour recevoir un batch (pipeline multi-batch)
+
+        Un client est disponible si:
+        - Son canal Data est connecté
+        - Il a moins de batches actifs que sa limite (MaxConcurrentBatches)
 
         Returns:
             Liste des IDs des clients disponibles
@@ -198,17 +202,25 @@ class BatchDistributor:
         AvailableClients = []
 
         for ClientId in self.ClientManager.GetConnectedClients():
-            Status = self.ClientManager.GetClientStatus(ClientId)
+            ClientInfo = self.ClientManager.Clients.get(ClientId)
 
-            # Vérifie que le client est IDLE ET que son canal Data est connecté
-            if Status == ClientStatus.IDLE:
-                ClientInfo = self.ClientManager.Clients.get(ClientId)
+            # Vérifie que le canal Data est connecté (requis pour envoyer les batches)
+            if not ClientInfo or not ClientInfo.IsDataConnected():
+                self.Logger.debug(f"Client {ClientId}: canal Data non connecté, ignoré")
+                continue
 
-                # Vérifie que le canal Data est connecté (requis pour envoyer les batches)
-                if ClientInfo and ClientInfo.IsDataConnected():
-                    AvailableClients.append(ClientId)
-                else:
-                    self.Logger.debug(f"Client {ClientId} IDLE mais canal Data non connecté, ignoré")
+            # Compte les batches actifs pour ce client (pipeline multi-batch)
+            ActiveCount = sum(1 for b in self.ActiveBatches.values()
+                            if b.get("client_id") == ClientId)
+
+            # Vérifie la capacité du client
+            MaxBatches = ClientInfo.MaxConcurrentBatches or 2
+
+            if ActiveCount < MaxBatches:
+                AvailableClients.append(ClientId)
+                self.Logger.debug(f"Client {ClientId}: disponible ({ActiveCount}/{MaxBatches} batches)")
+            else:
+                self.Logger.debug(f"Client {ClientId}: capacité atteinte ({ActiveCount}/{MaxBatches} batches)")
 
         return AvailableClients
 

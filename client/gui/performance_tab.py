@@ -389,6 +389,37 @@ class PerformanceTab(QWidget):
         self.TransferLosslessCheckbox.stateChanged.connect(self.OnConfigChanged)
         Layout.addRow("", self.TransferLosslessCheckbox)
 
+        # Séparateur visuel
+        SeparatorLabel2 = QLabel("")
+        Layout.addRow(SeparatorLabel2)
+
+        # Section Pipeline multi-batch
+        PipelineLabel = QLabel("Pipeline multi-batch")
+        PipelineLabel.setProperty("class", "subsection-title")
+        Layout.addRow(PipelineLabel)
+
+        # Nombre max de batches en pipeline
+        PipelineLayout = QHBoxLayout()
+        self.MaxConcurrentBatchesSpinBox = QSpinBox()
+        self.MaxConcurrentBatchesSpinBox.setRange(1, 5)
+        self.MaxConcurrentBatchesSpinBox.setValue(2)
+        self.MaxConcurrentBatchesSpinBox.setToolTip(
+            "Nombre de batches pouvant etre recus en avance\n"
+            "1 = pipeline desactive (attend fin de l'envoi)\n"
+            "2+ = recoit le batch suivant pendant l'envoi"
+        )
+        self.MaxConcurrentBatchesSpinBox.valueChanged.connect(self.OnConfigChanged)
+        PipelineLayout.addWidget(self.MaxConcurrentBatchesSpinBox)
+
+        PipelineNote = QLabel("(2 = optimal pour reseau lent)")
+        PipelineNote.setProperty("class", "hint")
+        PipelineLayout.addWidget(PipelineNote)
+        PipelineLayout.addStretch()
+
+        PipelineWidget = QWidget()
+        PipelineWidget.setLayout(PipelineLayout)
+        Layout.addRow("Batches en pipeline:", PipelineWidget)
+
         return Group
 
     def CreateStorageGroup(self) -> QGroupBox:
@@ -683,6 +714,10 @@ class PerformanceTab(QWidget):
             TransferLossless = Config.get("transfer_lossless", False)
             self.TransferLosslessCheckbox.setChecked(TransferLossless)
 
+            # Pipeline multi-batch
+            MaxConcurrentBatches = Config.get("max_concurrent_batches", 2)
+            self.MaxConcurrentBatchesSpinBox.setValue(MaxConcurrentBatches)
+
             # Met à jour l'affichage de l'espace disque
             self.UpdateDiskSpaceDisplay()
 
@@ -755,7 +790,8 @@ class PerformanceTab(QWidget):
             "work_directory": self.WorkDirInput.text().strip(),
             "transfer_format": self.TransferFormatCombo.currentData(),
             "transfer_quality": self.TransferQualitySpinBox.value(),
-            "transfer_lossless": self.TransferLosslessCheckbox.isChecked()
+            "transfer_lossless": self.TransferLosslessCheckbox.isChecked(),
+            "max_concurrent_batches": self.MaxConcurrentBatchesSpinBox.value()
         }
 
     def AutoConfigureQuiet(self):

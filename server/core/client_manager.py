@@ -65,6 +65,9 @@ class ClientInfo:
         self.Authenticated = False
         self.HeartbeatEnabled = False  # Active seulement après connexion Data
 
+        # Pipeline multi-batch : capacité du client
+        self.MaxConcurrentBatches = 2  # Valeur par défaut, peut être mise à jour par le client
+
     def SetDataConnection(self, Reader: asyncio.StreamReader, Writer: asyncio.StreamWriter):
         """
         Configure la connexion Data pour ce client
