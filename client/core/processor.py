@@ -341,16 +341,16 @@ class LocalProcessor:
             for img in OriginalImages
         }
 
-        # Configuration du format de transfert
-        TransferFormat = self.PerformanceConfig.get('transfer_format', 'png')
-        TransferQuality = self.PerformanceConfig.get('transfer_quality', 95)
-        TransferLossless = self.PerformanceConfig.get('transfer_lossless', False)
+        # Configuration du format de transfert (valeurs fixes)
+        TransferFormat = 'avif'
+        TransferQuality = 95
+        TransferLossless = False
 
         # Initialise le convertisseur
         Converter = ImageConverter()
 
         # Vérifie le support AVIF et ajuste si nécessaire
-        if TransferFormat == 'avif' and not Converter.IsAvifSupported():
+        if not Converter.IsAvifSupported():
             self.Logger.warning("AVIF non supporté, utilisation de PNG")
             TransferFormat = 'png'
 

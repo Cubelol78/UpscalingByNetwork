@@ -335,64 +335,6 @@ class PerformanceTab(QWidget):
         SeparatorLabel = QLabel("")
         Layout.addRow(SeparatorLabel)
 
-        # Section Format de transfert réseau
-        TransferLabel = QLabel("Format de transfert reseau")
-        TransferLabel.setProperty("class", "subsection-title")
-        Layout.addRow(TransferLabel)
-
-        # Sélecteur de format
-        TransferFormatLayout = QHBoxLayout()
-        self.TransferFormatCombo = QComboBox()
-        self.TransferFormatCombo.addItem("PNG (sans perte)", "png")
-        self.TransferFormatCombo.addItem("AVIF (optimal)", "avif")
-        self.TransferFormatCombo.addItem("WebP", "webp")
-        self.TransferFormatCombo.setToolTip(
-            "AVIF offre la meilleure compression avec qualite quasi-identique\n"
-            "PNG: ~15-30 MB par image upscalee\n"
-            "AVIF: ~2-5 MB par image (reduction 80-90%)"
-        )
-        self.TransferFormatCombo.currentIndexChanged.connect(self.OnConfigChanged)
-        TransferFormatLayout.addWidget(self.TransferFormatCombo)
-
-        FormatNote = QLabel("(AVIF reduit le transfert de 80-90%)")
-        FormatNote.setProperty("class", "hint")
-        TransferFormatLayout.addWidget(FormatNote)
-        TransferFormatLayout.addStretch()
-
-        TransferFormatWidget = QWidget()
-        TransferFormatWidget.setLayout(TransferFormatLayout)
-        Layout.addRow("Format:", TransferFormatWidget)
-
-        # Qualité (pour AVIF/WebP)
-        QualityLayout = QHBoxLayout()
-        self.TransferQualitySpinBox = QSpinBox()
-        self.TransferQualitySpinBox.setRange(1, 100)
-        self.TransferQualitySpinBox.setValue(95)
-        self.TransferQualitySpinBox.setToolTip("95+ = quasi-lossless, 80-94 = haute qualite")
-        self.TransferQualitySpinBox.valueChanged.connect(self.OnConfigChanged)
-        QualityLayout.addWidget(self.TransferQualitySpinBox)
-
-        QualityNote = QLabel("(95+ recommande)")
-        QualityNote.setProperty("class", "hint")
-        QualityLayout.addWidget(QualityNote)
-        QualityLayout.addStretch()
-
-        QualityWidget = QWidget()
-        QualityWidget.setLayout(QualityLayout)
-        Layout.addRow("Qualite:", QualityWidget)
-
-        # Option lossless
-        self.TransferLosslessCheckbox = QCheckBox("Compression sans perte (fichiers plus gros)")
-        self.TransferLosslessCheckbox.setToolTip(
-            "Active la compression lossless (fichiers plus gros mais qualite parfaite)"
-        )
-        self.TransferLosslessCheckbox.stateChanged.connect(self.OnConfigChanged)
-        Layout.addRow("", self.TransferLosslessCheckbox)
-
-        # Séparateur visuel
-        SeparatorLabel2 = QLabel("")
-        Layout.addRow(SeparatorLabel2)
-
         # Section Pipeline multi-batch
         PipelineLabel = QLabel("Pipeline multi-batch")
         PipelineLabel.setProperty("class", "subsection-title")
@@ -702,18 +644,6 @@ class PerformanceTab(QWidget):
             WorkDir = Config.get("work_directory", "")
             self.WorkDirInput.setText(WorkDir)
 
-            # Format de transfert
-            TransferFormat = Config.get("transfer_format", "avif")
-            TransferIndex = self.TransferFormatCombo.findData(TransferFormat)
-            if TransferIndex >= 0:
-                self.TransferFormatCombo.setCurrentIndex(TransferIndex)
-
-            TransferQuality = Config.get("transfer_quality", 95)
-            self.TransferQualitySpinBox.setValue(TransferQuality)
-
-            TransferLossless = Config.get("transfer_lossless", False)
-            self.TransferLosslessCheckbox.setChecked(TransferLossless)
-
             # Pipeline multi-batch
             MaxConcurrentBatches = Config.get("max_concurrent_batches", 2)
             self.MaxConcurrentBatchesSpinBox.setValue(MaxConcurrentBatches)
@@ -788,9 +718,6 @@ class PerformanceTab(QWidget):
             "first_run": False,
             "compression_level": self.CompressionLevelSpinBox.value(),
             "work_directory": self.WorkDirInput.text().strip(),
-            "transfer_format": self.TransferFormatCombo.currentData(),
-            "transfer_quality": self.TransferQualitySpinBox.value(),
-            "transfer_lossless": self.TransferLosslessCheckbox.isChecked(),
             "max_concurrent_batches": self.MaxConcurrentBatchesSpinBox.value()
         }
 
