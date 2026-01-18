@@ -614,19 +614,37 @@ class UpscalingClient:
 
             # ACQUIERT LE LOCK GPU (pipeline: attend si un autre batch upscale)
             self.Logger.debug(f"Batch {BatchId}: attente du GPU...")
+            UpscaledPaths = None
+
             async with self.GpuLock:
                 if BatchId in self.ActiveBatches:
                     self.ActiveBatches[BatchId]["status"] = "upscaling"
-                self.Logger.info(f"Batch {BatchId}: upscaling en cours...")
+                self.Logger.info(f"Batch {BatchId}: upscaling GPU en cours...")
 
-                # Traite le batch dans un thread séparé (Real-ESRGAN est bloquant)
-                Result = await asyncio.to_thread(
-                    self.LocalProcessor.ProcessBatch,
+                # Phase GPU uniquement (Real-ESRGAN)
+                UpscaledPaths = await asyncio.to_thread(
+                    self.LocalProcessor.ProcessBatchGpuOnly,
                     Payload,
                     ProgressCallback
                 )
 
-            # GPU libéré, continue avec la sauvegarde et queue
+            # GPU LIBÉRÉ ! Un autre batch peut commencer son upscaling
+            # Phase CPU : conversion AVIF et encodage base64 (parallélisable)
+            if BatchId in self.ActiveBatches:
+                self.ActiveBatches[BatchId]["status"] = "converting"
+
+            if UpscaledPaths:
+                self.Logger.info(f"Batch {BatchId}: conversion CPU en cours...")
+                Result = await asyncio.to_thread(
+                    self.LocalProcessor.ConvertAndEncode,
+                    BatchId,
+                    UpscaledPaths,
+                    Payload.get("images", [])
+                )
+            else:
+                Result = None
+
+            # Passe à l'envoi
             if BatchId in self.ActiveBatches:
                 self.ActiveBatches[BatchId]["status"] = "sending"
 

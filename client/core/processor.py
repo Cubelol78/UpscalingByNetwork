@@ -99,7 +99,7 @@ class LocalProcessor:
 
     def ProcessBatch(self, BatchData: Dict[str, Any], ProgressCallback=None) -> Optional[BatchResult]:
         """
-        Traite un batch d'images
+        Traite un batch d'images (méthode legacy, fait GPU + conversion ensemble)
 
         Args:
             BatchData: Données du batch (depuis BatchAssignment)
@@ -107,6 +107,27 @@ class LocalProcessor:
 
         Returns:
             BatchResult ou None si erreur
+        """
+        # Appelle les deux phases séquentiellement
+        GpuResult = self.ProcessBatchGpuOnly(BatchData, ProgressCallback)
+        if not GpuResult:
+            return None
+
+        BatchId = BatchData.get("batch_id", "")
+        OriginalImages = BatchData.get("images", [])
+        return self.ConvertAndEncode(BatchId, GpuResult, OriginalImages)
+
+    def ProcessBatchGpuOnly(self, BatchData: Dict[str, Any], ProgressCallback=None) -> Optional[List[str]]:
+        """
+        Phase GPU uniquement : décode les images et lance l'upscaling Real-ESRGAN
+        Ne fait PAS la conversion AVIF ni l'encodage base64
+
+        Args:
+            BatchData: Données du batch (depuis BatchAssignment)
+            ProgressCallback: Callback optionnel appelé avec (current, total) pour la progression
+
+        Returns:
+            Liste des chemins des images upscalées, ou None si erreur
         """
         BatchId: str = ""
         try:
@@ -121,7 +142,7 @@ class LocalProcessor:
             Model = BatchData.get("model", "realesr-animevideov3")
             TtaMode = BatchData.get("tta_mode", False)  # TTA défini par le serveur
 
-            self.Logger.info(f"Traitement du batch {BatchId}")
+            self.Logger.info(f"[GPU] Traitement du batch {BatchId}")
             self.Logger.info(f"  Vidéo: {VideoId}")
             self.Logger.info(f"  Images: {len(Images)}")
             self.Logger.info(f"  Facteur: x{UpscaleFactor}")
@@ -137,14 +158,14 @@ class LocalProcessor:
             os.makedirs(InputDir, exist_ok=True)
             os.makedirs(OutputDir, exist_ok=True)
 
-            # Sauvegarde les images reçues
+            # Sauvegarde les images reçues (décodage base64)
             SavedImages = self._SaveImages(Images, InputDir)
 
             if not SavedImages:
                 self.Logger.error("Aucune image sauvegardée")
-                return self._CreateErrorResult(BatchId, "Aucune image sauvegardée")
+                return None
 
-            # Upscale les images
+            # Upscale les images (GPU)
             UpscaledImages, UpscaleError = self._UpscaleImages(
                 SavedImages,
                 OutputDir,
@@ -155,12 +176,37 @@ class LocalProcessor:
 
             if not UpscaledImages:
                 self.Logger.error("Échec de l'upscaling")
-                # Propage les détails de l'erreur Real-ESRGAN pour analyse
-                ErrorMsg = UpscaleError if UpscaleError else "Échec de l'upscaling"
-                return self._CreateErrorResult(BatchId, ErrorMsg)
+                # Log l'erreur mais retourne None (l'appelant gère l'erreur)
+                if UpscaleError:
+                    self.Logger.error(f"Détails: {UpscaleError}")
+                return None
 
-            # Charge les images upscalées
-            ResultImages = self._LoadUpscaledImages(UpscaledImages, Images)
+            self.Logger.info(f"✓ [GPU] Batch {BatchId} upscalé ({len(UpscaledImages)} images)")
+            return UpscaledImages
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de l'upscaling GPU du batch: {e}")
+            return None
+
+    def ConvertAndEncode(self, BatchId: str, UpscaledPaths: List[str],
+                        OriginalImages: List[Dict]) -> Optional[BatchResult]:
+        """
+        Phase CPU : convertit les images upscalées (AVIF/WebP) et encode en base64
+        Cette méthode n'utilise PAS le GPU, peut s'exécuter en parallèle d'un upscaling
+
+        Args:
+            BatchId: ID du batch
+            UpscaledPaths: Chemins des images upscalées (sortie de ProcessBatchGpuOnly)
+            OriginalImages: Images originales (pour récupérer les métadonnées)
+
+        Returns:
+            BatchResult ou None si erreur
+        """
+        try:
+            self.Logger.info(f"[CPU] Conversion et encodage du batch {BatchId}...")
+
+            # Charge et convertit les images upscalées
+            ResultImages = self._LoadUpscaledImages(UpscaledPaths, OriginalImages)
 
             # Nettoie les fichiers temporaires
             self._Cleanup(BatchId)
@@ -172,12 +218,12 @@ class LocalProcessor:
                 UpscaledImages=ResultImages
             )
 
-            self.Logger.info(f"✓ Batch {BatchId} traité avec succès ({len(ResultImages)} images)")
+            self.Logger.info(f"✓ [CPU] Batch {BatchId} converti ({len(ResultImages)} images)")
 
             return Result
 
         except Exception as e:
-            self.Logger.error(f"Erreur lors du traitement du batch: {e}")
+            self.Logger.error(f"Erreur lors de la conversion/encodage du batch {BatchId}: {e}")
             return self._CreateErrorResult(BatchId, str(e))
 
     def _SaveImages(self, Images: List[Dict], OutputDir: str) -> List[str]:
