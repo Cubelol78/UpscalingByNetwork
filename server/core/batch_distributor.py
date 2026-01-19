@@ -384,7 +384,9 @@ class BatchDistributor:
                 VideoId=VideoObj.VideoId,
                 Images=Images,
                 UpscaleFactor=VideoObj.UpscaleFactor,
+                Engine=VideoObj.Engine,
                 Model=VideoObj.Model,
+                DenoiseLevel=VideoObj.DenoiseLevel,
                 TtaMode=VideoObj.TtaMode
             )
 
@@ -472,7 +474,9 @@ class BatchDistributor:
                 VideoId=VideoObj.VideoId,
                 Images=Images,
                 UpscaleFactor=VideoObj.UpscaleFactor,
+                Engine=VideoObj.Engine,
                 Model=VideoObj.Model,
+                DenoiseLevel=VideoObj.DenoiseLevel,
                 TtaMode=VideoObj.TtaMode
             )
 

@@ -7,10 +7,12 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QPushButton,
     QHeaderView, QFileDialog, QComboBox, QDialog,
     QDialogButtonBox, QFormLayout, QMessageBox, QProgressBar,
-    QCheckBox
+    QCheckBox, QSpinBox
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
+
+from shared.utils.constants import ProcessingConfig
 
 
 class JobsTab(QWidget):
@@ -249,7 +251,9 @@ class JobsTab(QWidget):
                     VideoId = JobManager.AddVideo(
                         VideoPath=FilePath,
                         UpscaleFactor=Config['upscale_factor'],
+                        Engine=Config.get('engine', 'realesrgan'),
                         Model=Config['model'],
+                        DenoiseLevel=Config.get('denoise_level', -1),
                         TtaMode=Config['tta_mode']
                     )
 
@@ -492,20 +496,40 @@ class AddVideoDialog(QDialog):
         """Configure l'interface du dialogue"""
         Layout = QFormLayout(self)
 
+        # Engine d'upscaling
+        self.EngineCombo = QComboBox()
+        self.EngineCombo.addItem("Real-ESRGAN", ProcessingConfig.ENGINE_REALESRGAN)
+        self.EngineCombo.addItem("Real-CUGAN", ProcessingConfig.ENGINE_REALCUGAN)
+        self.EngineCombo.currentIndexChanged.connect(self._OnEngineChanged)
+        Layout.addRow("Engine:", self.EngineCombo)
+
         # Facteur d'upscaling
         self.UpscaleCombo = QComboBox()
         self.UpscaleCombo.addItems(["x2", "x3", "x4"])
         self.UpscaleCombo.setCurrentText("x4")
         Layout.addRow("Facteur d'upscaling:", self.UpscaleCombo)
 
-        # Modèle
+        # Modèle (change selon l'engine)
         self.ModelCombo = QComboBox()
-        self.ModelCombo.addItems([
-            "realesr-animevideov3",
-            "realesrgan-x4plus-anime",
-            "realesrgan-x4plus"
-        ])
+        self.ModelCombo.currentIndexChanged.connect(self._OnModelChanged)
+        self._UpdateModelList()
         Layout.addRow("Modèle:", self.ModelCombo)
+
+        # Niveau de débruitage (Real-CUGAN uniquement)
+        self.DenoiseLabel = QLabel("Denoise:")
+        self.DenoiseCombo = QComboBox()
+        self.DenoiseCombo.setToolTip(
+            "Niveau de débruitage pour Real-CUGAN:\n"
+            "-1 = Auto\n"
+            " 0 = Désactivé\n"
+            " 1 = Léger\n"
+            " 2 = Moyen\n"
+            " 3 = Fort"
+        )
+        Layout.addRow(self.DenoiseLabel, self.DenoiseCombo)
+        # Masque par défaut (Real-ESRGAN)
+        self.DenoiseLabel.setVisible(False)
+        self.DenoiseCombo.setVisible(False)
 
         # Mode TTA
         self.TtaCheckbox = QCheckBox()
@@ -522,13 +546,122 @@ class AddVideoDialog(QDialog):
         Buttons.rejected.connect(self.reject)
         Layout.addRow(Buttons)
 
+    def _OnEngineChanged(self):
+        """Appelé quand l'engine change - met à jour les options disponibles"""
+        Engine = self.EngineCombo.currentData()
+        IsRealCugan = (Engine == ProcessingConfig.ENGINE_REALCUGAN)
+
+        # Affiche/masque les options Real-CUGAN
+        self.DenoiseLabel.setVisible(IsRealCugan)
+        self.DenoiseCombo.setVisible(IsRealCugan)
+
+        # Met à jour la liste des modèles
+        self._UpdateModelList()
+
+    def _UpdateModelList(self):
+        """Met à jour la liste des modèles selon l'engine sélectionné"""
+        Engine = self.EngineCombo.currentData()
+        self.ModelCombo.clear()
+
+        if Engine == ProcessingConfig.ENGINE_REALCUGAN:
+            # Modèles Real-CUGAN
+            self.ModelCombo.addItem("Standard Edition (SE)", "models-se")
+            self.ModelCombo.addItem("Pro", "models-pro")
+            self.ModelCombo.addItem("Nose (léger)", "models-nose")
+        else:
+            # Modèles Real-ESRGAN
+            self.ModelCombo.addItem("AniméVidéo v3 (recommandé)", "realesr-animevideov3")
+            self.ModelCombo.addItem("x4plus Anime", "realesrgan-x4plus-anime")
+            self.ModelCombo.addItem("x4plus (photo)", "realesrgan-x4plus")
+
+        # Met à jour les facteurs d'upscaling disponibles pour le nouveau modèle
+        self._UpdateScaleFactorList()
+        # Met à jour les niveaux de denoise disponibles pour le nouveau modèle
+        self._UpdateDenoiseLevelList()
+
+    def _OnModelChanged(self):
+        """Appelé quand le modèle change - met à jour les options disponibles"""
+        self._UpdateScaleFactorList()
+        self._UpdateDenoiseLevelList()
+
+    def _UpdateScaleFactorList(self):
+        """Met à jour la liste des facteurs d'upscaling selon le modèle sélectionné"""
+        Engine = self.EngineCombo.currentData()
+        Model = self.ModelCombo.currentData()
+
+        if not Model:
+            return
+
+        SupportedScales = ProcessingConfig.GetSupportedScales(Engine, Model)
+
+        # Mémorise la sélection actuelle
+        CurrentText = self.UpscaleCombo.currentText()
+        CurrentScale = int(CurrentText[1:]) if CurrentText else 4
+
+        # Met à jour le combo
+        self.UpscaleCombo.clear()
+        for Scale in SupportedScales:
+            self.UpscaleCombo.addItem(f"x{Scale}")
+
+        # Restaure la sélection si valide, sinon sélectionne le plus haut disponible
+        if CurrentScale in SupportedScales:
+            self.UpscaleCombo.setCurrentText(f"x{CurrentScale}")
+        else:
+            self.UpscaleCombo.setCurrentIndex(self.UpscaleCombo.count() - 1)
+
+    def _UpdateDenoiseLevelList(self):
+        """Met à jour la liste des niveaux de denoise selon le modèle Real-CUGAN sélectionné"""
+        Engine = self.EngineCombo.currentData()
+        Model = self.ModelCombo.currentData()
+
+        # Seulement pour Real-CUGAN
+        if Engine != ProcessingConfig.ENGINE_REALCUGAN or not Model:
+            return
+
+        SupportedLevels = ProcessingConfig.GetSupportedDenoiseLevels(Model)
+
+        # Mémorise la sélection actuelle
+        CurrentLevel = self.DenoiseCombo.currentData()
+        if CurrentLevel is None:
+            CurrentLevel = -1
+
+        # Labels pour chaque niveau
+        DenoiseLabels = {
+            -1: "Auto (-1)",
+            0: "Désactivé (0)",
+            1: "Léger (1)",
+            2: "Moyen (2)",
+            3: "Fort (3)"
+        }
+
+        # Met à jour le combo
+        self.DenoiseCombo.clear()
+        for Level in SupportedLevels:
+            self.DenoiseCombo.addItem(DenoiseLabels.get(Level, str(Level)), Level)
+
+        # Restaure la sélection si valide, sinon sélectionne le premier disponible
+        if CurrentLevel in SupportedLevels:
+            Index = SupportedLevels.index(CurrentLevel)
+            self.DenoiseCombo.setCurrentIndex(Index)
+        else:
+            self.DenoiseCombo.setCurrentIndex(0)
+
     def GetConfiguration(self) -> dict:
         """Retourne la configuration sélectionnée"""
         UpscaleText = self.UpscaleCombo.currentText()
         UpscaleFactor = int(UpscaleText[1:])  # Extraire le chiffre de "x4"
+        Engine = self.EngineCombo.currentData()
 
-        return {
+        Config = {
+            'engine': Engine,
             'upscale_factor': UpscaleFactor,
-            'model': self.ModelCombo.currentText(),
+            'model': self.ModelCombo.currentData(),
             'tta_mode': self.TtaCheckbox.isChecked()
         }
+
+        # Ajoute le niveau de débruitage pour Real-CUGAN
+        if Engine == ProcessingConfig.ENGINE_REALCUGAN:
+            DenoiseLevel = self.DenoiseCombo.currentData()
+            Config['denoise_level'] = DenoiseLevel if DenoiseLevel is not None else -1
+
+        return Config

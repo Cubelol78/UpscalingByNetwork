@@ -198,12 +198,117 @@ class ProcessingConfig:
     DEFAULT_BATCH_SIZE = 100  # images par paquet
     DEFAULT_UPSCALE_FACTOR = 4
     SUPPORTED_UPSCALE_FACTORS = [2, 3, 4]
+
+    # Engines d'upscaling disponibles
+    ENGINE_REALESRGAN = "realesrgan"
+    ENGINE_REALCUGAN = "realcugan"
+    DEFAULT_ENGINE = ENGINE_REALESRGAN
+    SUPPORTED_ENGINES = [ENGINE_REALESRGAN, ENGINE_REALCUGAN]
+
+    # Modèles Real-ESRGAN
     DEFAULT_MODEL = "realesr-animevideov3"
-    SUPPORTED_MODELS = [
+    REALESRGAN_MODELS = [
         "realesr-animevideov3",
         "realesrgan-x4plus-anime",
         "realesrgan-x4plus"
     ]
+    # Modèles qui nécessitent un suffixe -x{scale}
+    REALESRGAN_MODELS_WITH_SCALE_SUFFIX = ["realesr-animevideov3"]
+
+    # Modèles Real-CUGAN (variantes de dossiers)
+    REALCUGAN_MODELS = [
+        "models-se",
+        "models-pro",
+        "models-nose"
+    ]
+    DEFAULT_REALCUGAN_MODEL = "models-se"
+    DEFAULT_REALCUGAN_DENOISE = -1  # -1 = auto, 0 = off, 1/2/3 = niveaux
+
+    # Compatibilité legacy
+    SUPPORTED_MODELS = REALESRGAN_MODELS
+
+    # ============================================================================
+    # CAPACITÉS DES MODÈLES - Facteurs d'upscaling supportés par modèle
+    # ============================================================================
+
+    # Facteurs d'upscaling supportés par modèle Real-ESRGAN
+    REALESRGAN_MODEL_SCALES = {
+        "realesr-animevideov3": [2, 3, 4],
+        "realesrgan-x4plus-anime": [4],
+        "realesrgan-x4plus": [4]
+    }
+
+    # Facteurs d'upscaling supportés par modèle Real-CUGAN
+    REALCUGAN_MODEL_SCALES = {
+        "models-se": [2, 3, 4],
+        "models-pro": [2, 3],
+        "models-nose": [2]
+    }
+
+    # Niveaux de denoise supportés par modèle Real-CUGAN
+    REALCUGAN_MODEL_DENOISE_LEVELS = {
+        "models-se": [-1, 0, 1, 2, 3],
+        "models-pro": [-1, 0, 3],
+        "models-nose": [-1]
+    }
+
+    @classmethod
+    def GetSupportedScales(cls, Engine: str, Model: str) -> list:
+        """
+        Retourne les facteurs d'upscaling supportés pour un modèle donné
+
+        Args:
+            Engine: Engine d'upscaling (realesrgan ou realcugan)
+            Model: Nom du modèle
+
+        Returns:
+            Liste des facteurs supportés [2, 3, 4] ou sous-ensemble
+        """
+        if Engine == cls.ENGINE_REALCUGAN:
+            return cls.REALCUGAN_MODEL_SCALES.get(Model, [2, 3, 4])
+        return cls.REALESRGAN_MODEL_SCALES.get(Model, [4])
+
+    @classmethod
+    def ValidateModelScale(cls, Engine: str, Model: str, ScaleFactor: int) -> bool:
+        """
+        Valide qu'un modèle supporte le facteur d'upscaling donné
+
+        Args:
+            Engine: Engine d'upscaling
+            Model: Nom du modèle
+            ScaleFactor: Facteur d'upscaling souhaité
+
+        Returns:
+            True si la combinaison est valide
+        """
+        return ScaleFactor in cls.GetSupportedScales(Engine, Model)
+
+    @classmethod
+    def GetSupportedDenoiseLevels(cls, Model: str) -> list:
+        """
+        Retourne les niveaux de denoise supportés pour un modèle Real-CUGAN
+
+        Args:
+            Model: Nom du modèle Real-CUGAN
+
+        Returns:
+            Liste des niveaux de denoise supportés [-1, 0, 1, 2, 3] ou sous-ensemble
+        """
+        return cls.REALCUGAN_MODEL_DENOISE_LEVELS.get(Model, [-1, 0, 1, 2, 3])
+
+    @classmethod
+    def ValidateModelDenoise(cls, Model: str, DenoiseLevel: int) -> bool:
+        """
+        Valide qu'un modèle Real-CUGAN supporte le niveau de denoise donné
+
+        Args:
+            Model: Nom du modèle Real-CUGAN
+            DenoiseLevel: Niveau de denoise souhaité
+
+        Returns:
+            True si la combinaison est valide
+        """
+        return DenoiseLevel in cls.GetSupportedDenoiseLevels(Model)
 
     # Extensions supportées
     SUPPORTED_VIDEO_EXTENSIONS = [

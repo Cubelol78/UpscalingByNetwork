@@ -226,14 +226,17 @@ class BatchAssignment(BaseMessage):
     """Assignment d'un paquet d'images à un client"""
 
     def __init__(self, BatchId: str, VideoId: str, Images: List[Dict[str, Any]],
-                 UpscaleFactor: int, Model: str, TtaMode: bool = False):
+                 UpscaleFactor: int, Model: str, Engine: str = "realesrgan",
+                 DenoiseLevel: int = -1, TtaMode: bool = False):
         """
         Args:
             BatchId: ID du paquet
             VideoId: ID de la vidéo
             Images: Liste des images (format: [{id, number, data}])
             UpscaleFactor: Facteur d'upscaling (2, 3, ou 4)
-            Model: Modèle Real-ESRGAN à utiliser
+            Model: Modèle à utiliser
+            Engine: Engine d'upscaling (realesrgan ou realcugan)
+            DenoiseLevel: Niveau de débruitage pour Real-CUGAN (-1 = auto)
             TtaMode: Mode TTA pour meilleure qualité (défini par le serveur)
         """
         Payload = {
@@ -241,7 +244,9 @@ class BatchAssignment(BaseMessage):
             "video_id": VideoId,
             "images": Images,
             "upscale_factor": UpscaleFactor,
+            "engine": Engine,
             "model": Model,
+            "denoise_level": DenoiseLevel,
             "tta_mode": TtaMode,
             "image_count": len(Images)
         }

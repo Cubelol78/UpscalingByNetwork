@@ -106,6 +106,32 @@ class RealESRGANHandler:
             self.Logger.error(f"Erreur lors de la liste des modèles: {e}")
             return []
 
+    def _GetModelName(self, Model: str, ScaleFactor: int) -> str:
+        """
+        Construit le nom complet du modèle avec suffixe si nécessaire.
+
+        Certains modèles comme realesr-animevideov3 ont des variantes par scale factor :
+        - realesr-animevideov3-x2, realesr-animevideov3-x3, realesr-animevideov3-x4
+
+        D'autres modèles comme realesrgan-x4plus n'ont pas de variantes.
+
+        Args:
+            Model: Nom de base du modèle
+            ScaleFactor: Facteur d'upscaling (2, 3, 4)
+
+        Returns:
+            Nom complet du modèle
+        """
+        # Modèles qui nécessitent un suffixe -x{scale}
+        ModelsWithScaleSuffix = ['realesr-animevideov3']
+
+        if Model in ModelsWithScaleSuffix:
+            FullModelName = f"{Model}-x{ScaleFactor}"
+            self.Logger.debug(f"Modèle avec suffixe: {Model} -> {FullModelName}")
+            return FullModelName
+
+        return Model
+
     def UpscaleImage(self, InputPath: str, OutputPath: str,
                     ScaleFactor: int = 4, Model: str = "realesr-animevideov3") -> bool:
         """
@@ -126,13 +152,16 @@ class RealESRGANHandler:
                 self.Logger.error(f"Facteur d'upscaling non supporté: {ScaleFactor}")
                 return False
 
+            # Construit le nom complet du modèle (avec suffixe si nécessaire)
+            FullModelName = self._GetModelName(Model, ScaleFactor)
+
             # Construit la commande
             Command = [
                 self.ExecutablePath,
                 '-i', InputPath,
                 '-o', OutputPath,
                 '-s', str(ScaleFactor),
-                '-n', Model
+                '-n', FullModelName
             ]
 
             # Exécute
@@ -177,18 +206,21 @@ class RealESRGANHandler:
                 self.Logger.error(f"Facteur d'upscaling non supporté: {ScaleFactor}")
                 return False
 
+            # Construit le nom complet du modèle (avec suffixe si nécessaire)
+            FullModelName = self._GetModelName(Model, ScaleFactor)
+
             # Construit la commande
             Command = [
                 self.ExecutablePath,
                 '-i', InputDir,
                 '-o', OutputDir,
                 '-s', str(ScaleFactor),
-                '-n', Model,
+                '-n', FullModelName,
                 '-f', 'png'  # Format de sortie
             ]
 
             self.Logger.info(f"Upscaling du répertoire {InputDir}...")
-            self.Logger.info(f"Modèle: {Model}, Facteur: x{ScaleFactor}")
+            self.Logger.info(f"Modèle: {FullModelName}, Facteur: x{ScaleFactor}")
 
             # Exécute
             Result = subprocess.run(

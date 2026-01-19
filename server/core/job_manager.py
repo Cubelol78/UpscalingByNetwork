@@ -15,7 +15,7 @@ from server.core.batch_distributor import BatchDistributor
 from server.database.db_manager import DatabaseManager
 from server.database.models import Video
 from shared.utils.logger import GetModuleLogger
-from shared.utils.constants import JobStatus
+from shared.utils.constants import JobStatus, ProcessingConfig
 
 
 class JobManager:
@@ -96,14 +96,17 @@ class JobManager:
             self.Logger.error(f"Erreur dans la boucle de jobs: {e}")
 
     def AddVideo(self, VideoPath: str, UpscaleFactor: int = 4,
-                 Model: str = "realesr-animevideov3", TtaMode: bool = False) -> Optional[str]:
+                 Engine: str = "realesrgan", Model: str = "realesr-animevideov3",
+                 DenoiseLevel: int = -1, TtaMode: bool = False) -> Optional[str]:
         """
         Ajoute une vidéo à la file d'attente
 
         Args:
             VideoPath: Chemin vers la vidéo
             UpscaleFactor: Facteur d'upscaling (2, 3, ou 4)
-            Model: Modèle Real-ESRGAN
+            Engine: Engine d'upscaling (realesrgan ou realcugan)
+            Model: Modèle à utiliser
+            DenoiseLevel: Niveau de débruitage pour Real-CUGAN (-1 = auto)
             TtaMode: Mode TTA pour meilleure qualité (plus lent)
 
         Returns:
@@ -115,6 +118,25 @@ class JobManager:
                 self.Logger.error(f"Vidéo non trouvée: {VideoPath}")
                 return None
 
+            # Valide la combinaison modèle/scale
+            if not ProcessingConfig.ValidateModelScale(Engine, Model, UpscaleFactor):
+                SupportedScales = ProcessingConfig.GetSupportedScales(Engine, Model)
+                self.Logger.error(
+                    f"Combinaison invalide: {Model} ne supporte pas x{UpscaleFactor}. "
+                    f"Scales supportés: {SupportedScales}"
+                )
+                return None
+
+            # Valide le niveau de denoise pour Real-CUGAN
+            if Engine == ProcessingConfig.ENGINE_REALCUGAN:
+                if not ProcessingConfig.ValidateModelDenoise(Model, DenoiseLevel):
+                    SupportedLevels = ProcessingConfig.GetSupportedDenoiseLevels(Model)
+                    self.Logger.error(
+                        f"Combinaison invalide: {Model} ne supporte pas denoise {DenoiseLevel}. "
+                        f"Niveaux supportés: {SupportedLevels}"
+                    )
+                    return None
+
             # Génère un ID
             VideoId = str(uuid.uuid4())
 
@@ -124,7 +146,9 @@ class JobManager:
                 VideoPath=os.path.abspath(VideoPath),
                 Status=JobStatus.QUEUED,
                 UpscaleFactor=UpscaleFactor,
+                Engine=Engine,
                 Model=Model,
+                DenoiseLevel=DenoiseLevel,
                 TtaMode=TtaMode,
                 CreatedAt=datetime.now()
             )

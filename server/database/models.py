@@ -45,7 +45,9 @@ class Video:
     VideoPath: str
     Status: str = JobStatus.QUEUED
     UpscaleFactor: int = 4
+    Engine: str = "realesrgan"  # Engine d'upscaling (realesrgan ou realcugan)
     Model: str = "realesr-animevideov3"
+    DenoiseLevel: int = -1  # Niveau de débruitage pour Real-CUGAN (-1 = auto)
     TtaMode: bool = False  # Mode TTA (meilleure qualité, plus lent)
     TotalBatches: int = 0
     CompletedBatches: int = 0
@@ -65,7 +67,9 @@ class Video:
             "video_path": self.VideoPath,
             "status": self.Status,
             "upscale_factor": self.UpscaleFactor,
+            "engine": self.Engine,
             "model": self.Model,
+            "denoise_level": self.DenoiseLevel,
             "tta_mode": self.TtaMode,
             "total_batches": self.TotalBatches,
             "completed_batches": self.CompletedBatches,
@@ -87,7 +91,9 @@ class Video:
             VideoPath=Data["video_path"],
             Status=Data.get("status", JobStatus.QUEUED),
             UpscaleFactor=Data.get("upscale_factor", 4),
+            Engine=Data.get("engine", "realesrgan"),
             Model=Data.get("model", "realesr-animevideov3"),
+            DenoiseLevel=Data.get("denoise_level", -1),
             TtaMode=bool(Data.get("tta_mode", False)),
             TotalBatches=Data.get("total_batches", 0),
             CompletedBatches=Data.get("completed_batches", 0),
@@ -219,7 +225,9 @@ CREATE TABLE IF NOT EXISTS videos (
     video_path TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'queued',
     upscale_factor INTEGER NOT NULL DEFAULT 4,
+    engine TEXT NOT NULL DEFAULT 'realesrgan',
     model TEXT NOT NULL DEFAULT 'realesr-animevideov3',
+    denoise_level INTEGER NOT NULL DEFAULT -1,
     tta_mode INTEGER NOT NULL DEFAULT 0,
     total_batches INTEGER DEFAULT 0,
     completed_batches INTEGER DEFAULT 0,

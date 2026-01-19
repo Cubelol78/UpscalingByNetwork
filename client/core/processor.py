@@ -1,7 +1,7 @@
 """
 Processeur local pour le traitement des batches d'images
 Reçoit des images, les upscale et renvoie les résultats
-Supporte la configuration de performance pour Real-ESRGAN
+Supporte Real-ESRGAN et Real-CUGAN avec configuration de performance
 """
 
 import os
@@ -12,13 +12,15 @@ from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 
 from client.utils.realesrgan_handler import RealESRGANHandler
+from client.utils.realcugan_handler import RealCUGANHandler
 from client.utils.performance_config import PerformanceConfigManager
 from shared.utils.logger import GetClientLogger
+from shared.utils.constants import ProcessingConfig
 from shared.protocol.messages import BatchResult
 
 
 class LocalProcessor:
-    """Processeur local de batches d'images avec support des performances"""
+    """Processeur local de batches d'images avec support Real-ESRGAN et Real-CUGAN"""
 
     def __init__(self, TempDirectory: Optional[str] = None, PerformanceConfig: Optional[Dict] = None):
         """
@@ -45,10 +47,11 @@ class LocalProcessor:
         else:
             self.PerformanceConfig = self.PerformanceConfigManager.Load()
 
-        # Handler Real-ESRGAN avec configuration de performance
+        # Handlers d'upscaling avec configuration de performance
         self.RealESRGANHandler = RealESRGANHandler(PerformanceConfig=self.PerformanceConfig)
+        self.RealCUGANHandler = RealCUGANHandler(PerformanceConfig=self.PerformanceConfig)
 
-        self.Logger.info("Processeur local initialisé")
+        self.Logger.info("Processeur local initialisé (Real-ESRGAN + Real-CUGAN)")
         self._LogPerformanceConfig()
 
     def _LogPerformanceConfig(self):
@@ -96,6 +99,7 @@ class LocalProcessor:
         CurrentConfig = self.RealESRGANHandler.PerformanceConfig.copy()
         CurrentConfig['tta_mode'] = TtaMode
         self.RealESRGANHandler.SetPerformanceConfig(CurrentConfig)
+        self.RealCUGANHandler.SetPerformanceConfig(CurrentConfig)
 
     def ProcessBatch(self, BatchData: Dict[str, Any], ProgressCallback=None) -> Optional[BatchResult]:
         """
@@ -141,12 +145,17 @@ class LocalProcessor:
             UpscaleFactor = BatchData.get("upscale_factor", 4)
             Model = BatchData.get("model", "realesr-animevideov3")
             TtaMode = BatchData.get("tta_mode", False)  # TTA défini par le serveur
+            Engine = BatchData.get("engine", ProcessingConfig.ENGINE_REALESRGAN)
+            DenoiseLevel = BatchData.get("denoise_level", ProcessingConfig.DEFAULT_REALCUGAN_DENOISE)
 
             self.Logger.info(f"[GPU] Traitement du batch {BatchId}")
             self.Logger.info(f"  Vidéo: {VideoId}")
             self.Logger.info(f"  Images: {len(Images)}")
+            self.Logger.info(f"  Engine: {Engine}")
             self.Logger.info(f"  Facteur: x{UpscaleFactor}")
             self.Logger.info(f"  Modèle: {Model}")
+            if Engine == ProcessingConfig.ENGINE_REALCUGAN:
+                self.Logger.info(f"  Denoise: {DenoiseLevel}")
             self.Logger.info(f"  Mode TTA: {'Oui' if TtaMode else 'Non'}")
 
             # Applique le TtaMode du serveur (override la config locale)
@@ -165,13 +174,15 @@ class LocalProcessor:
                 self.Logger.error("Aucune image sauvegardée")
                 return None
 
-            # Upscale les images (GPU)
+            # Upscale les images (GPU) avec le bon engine
             UpscaledImages, UpscaleError = self._UpscaleImages(
                 SavedImages,
                 OutputDir,
                 UpscaleFactor,
                 Model,
-                ProgressCallback
+                ProgressCallback,
+                Engine=Engine,
+                DenoiseLevel=DenoiseLevel
             )
 
             if not UpscaledImages:
@@ -286,9 +297,10 @@ class LocalProcessor:
             return []
 
     def _UpscaleImages(self, ImagePaths: List[str], OutputDir: str,
-                      UpscaleFactor: int, Model: str, ExternalProgressCallback=None) -> Tuple[List[str], str]:
+                      UpscaleFactor: int, Model: str, ExternalProgressCallback=None,
+                      Engine: str = None, DenoiseLevel: int = -1) -> Tuple[List[str], str]:
         """
-        Upscale les images avec Real-ESRGAN
+        Upscale les images avec Real-ESRGAN ou Real-CUGAN
 
         Args:
             ImagePaths: Liste des chemins d'images à upscaler
@@ -296,6 +308,8 @@ class LocalProcessor:
             UpscaleFactor: Facteur d'upscaling
             Model: Modèle à utiliser
             ExternalProgressCallback: Callback externe pour la progression (pour le GUI)
+            Engine: Engine d'upscaling (realesrgan ou realcugan)
+            DenoiseLevel: Niveau de débruitage pour Real-CUGAN (-1/0/1/2/3)
 
         Returns:
             Tuple (UpscaledPaths, ErrorDetails):
@@ -303,16 +317,31 @@ class LocalProcessor:
                 - ErrorDetails: Détails de l'erreur si échec, chaîne vide sinon
         """
         try:
-            self.Logger.info(f"Upscaling de {len(ImagePaths)} images...")
+            # Détermine l'engine à utiliser
+            if Engine is None:
+                Engine = ProcessingConfig.ENGINE_REALESRGAN
 
-            # Upscale les images avec le callback externe pour le GUI
-            UpscaledPaths, ErrorDetails = self.RealESRGANHandler.UpscaleBatchList(
-                ImagePaths,
-                OutputDir,
-                UpscaleFactor,
-                Model,
-                ExternalProgressCallback  # Passe directement le callback du client
-            )
+            self.Logger.info(f"Upscaling de {len(ImagePaths)} images avec {Engine}...")
+
+            if Engine == ProcessingConfig.ENGINE_REALCUGAN:
+                # Real-CUGAN
+                UpscaledPaths, ErrorDetails = self.RealCUGANHandler.UpscaleBatchList(
+                    ImagePaths,
+                    OutputDir,
+                    UpscaleFactor,
+                    Model,  # ModelVariant pour RealCUGAN (models-se, etc.)
+                    DenoiseLevel,
+                    ExternalProgressCallback
+                )
+            else:
+                # Real-ESRGAN (défaut)
+                UpscaledPaths, ErrorDetails = self.RealESRGANHandler.UpscaleBatchList(
+                    ImagePaths,
+                    OutputDir,
+                    UpscaleFactor,
+                    Model,
+                    ExternalProgressCallback
+                )
 
             return UpscaledPaths, ErrorDetails
 

@@ -108,9 +108,40 @@ class DatabaseManager:
             self.Connection.commit()
             self.Logger.info("Tables créées avec succès")
 
+            # Migre les tables existantes si nécessaire
+            self._MigrateTables()
+
         except Exception as e:
             self.Logger.error(f"Erreur lors de la création des tables: {e}")
             raise
+
+    def _MigrateTables(self):
+        """Migre les tables existantes pour ajouter les nouvelles colonnes"""
+        try:
+            Cursor = self.Connection.cursor()
+
+            # Vérifie les colonnes existantes dans la table videos
+            Cursor.execute("PRAGMA table_info(videos)")
+            ExistingColumns = {Row[1] for Row in Cursor.fetchall()}
+
+            # Ajoute la colonne engine si elle n'existe pas
+            if "engine" not in ExistingColumns:
+                Cursor.execute(
+                    "ALTER TABLE videos ADD COLUMN engine TEXT NOT NULL DEFAULT 'realesrgan'"
+                )
+                self.Logger.info("Migration: colonne 'engine' ajoutée à la table videos")
+
+            # Ajoute la colonne denoise_level si elle n'existe pas
+            if "denoise_level" not in ExistingColumns:
+                Cursor.execute(
+                    "ALTER TABLE videos ADD COLUMN denoise_level INTEGER NOT NULL DEFAULT -1"
+                )
+                self.Logger.info("Migration: colonne 'denoise_level' ajoutée à la table videos")
+
+            self.Connection.commit()
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la migration des tables: {e}")
 
     def Close(self):
         """Ferme la connexion à la base de données"""
@@ -320,16 +351,17 @@ class DatabaseManager:
             Cursor.execute(
                 """
                 INSERT INTO videos (
-                    video_id, video_path, status, upscale_factor, model, tta_mode,
-                    total_batches, completed_batches, progress, framerate,
-                    total_frames, output_path, error_message, created_at,
-                    started_at, completed_at
+                    video_id, video_path, status, upscale_factor, engine, model,
+                    denoise_level, tta_mode, total_batches, completed_batches,
+                    progress, framerate, total_frames, output_path, error_message,
+                    created_at, started_at, completed_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     Video.VideoId, Video.VideoPath, Video.Status, Video.UpscaleFactor,
-                    Video.Model, 1 if Video.TtaMode else 0, Video.TotalBatches,
+                    Video.Engine, Video.Model, Video.DenoiseLevel,
+                    1 if Video.TtaMode else 0, Video.TotalBatches,
                     Video.CompletedBatches, Video.Progress, Video.Framerate,
                     Video.TotalFrames, Video.OutputPath, Video.ErrorMessage,
                     Video.CreatedAt, Video.StartedAt, Video.CompletedAt
