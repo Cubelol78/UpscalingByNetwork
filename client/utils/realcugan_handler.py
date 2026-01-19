@@ -34,7 +34,7 @@ class RealCUGANHandler:
         'models-nose': {
             'name': 'Nose (léger)',
             'scales': [2],
-            'denoise_levels': [-1]
+            'denoise_levels': [0]  # Seulement no-denoise (pas de conservative.bin)
         }
     }
 

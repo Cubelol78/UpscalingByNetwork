@@ -246,10 +246,13 @@ class ProcessingConfig:
     }
 
     # Niveaux de denoise supportés par modèle Real-CUGAN
+    # -1 = conservative (nécessite up{scale}x-conservative.bin)
+    # 0 = no-denoise (nécessite up{scale}x-no-denoise.bin)
+    # 1/2/3 = denoise level (nécessite up{scale}x-denoise{N}x.bin)
     REALCUGAN_MODEL_DENOISE_LEVELS = {
         "models-se": [-1, 0, 1, 2, 3],
         "models-pro": [-1, 0, 3],
-        "models-nose": [-1]
+        "models-nose": [0]  # Seulement no-denoise disponible (pas de conservative.bin)
     }
 
     @classmethod
