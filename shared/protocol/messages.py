@@ -138,21 +138,28 @@ class HandshakeResponse(BaseMessage):
 class AuthRequest(BaseMessage):
     """Demande d'authentification du client"""
 
-    def __init__(self, Password: str, ClientId: Optional[str] = None):
+    def __init__(self, Password: str, ClientId: Optional[str] = None,
+                 MaxConcurrentBatches: int = 2):
         """
         Args:
             Password: Mot de passe (sera chiffré lors de l'envoi)
             ClientId: ID du client (optionnel)
+            MaxConcurrentBatches: Capacité du pipeline client (nombre de batches simultanés)
         """
         Payload = {
             "password": Password,
-            "client_id": ClientId
+            "client_id": ClientId,
+            "max_concurrent_batches": MaxConcurrentBatches
         }
         super().__init__(MessageType.AUTH_REQUEST, Payload)
 
     def GetPassword(self) -> str:
         """Récupère le mot de passe"""
         return self.Payload.get("password", "")
+
+    def GetMaxConcurrentBatches(self) -> int:
+        """Récupère la capacité du pipeline client"""
+        return self.Payload.get("max_concurrent_batches", 2)
 
 
 class AuthResponse(BaseMessage):

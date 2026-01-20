@@ -136,8 +136,22 @@ class UpscalingClient:
             if DataPort is None:
                 DataPort = Port + 1
 
-            # Connecte aux deux ports (Control + Data)
-            if not await self.ConnectionManager.ConnectToDualPorts(Host, Port, DataPort, Password):
+            # Charge la configuration max_concurrent_batches AVANT la connexion
+            # (pour l'envoyer au serveur lors de l'authentification)
+            try:
+                from client.utils.performance_config import PerformanceConfigManager
+                ConfigManager = PerformanceConfigManager()
+                Config = ConfigManager.Load()
+                self.MaxConcurrentBatches = Config.get('max_concurrent_batches', 2)
+                self.Logger.info(f"Pipeline multi-batch: max {self.MaxConcurrentBatches} batches simultanés")
+            except Exception as e:
+                self.Logger.warning(f"Config multi-batch non chargée, défaut: 2 ({e})")
+                self.MaxConcurrentBatches = 2
+
+            # Connecte aux deux ports (Control + Data) en communiquant la capacité du pipeline
+            if not await self.ConnectionManager.ConnectToDualPorts(
+                Host, Port, DataPort, Password, self.MaxConcurrentBatches
+            ):
                 self.Logger.error("Impossible de se connecter au serveur (dual-port)")
                 return False
 
@@ -150,17 +164,6 @@ class UpscalingClient:
 
             # Lock GPU pour pipeline multi-batch (un seul upscaling à la fois)
             self.GpuLock = asyncio.Lock()
-
-            # Charge la configuration max_concurrent_batches
-            try:
-                from client.utils.performance_config import PerformanceConfigManager
-                ConfigManager = PerformanceConfigManager()
-                Config = ConfigManager.Load()
-                self.MaxConcurrentBatches = Config.get('max_concurrent_batches', 2)
-                self.Logger.info(f"Pipeline multi-batch: max {self.MaxConcurrentBatches} batches simultanés")
-            except Exception as e:
-                self.Logger.warning(f"Config multi-batch non chargée, défaut: 2 ({e})")
-                self.MaxConcurrentBatches = 2
 
             # Initialise la queue d'envoi prioritaire (heartbeats > status)
             self.OutgoingQueue = asyncio.PriorityQueue()
@@ -190,13 +193,19 @@ class UpscalingClient:
 
         self.Running = False
 
-        # Annule la tâche de traitement en cours si elle existe
-        if self.ProcessingTask and not self.ProcessingTask.done():
-            self.ProcessingTask.cancel()
-            try:
-                await self.ProcessingTask
-            except asyncio.CancelledError:
-                self.Logger.info("Tâche de traitement annulée")
+        # Annule toutes les tâches de traitement en cours
+        if self.ProcessingTasks:
+            self.Logger.info(f"Annulation de {len(self.ProcessingTasks)} tâche(s) de traitement...")
+            for BatchId, Task in list(self.ProcessingTasks.items()):
+                if not Task.done():
+                    Task.cancel()
+                    try:
+                        await Task
+                    except asyncio.CancelledError:
+                        pass
+            self.ProcessingTasks.clear()
+            self.ActiveBatches.clear()
+            self.Logger.info("Tâches de traitement annulées")
 
         # Attend que la queue d'envoi soit vidée (avec timeout)
         if self.ResultQueue and not self.ResultQueue.empty():
@@ -297,16 +306,19 @@ class UpscalingClient:
                 self.Logger.info("Reconnexion automatique désactivée")
                 break
 
-            # Annule le batch en cours si nécessaire
-            if self.ProcessingTask and not self.ProcessingTask.done():
-                self.Logger.warning("Annulation du batch en cours suite à la déconnexion")
-                self.ProcessingTask.cancel()
-                try:
-                    await self.ProcessingTask
-                except asyncio.CancelledError:
-                    pass
+            # Annule les batches en cours si nécessaire
+            if self.ProcessingTasks:
+                self.Logger.warning(f"Annulation de {len(self.ProcessingTasks)} batch(s) en cours suite à la déconnexion")
+                for BatchId, Task in list(self.ProcessingTasks.items()):
+                    if not Task.done():
+                        Task.cancel()
+                        try:
+                            await Task
+                        except asyncio.CancelledError:
+                            pass
+                self.ProcessingTasks.clear()
+                self.ActiveBatches.clear()
                 self.CurrentBatch = None
-                self.ProcessingTask = None
 
             # Tente la reconnexion automatique
             self.IsReconnecting = True

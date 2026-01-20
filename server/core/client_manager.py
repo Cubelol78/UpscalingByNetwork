@@ -307,7 +307,10 @@ class ClientManager:
                 await self._SendMessage(ClientInfo, EncryptedResponse)
                 return False
 
-            # Authentification réussie
+            # Authentification réussie - récupère la capacité du pipeline client
+            ClientInfo.MaxConcurrentBatches = Request.GetMaxConcurrentBatches()
+            self.Logger.info(f"Client {ClientInfo.ClientId} pipeline: {ClientInfo.MaxConcurrentBatches} batches max")
+
             Response = AuthResponse(
                 Success=True,
                 ClientId=ClientInfo.ClientId,

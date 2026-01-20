@@ -123,7 +123,8 @@ class ConnectionManager:
         self.ServerAddress = None
         self.ServerPort = None
 
-    async def ConnectToServer(self, Host: str, Port: int, Password: str = "") -> bool:
+    async def ConnectToServer(self, Host: str, Port: int, Password: str = "",
+                              MaxConcurrentBatches: int = 2) -> bool:
         """
         Connecte au serveur et effectue le handshake + authentification
 
@@ -131,6 +132,7 @@ class ConnectionManager:
             Host: Adresse du serveur
             Port: Port du serveur
             Password: Mot de passe (si requis)
+            MaxConcurrentBatches: Capacité du pipeline client
 
         Returns:
             True si connexion réussie
@@ -159,8 +161,8 @@ class ConnectionManager:
                 await self.Disconnect()
                 return False
 
-            # Authentification
-            if not await self._Authenticate(Password):
+            # Authentification avec capacité du pipeline
+            if not await self._Authenticate(Password, MaxConcurrentBatches):
                 self.Logger.error("Échec de l'authentification")
                 await self.Disconnect()
                 return False
@@ -256,21 +258,22 @@ class ConnectionManager:
             self.Logger.error(f"Erreur lors du handshake: {e}")
             return False
 
-    async def _Authenticate(self, Password: str) -> bool:
+    async def _Authenticate(self, Password: str, MaxConcurrentBatches: int = 2) -> bool:
         """
         Authentification auprès du serveur
 
         Args:
             Password: Mot de passe du serveur
+            MaxConcurrentBatches: Capacité du pipeline client
 
         Returns:
             True si succès
         """
         try:
-            self.Logger.info("Authentification...")
+            self.Logger.info(f"Authentification (pipeline: {MaxConcurrentBatches} batches)...")
 
-            # Crée la demande d'authentification
-            Request = AuthRequest(Password=Password)
+            # Crée la demande d'authentification avec la capacité du pipeline
+            Request = AuthRequest(Password=Password, MaxConcurrentBatches=MaxConcurrentBatches)
 
             # Chiffre et envoie
             EncryptedRequest = self.EncryptionHandler.EncryptMessage(Request.ToJson())
@@ -599,9 +602,10 @@ class DualConnectionManager:
         self.ControlPort = None
         self.DataPort = None
         self.Password = None  # Stockage du mot de passe pour la reconnexion
+        self.MaxConcurrentBatches = 2  # Capacité du pipeline (stocké pour reconnexion)
 
     async def ConnectToDualPorts(self, Host: str, ControlPort: int, DataPort: int,
-                                  Password: str = "") -> bool:
+                                  Password: str = "", MaxConcurrentBatches: int = 2) -> bool:
         """
         Connecte aux deux ports du serveur (Control + Data)
 
@@ -610,6 +614,7 @@ class DualConnectionManager:
             ControlPort: Port de contrôle (handshake, heartbeat)
             DataPort: Port de données (batches)
             Password: Mot de passe (si requis)
+            MaxConcurrentBatches: Capacité du pipeline client
 
         Returns:
             True si les deux connexions sont établies
@@ -619,10 +624,11 @@ class DualConnectionManager:
             self.ControlPort = ControlPort
             self.DataPort = DataPort
             self.Password = Password  # Stocke le mot de passe pour la reconnexion
+            self.MaxConcurrentBatches = MaxConcurrentBatches  # Stocke pour la reconnexion
 
             # 1. Connexion au port Control avec handshake complet
             self.Logger.info(f"Connexion au port Control {Host}:{ControlPort}...")
-            if not await self._ConnectControl(Host, ControlPort, Password):
+            if not await self._ConnectControl(Host, ControlPort, Password, MaxConcurrentBatches):
                 return False
 
             # 2. Connexion au port Data et authentification
@@ -640,7 +646,8 @@ class DualConnectionManager:
             await self.Disconnect()
             return False
 
-    async def _ConnectControl(self, Host: str, Port: int, Password: str) -> bool:
+    async def _ConnectControl(self, Host: str, Port: int, Password: str,
+                               MaxConcurrentBatches: int = 2) -> bool:
         """Établit la connexion Control avec handshake et authentification"""
         try:
             # Connexion TCP Control
@@ -659,8 +666,8 @@ class DualConnectionManager:
                 self.Logger.error("Échec du handshake Control")
                 return False
 
-            # Authentification
-            if not await self._Authenticate(Password):
+            # Authentification (inclut la capacité du pipeline)
+            if not await self._Authenticate(Password, MaxConcurrentBatches):
                 self.Logger.error("Échec de l'authentification")
                 return False
 
@@ -807,12 +814,12 @@ class DualConnectionManager:
             self.Logger.error(f"Erreur handshake: {e}")
             return False
 
-    async def _Authenticate(self, Password: str) -> bool:
+    async def _Authenticate(self, Password: str, MaxConcurrentBatches: int = 2) -> bool:
         """Authentification sur le canal Control"""
         try:
-            self.Logger.info("Authentification...")
+            self.Logger.info(f"Authentification (pipeline: {MaxConcurrentBatches} batches)...")
 
-            Request = AuthRequest(Password=Password)
+            Request = AuthRequest(Password=Password, MaxConcurrentBatches=MaxConcurrentBatches)
             await self._SendControlMessage(Request.ToJson(), Encrypted=True)
 
             EncryptedResponse = await asyncio.wait_for(
@@ -1053,7 +1060,8 @@ class DualConnectionManager:
                     self.ServerAddress,
                     self.ControlPort,
                     self.DataPort,
-                    self.Password
+                    self.Password,
+                    self.MaxConcurrentBatches
                 )
 
                 if Success:
