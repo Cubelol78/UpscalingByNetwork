@@ -1,8 +1,11 @@
 """
 Onglet Performances - Configuration des performances Real-ESRGAN
-Détection matériel et optimisation automatique
+Detection materiel et optimisation automatique
 Auto-save avec debounce et indicateur visuel
+Panneaux depliables avec synchronisation GPU
 """
+
+from typing import Tuple, List, Optional
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -18,10 +21,11 @@ from client.utils.hardware_detector import HardwareDetector
 from client.utils.performance_config import PerformanceConfigManager, PerformancePresets
 from shared.utils.constants import CompressionConfig
 from shared.gui.theme_manager import ThemeManager
+from shared.gui.collapsible_panel import CollapsiblePanel
 
 
 class HardwareDetectionThread(QThread):
-    """Thread pour la détection matériel (évite de bloquer l'UI)"""
+    """Thread pour la detection materiel (evite de bloquer l'UI)"""
     Finished = pyqtSignal(dict)
     Error = pyqtSignal(str)
 
@@ -40,8 +44,13 @@ class HardwareDetectionThread(QThread):
 class PerformanceTab(QWidget):
     """Onglet de configuration des performances avec auto-save"""
 
-    # Délai de debounce pour l'auto-save (en ms)
+    # Delai de debounce pour l'auto-save (en ms)
     AUTOSAVE_DELAY_MS = 500
+
+    # Modes GPU
+    GPU_MODE_AUTO = 0
+    GPU_MODE_SINGLE = 1
+    GPU_MODE_MULTI = 2
 
     def __init__(self, ParentWindow):
         super().__init__()
@@ -59,15 +68,21 @@ class PerformanceTab(QWidget):
         self.AutoSaveTimer.setSingleShot(True)
         self.AutoSaveTimer.timeout.connect(self.DoAutoSave)
 
-        # Timer pour masquer l'indicateur "Sauvegardé"
+        # Timer pour masquer l'indicateur "Sauvegarde"
         self.SavedIndicatorTimer = QTimer()
         self.SavedIndicatorTimer.setSingleShot(True)
         self.SavedIndicatorTimer.timeout.connect(self.HideSavedIndicator)
 
-        # Timer pour debounce de l'auto-save du thème
+        # Timer pour debounce de l'auto-save du theme
         self.ThemeAutoSaveTimer = QTimer()
         self.ThemeAutoSaveTimer.setSingleShot(True)
         self.ThemeAutoSaveTimer.timeout.connect(self.AutoSaveTheme)
+
+        # Stockage des checkboxes GPU
+        self.GpuCheckboxes: List[QCheckBox] = []
+
+        # Cache pour l'etat de connexion (evite mises a jour inutiles)
+        self._LastConnectionState: Optional[bool] = None
 
         self.SetupUI()
         self.LoadConfig()
@@ -81,11 +96,11 @@ class PerformanceTab(QWidget):
         MainLayout = QVBoxLayout(self)
         MainLayout.setContentsMargins(0, 0, 0, 0)
 
-        # Création d'un widget conteneur pour le contenu scrollable
+        # Creation d'un widget conteneur pour le contenu scrollable
         ScrollContent = QWidget()
         ContentLayout = QVBoxLayout(ScrollContent)
 
-        # En-tête avec titre et indicateur de sauvegarde
+        # En-tete avec titre et indicateur de sauvegarde
         HeaderLayout = QHBoxLayout()
 
         Title = QLabel("Configuration des performances")
@@ -104,33 +119,29 @@ class PerformanceTab(QWidget):
 
         ContentLayout.addLayout(HeaderLayout)
 
-        # Section Apparence (thème)
-        AppearanceGroup = self.CreateAppearanceGroup()
-        ContentLayout.addWidget(AppearanceGroup)
+        # Panneau Apparence (theme) - replie par defaut
+        self.AppearancePanel = self.CreateAppearancePanel()
+        ContentLayout.addWidget(self.AppearancePanel)
 
-        # Section Matériel détecté
-        HardwareGroup = self.CreateHardwareGroup()
-        ContentLayout.addWidget(HardwareGroup)
+        # Panneau GPU & Materiel (fusionne Hardware + GPU Config) - deplie
+        self.GpuHardwarePanel = self.CreateGpuHardwarePanel()
+        ContentLayout.addWidget(self.GpuHardwarePanel)
 
-        # Section Configuration GPU
-        GpuConfigGroup = self.CreateGpuConfigGroup()
-        ContentLayout.addWidget(GpuConfigGroup)
+        # Panneau Performance - deplie
+        self.PerformancePanel = self.CreatePerformancePanel()
+        ContentLayout.addWidget(self.PerformancePanel)
 
-        # Section Configuration avancée
-        AdvancedGroup = self.CreateAdvancedGroup()
-        ContentLayout.addWidget(AdvancedGroup)
+        # Panneau Stockage - replie par defaut
+        self.StoragePanel = self.CreateStoragePanel()
+        ContentLayout.addWidget(self.StoragePanel)
 
-        # Section Stockage
-        StorageGroup = self.CreateStorageGroup()
-        ContentLayout.addWidget(StorageGroup)
-
-        # Barre d'actions
+        # Barre d'actions (toujours visible)
         ActionBar = self.CreateActionBar()
         ContentLayout.addWidget(ActionBar)
 
         ContentLayout.addStretch()
 
-        # Création de la zone de scroll
+        # Creation de la zone de scroll
         ScrollArea = QScrollArea()
         ScrollArea.setWidget(ScrollContent)
         ScrollArea.setWidgetResizable(True)
@@ -139,15 +150,87 @@ class PerformanceTab(QWidget):
         # Ajout de la zone de scroll au layout principal
         MainLayout.addWidget(ScrollArea)
 
-    def CreateHardwareGroup(self) -> QGroupBox:
-        """Crée le groupe d'affichage du matériel détecté"""
-        Group = QGroupBox("Materiel detecte")
-        Layout = QVBoxLayout(Group)
+    def CreateAppearancePanel(self) -> CollapsiblePanel:
+        """Cree le panneau Apparence (theme) - replie par defaut"""
+        Panel = CollapsiblePanel("Apparence", Expanded=False)
+
+        FormLayout = QFormLayout()
+
+        # Selecteur de theme
+        ThemeLayout = QHBoxLayout()
+        self.ThemeComboBox = QComboBox()
+        self.ThemeComboBox.addItem("Auto (Systeme)", ThemeManager.THEME_AUTO)
+        self.ThemeComboBox.addItem("Clair", ThemeManager.THEME_LIGHT)
+        self.ThemeComboBox.addItem("Sombre", ThemeManager.THEME_DARK)
+        self.ThemeComboBox.setToolTip(
+            "Auto: suit les preferences systeme\n"
+            "Clair: theme lumineux\n"
+            "Sombre: theme fonce"
+        )
+        self.ThemeComboBox.currentIndexChanged.connect(self.OnThemeChanged)
+        ThemeLayout.addWidget(self.ThemeComboBox)
+
+        ThemeNote = QLabel("(applique immediatement)")
+        ThemeNote.setProperty("class", "hint")
+        ThemeLayout.addWidget(ThemeNote)
+        ThemeLayout.addStretch()
+
+        FormLayout.addRow("Theme:", ThemeLayout)
+
+        FormWidget = QWidget()
+        FormWidget.setLayout(FormLayout)
+        Panel.AddWidget(FormWidget)
+
+        return Panel
+
+    def OnThemeChanged(self, Index: int):
+        """Appele quand le theme change - applique immediatement et declenche l'auto-save"""
+        if self.IsLoading:
+            return
+
+        # Recupere la valeur du theme selectionne
+        ThemeValue = self.ThemeComboBox.currentData()
+
+        # Applique immediatement le theme
+        if hasattr(self.ParentWindow, 'ThemeManager') and self.ParentWindow.ThemeManager:
+            self.ParentWindow.ThemeManager.SetUserPreference(ThemeValue)
+
+        # Redemarre le timer de debounce pour la sauvegarde
+        self.ThemeAutoSaveTimer.stop()
+        self.ThemeAutoSaveTimer.start(self.AUTOSAVE_DELAY_MS)
+
+    def AutoSaveTheme(self):
+        """Sauvegarde automatique du theme dans le fichier de configuration"""
+        try:
+            ThemeValue = self.ThemeComboBox.currentData()
+
+            # Charge la config actuelle, met a jour le theme, et sauvegarde
+            Config = self.ConfigManager.Load()
+            Config['theme'] = ThemeValue
+            self.ConfigManager.Save(Config)
+
+            # Affiche l'indicateur "Sauvegarde"
+            self.ShowSavedIndicator()
+
+            if hasattr(self.ParentWindow, 'Logger'):
+                self.ParentWindow.Logger.info(f"Theme mis a jour: {ThemeValue}")
+
+        except Exception as e:
+            if hasattr(self.ParentWindow, 'Logger'):
+                self.ParentWindow.Logger.error(f"Erreur lors de l'auto-save du theme: {e}")
+
+    def CreateGpuHardwarePanel(self) -> CollapsiblePanel:
+        """Cree le panneau GPU & Materiel (fusionne Hardware + GPU Config)"""
+        Panel = CollapsiblePanel("GPU & Materiel", Expanded=True)
+
+        ContentWidget = QWidget()
+        ContentLayout = QVBoxLayout(ContentWidget)
+        ContentLayout.setContentsMargins(0, 0, 0, 0)
 
         # Indicateur de chargement
         self.HardwareLoadingLabel = QLabel("Detection en cours...")
         self.HardwareLoadingLabel.setProperty("class", "hint-warning")
-        Layout.addWidget(self.HardwareLoadingLabel)
+        ContentLayout.addWidget(self.HardwareLoadingLabel)
 
         # Informations CPU/RAM
         InfoLayout = QFormLayout()
@@ -158,7 +241,33 @@ class PerformanceTab(QWidget):
         self.RamLabel = QLabel("--")
         InfoLayout.addRow("RAM:", self.RamLabel)
 
-        Layout.addLayout(InfoLayout)
+        ContentLayout.addLayout(InfoLayout)
+
+        # Separateur
+        SepLabel = QLabel("")
+        ContentLayout.addWidget(SepLabel)
+
+        # Mode GPU avec tooltip
+        GpuModeLayout = QFormLayout()
+        self.GpuModeCombo = QComboBox()
+        self.GpuModeCombo.addItems([
+            "Automatique",
+            "GPU unique",
+            "Multi-GPU"
+        ])
+        self.GpuModeCombo.setToolTip(
+            "MODE DE SELECTION GPU\n\n"
+            "- Automatique: le systeme detecte et utilise\n"
+            "  le meilleur GPU disponible (recommande)\n\n"
+            "- GPU unique: vous choisissez manuellement\n"
+            "  quel GPU utiliser dans la liste ci-dessous\n\n"
+            "- Multi-GPU: utilise plusieurs GPUs en parallele\n"
+            "  pour traiter plus d'images simultanement\n"
+            "  (necessite au moins 2 GPUs dedies)"
+        )
+        self.GpuModeCombo.currentIndexChanged.connect(self._OnGpuModeChanged)
+        GpuModeLayout.addRow("Mode GPU:", self.GpuModeCombo)
+        ContentLayout.addLayout(GpuModeLayout)
 
         # Tableau des GPU
         self.GpuTable = QTableWidget()
@@ -172,148 +281,118 @@ class PerformanceTab(QWidget):
         Header.setSectionResizeMode(2, QHeaderView.Stretch)
         Header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
 
-        Layout.addWidget(self.GpuTable)
-
-        # Bouton re-détection (au cas où le matériel change)
-        DetectButton = QPushButton("Re-detecter le materiel")
-        DetectButton.clicked.connect(self.DetectHardware)
-        Layout.addWidget(DetectButton)
-
-        return Group
-
-    def CreateAppearanceGroup(self) -> QGroupBox:
-        """Crée le groupe Apparence (thème)"""
-        Group = QGroupBox("Apparence")
-
-        FormLayout = QFormLayout(Group)
-
-        # Sélecteur de thème
-        ThemeLayout = QHBoxLayout()
-        self.ThemeComboBox = QComboBox()
-        self.ThemeComboBox.addItem("Auto (Systeme)", ThemeManager.THEME_AUTO)
-        self.ThemeComboBox.addItem("Clair", ThemeManager.THEME_LIGHT)
-        self.ThemeComboBox.addItem("Sombre", ThemeManager.THEME_DARK)
-        self.ThemeComboBox.currentIndexChanged.connect(self.OnThemeChanged)
-        ThemeLayout.addWidget(self.ThemeComboBox)
-
-        ThemeNote = QLabel("(applique immediatement)")
-        ThemeNote.setProperty("class", "hint")
-        ThemeLayout.addWidget(ThemeNote)
-        ThemeLayout.addStretch()
-
-        FormLayout.addRow("Theme:", ThemeLayout)
-
-        return Group
-
-    def OnThemeChanged(self, Index: int):
-        """Appelé quand le thème change - applique immédiatement et déclenche l'auto-save"""
-        if self.IsLoading:
-            return
-
-        # Récupère la valeur du thème sélectionné
-        ThemeValue = self.ThemeComboBox.currentData()
-
-        # Applique immédiatement le thème
-        if hasattr(self.ParentWindow, 'ThemeManager') and self.ParentWindow.ThemeManager:
-            self.ParentWindow.ThemeManager.SetUserPreference(ThemeValue)
-
-        # Redémarre le timer de debounce pour la sauvegarde
-        self.ThemeAutoSaveTimer.stop()
-        self.ThemeAutoSaveTimer.start(self.AUTOSAVE_DELAY_MS)
-
-    def AutoSaveTheme(self):
-        """Sauvegarde automatique du thème dans le fichier de configuration"""
-        try:
-            ThemeValue = self.ThemeComboBox.currentData()
-
-            # Charge la config actuelle, met à jour le thème, et sauvegarde
-            Config = self.ConfigManager.Load()
-            Config['theme'] = ThemeValue
-            self.ConfigManager.Save(Config)
-
-            # Affiche l'indicateur "Sauvegardé"
-            self.ShowSavedIndicator()
-
-            if hasattr(self.ParentWindow, 'Logger'):
-                self.ParentWindow.Logger.info(f"Theme mis a jour: {ThemeValue}")
-
-        except Exception as e:
-            if hasattr(self.ParentWindow, 'Logger'):
-                self.ParentWindow.Logger.error(f"Erreur lors de l'auto-save du theme: {e}")
-
-    def CreateGpuConfigGroup(self) -> QGroupBox:
-        """Crée le groupe de configuration GPU"""
-        Group = QGroupBox("Configuration GPU")
-        Layout = QFormLayout(Group)
-
-        # Mode GPU
-        self.GpuModeCombo = QComboBox()
-        self.GpuModeCombo.addItems([
-            "Automatique",
-            "GPU unique",
-            "Multi-GPU (tous)"
-        ])
-        self.GpuModeCombo.currentIndexChanged.connect(self.OnConfigChanged)
-        Layout.addRow("Mode:", self.GpuModeCombo)
+        ContentLayout.addWidget(self.GpuTable)
 
         # Tile size
-        TileSizeLayout = QHBoxLayout()
+        TileSizeLayout = QFormLayout()
+        TileSizeWidget = QWidget()
+        TileSizeInnerLayout = QHBoxLayout(TileSizeWidget)
+        TileSizeInnerLayout.setContentsMargins(0, 0, 0, 0)
+
         self.TileSizeSpinBox = QSpinBox()
         self.TileSizeSpinBox.setRange(0, PerformancePresets.MAX_TILE_SIZE)
         self.TileSizeSpinBox.setSingleStep(32)
         self.TileSizeSpinBox.setSpecialValueText("Auto")
+        self.TileSizeSpinBox.setToolTip(
+            "TAILLE DES TUILES (Tile Size)\n\n"
+            "L'image est decoupee en tuiles carrees pour le traitement.\n"
+            "Chaque tuile est traitee separement par le GPU.\n\n"
+            "- Auto (0): calcule automatiquement selon la VRAM\n"
+            "- Petit (128-256): utilise moins de VRAM, plus lent\n"
+            "- Moyen (384-512): bon equilibre VRAM/vitesse\n"
+            "- Grand (768+): plus rapide mais necessite beaucoup de VRAM\n\n"
+            "Si vous avez des erreurs 'out of memory', reduisez cette valeur.\n"
+            "Valeurs typiques: 256 (4GB), 384 (6GB), 512 (8GB+)"
+        )
         self.TileSizeSpinBox.valueChanged.connect(self.OnConfigChanged)
-        TileSizeLayout.addWidget(self.TileSizeSpinBox)
+        TileSizeInnerLayout.addWidget(self.TileSizeSpinBox)
 
         self.TileSizeRecommendLabel = QLabel("")
         self.TileSizeRecommendLabel.setProperty("class", "hint")
-        TileSizeLayout.addWidget(self.TileSizeRecommendLabel)
-        TileSizeLayout.addStretch()
+        TileSizeInnerLayout.addWidget(self.TileSizeRecommendLabel)
+        TileSizeInnerLayout.addStretch()
 
-        TileSizeWidget = QWidget()
-        TileSizeWidget.setLayout(TileSizeLayout)
-        Layout.addRow("Tile size:", TileSizeWidget)
+        TileSizeLayout.addRow("Tile size:", TileSizeWidget)
+        ContentLayout.addLayout(TileSizeLayout)
 
-        return Group
+        # Bouton re-detection
+        DetectButton = QPushButton("Re-detecter le materiel")
+        DetectButton.clicked.connect(self.DetectHardware)
+        ContentLayout.addWidget(DetectButton)
 
-    def CreateAdvancedGroup(self) -> QGroupBox:
-        """Crée le groupe de configuration avancée"""
-        Group = QGroupBox("Configuration avancee")
-        Layout = QFormLayout(Group)
+        Panel.AddWidget(ContentWidget)
+        return Panel
+
+    def CreatePerformancePanel(self) -> CollapsiblePanel:
+        """Cree le panneau Performance"""
+        Panel = CollapsiblePanel("Performance", Expanded=True)
+
+        FormLayout = QFormLayout()
 
         # Threads
-        ThreadsLayout = QHBoxLayout()
+        ThreadsWidget = QWidget()
+        ThreadsLayout = QHBoxLayout(ThreadsWidget)
+        ThreadsLayout.setContentsMargins(0, 0, 0, 0)
 
         self.LoadThreadsSpinBox = QSpinBox()
         self.LoadThreadsSpinBox.setRange(1, PerformancePresets.MAX_THREADS)
+        self.LoadThreadsSpinBox.setToolTip(
+            "Threads pour le CHARGEMENT des images\n\n"
+            "Ces threads lisent les images recues du serveur\n"
+            "et les preparent pour le traitement GPU.\n\n"
+            "Valeur recommandee: 1-2\n"
+            "Augmenter si le GPU attend souvent les images."
+        )
         self.LoadThreadsSpinBox.valueChanged.connect(self.OnConfigChanged)
         ThreadsLayout.addWidget(QLabel("Load:"))
         ThreadsLayout.addWidget(self.LoadThreadsSpinBox)
 
         self.ProcessThreadsSpinBox = QSpinBox()
         self.ProcessThreadsSpinBox.setRange(1, PerformancePresets.MAX_THREADS)
+        self.ProcessThreadsSpinBox.setToolTip(
+            "Threads pour le TRAITEMENT GPU (upscaling)\n\n"
+            "Ces threads envoient les images au GPU\n"
+            "pour l'upscaling via Real-ESRGAN.\n\n"
+            "Valeur recommandee: 1-2\n"
+            "En mode Multi-GPU, augmenter selon le nombre de GPUs."
+        )
         self.ProcessThreadsSpinBox.valueChanged.connect(self.OnConfigChanged)
         ThreadsLayout.addWidget(QLabel("Process:"))
         ThreadsLayout.addWidget(self.ProcessThreadsSpinBox)
 
         self.SaveThreadsSpinBox = QSpinBox()
         self.SaveThreadsSpinBox.setRange(1, PerformancePresets.MAX_THREADS)
+        self.SaveThreadsSpinBox.setToolTip(
+            "Threads pour la SAUVEGARDE des images\n\n"
+            "Ces threads compressent et envoient\n"
+            "les images traitees vers le serveur.\n\n"
+            "Valeur recommandee: 2-4\n"
+            "Augmenter si le reseau est rapide mais le CPU lent."
+        )
         self.SaveThreadsSpinBox.valueChanged.connect(self.OnConfigChanged)
         ThreadsLayout.addWidget(QLabel("Save:"))
         ThreadsLayout.addWidget(self.SaveThreadsSpinBox)
 
         ThreadsLayout.addStretch()
+        FormLayout.addRow("Threads:", ThreadsWidget)
 
-        ThreadsWidget = QWidget()
-        ThreadsWidget.setLayout(ThreadsLayout)
-        Layout.addRow("Threads:", ThreadsWidget)
+        # Niveau de compression reseau
+        CompressionWidget = QWidget()
+        CompressionLayout = QHBoxLayout(CompressionWidget)
+        CompressionLayout.setContentsMargins(0, 0, 0, 0)
 
-        # Niveau de compression réseau
-        CompressionLayout = QHBoxLayout()
         self.CompressionLevelSpinBox = QSpinBox()
         self.CompressionLevelSpinBox.setRange(CompressionConfig.LEVEL_MIN, CompressionConfig.LEVEL_MAX)
         self.CompressionLevelSpinBox.setValue(CompressionConfig.LEVEL_DEFAULT)
-        self.CompressionLevelSpinBox.setToolTip("1 = compression rapide, 10 = compression maximale")
+        self.CompressionLevelSpinBox.setToolTip(
+            "NIVEAU DE COMPRESSION RESEAU\n\n"
+            "Compresse les images avant de les envoyer au serveur.\n\n"
+            "- 1-3: compression rapide, fichiers plus gros\n"
+            "  (bon pour reseau local rapide)\n\n"
+            "- 4-6: equilibre vitesse/taille (recommande)\n\n"
+            "- 7-10: compression maximale, fichiers plus petits\n"
+            "  (bon pour connexion lente, mais utilise plus de CPU)"
+        )
         self.CompressionLevelSpinBox.valueChanged.connect(self.OnConfigChanged)
         CompressionLayout.addWidget(self.CompressionLevelSpinBox)
 
@@ -322,55 +401,59 @@ class PerformanceTab(QWidget):
         CompressionLayout.addWidget(CompressionNote)
         CompressionLayout.addStretch()
 
-        CompressionWidget = QWidget()
-        CompressionWidget.setLayout(CompressionLayout)
-        Layout.addRow("Compression reseau:", CompressionWidget)
+        FormLayout.addRow("Compression reseau:", CompressionWidget)
 
-        # Note TTA
-        TtaNote = QLabel("Note: Le mode TTA est configure cote serveur")
-        TtaNote.setProperty("class", "hint")
-        Layout.addRow("", TtaNote)
+        # Pipeline multi-batch
+        PipelineWidget = QWidget()
+        PipelineLayout = QHBoxLayout(PipelineWidget)
+        PipelineLayout.setContentsMargins(0, 0, 0, 0)
 
-        # Séparateur visuel
-        SeparatorLabel = QLabel("")
-        Layout.addRow(SeparatorLabel)
-
-        # Section Pipeline multi-batch
-        PipelineLabel = QLabel("Pipeline multi-batch")
-        PipelineLabel.setProperty("class", "subsection-title")
-        Layout.addRow(PipelineLabel)
-
-        # Nombre max de batches en pipeline
-        PipelineLayout = QHBoxLayout()
         self.MaxConcurrentBatchesSpinBox = QSpinBox()
         self.MaxConcurrentBatchesSpinBox.setRange(1, 5)
         self.MaxConcurrentBatchesSpinBox.setValue(2)
         self.MaxConcurrentBatchesSpinBox.setToolTip(
-            "Nombre de batches pouvant etre recus en avance\n"
-            "1 = pipeline desactive (attend fin de l'envoi)\n"
-            "2+ = recoit le batch suivant pendant l'envoi"
+            "PIPELINE MULTI-BATCH\n\n"
+            "Permet de recevoir le prochain paquet d'images\n"
+            "pendant que le precedent est encore en traitement.\n\n"
+            "- 1: desactive - attend que le batch soit envoye\n"
+            "  avant de recevoir le suivant\n\n"
+            "- 2: recommande - recoit 1 batch en avance\n"
+            "  (masque la latence reseau)\n\n"
+            "- 3-5: pour connexions tres lentes ou\n"
+            "  traitement GPU tres rapide"
         )
         self.MaxConcurrentBatchesSpinBox.valueChanged.connect(self.OnConfigChanged)
         PipelineLayout.addWidget(self.MaxConcurrentBatchesSpinBox)
 
-        PipelineNote = QLabel("(2 = optimal pour reseau lent)")
+        PipelineNote = QLabel("(2+ pour reseau lent)")
         PipelineNote.setProperty("class", "hint")
         PipelineLayout.addWidget(PipelineNote)
         PipelineLayout.addStretch()
 
-        PipelineWidget = QWidget()
-        PipelineWidget.setLayout(PipelineLayout)
-        Layout.addRow("Batches en pipeline:", PipelineWidget)
+        FormLayout.addRow("Batches en pipeline:", PipelineWidget)
 
-        return Group
+        # Note TTA
+        TtaNote = QLabel("Note: Le mode TTA est configure cote serveur")
+        TtaNote.setProperty("class", "hint")
+        FormLayout.addRow("", TtaNote)
 
-    def CreateStorageGroup(self) -> QGroupBox:
-        """Crée le groupe de configuration du stockage"""
-        Group = QGroupBox("Stockage")
-        Layout = QFormLayout(Group)
+        FormWidget = QWidget()
+        FormWidget.setLayout(FormLayout)
+        Panel.AddWidget(FormWidget)
 
-        # Répertoire de travail
-        WorkDirLayout = QHBoxLayout()
+        return Panel
+
+    def CreateStoragePanel(self) -> CollapsiblePanel:
+        """Cree le panneau Stockage - replie par defaut"""
+        Panel = CollapsiblePanel("Stockage", Expanded=False)
+
+        FormLayout = QFormLayout()
+
+        # Repertoire de travail
+        WorkDirWidget = QWidget()
+        WorkDirLayout = QHBoxLayout(WorkDirWidget)
+        WorkDirLayout.setContentsMargins(0, 0, 0, 0)
+
         self.WorkDirInput = QLineEdit()
         self.WorkDirInput.setPlaceholderText(self.ConfigManager.GetDefaultWorkDirectory())
         self.WorkDirInput.textChanged.connect(self.OnWorkDirChanged)
@@ -380,21 +463,27 @@ class PerformanceTab(QWidget):
         BrowseButton.clicked.connect(self.BrowseWorkDirectory)
         WorkDirLayout.addWidget(BrowseButton)
 
-        WorkDirNote = QLabel("(necessite redemarrage)")
-        WorkDirNote.setProperty("class", "hint-warning")
-        WorkDirLayout.addWidget(WorkDirNote)
+        self.WorkDirNoteLabel = QLabel("")
+        WorkDirLayout.addWidget(self.WorkDirNoteLabel)
 
-        Layout.addRow("Repertoire de travail:", WorkDirLayout)
+        # Met a jour le tooltip et la note selon l'etat de connexion
+        self._UpdateWorkDirNote(Force=True)
+
+        FormLayout.addRow("Repertoire de travail:", WorkDirWidget)
 
         # Affichage de l'espace disque
         self.DiskSpaceLabel = QLabel("")
         self.DiskSpaceLabel.setProperty("class", "hint")
-        Layout.addRow("Espace disponible:", self.DiskSpaceLabel)
+        FormLayout.addRow("Espace disponible:", self.DiskSpaceLabel)
 
-        return Group
+        FormWidget = QWidget()
+        FormWidget.setLayout(FormLayout)
+        Panel.AddWidget(FormWidget)
+
+        return Panel
 
     def BrowseWorkDirectory(self):
-        """Ouvre un dialogue pour sélectionner le répertoire de travail"""
+        """Ouvre un dialogue pour selectionner le repertoire de travail"""
         CurrentDir = self.WorkDirInput.text() or self.ConfigManager.GetDefaultWorkDirectory()
 
         Directory = QFileDialog.getExistingDirectory(
@@ -407,25 +496,72 @@ class PerformanceTab(QWidget):
             self.WorkDirInput.setText(Directory)
 
     def OnWorkDirChanged(self, Text: str):
-        """Appelé quand le répertoire de travail change"""
+        """Appele quand le repertoire de travail change"""
         if self.IsLoading:
             return
 
-        # Met à jour l'affichage de l'espace disque
+        # Met a jour l'affichage de l'espace disque
         self.UpdateDiskSpaceDisplay()
 
-        # Déclenche l'auto-save
+        # Met a jour la note selon l'etat de connexion (force car l'utilisateur modifie)
+        self._UpdateWorkDirNote(Force=True)
+
+        # Declenche l'auto-save
         self.OnConfigChanged()
 
+    def _IsClientConnected(self) -> bool:
+        """Verifie si le client est connecte au serveur"""
+        try:
+            if hasattr(self.ParentWindow, 'Client') and self.ParentWindow.Client:
+                if hasattr(self.ParentWindow.Client, 'ConnectionManager'):
+                    return self.ParentWindow.Client.ConnectionManager.IsConnected()
+        except Exception:
+            pass
+        return False
+
+    def _UpdateWorkDirNote(self, Force: bool = False):
+        """Met a jour la note et le tooltip du repertoire de travail selon l'etat de connexion"""
+        IsConnected = self._IsClientConnected()
+
+        # Evite les mises a jour inutiles si l'etat n'a pas change
+        if not Force and self._LastConnectionState == IsConnected:
+            return
+
+        self._LastConnectionState = IsConnected
+
+        if IsConnected:
+            # Client connecte: necessite deconnexion
+            self.WorkDirNoteLabel.setText("(deconnectez-vous d'abord)")
+            self.WorkDirNoteLabel.setProperty("class", "hint-warning")
+            self.WorkDirInput.setToolTip(
+                "Repertoire pour les fichiers temporaires de traitement\n"
+                "Laissez vide pour utiliser le dossier par defaut\n\n"
+                "ATTENTION: Vous etes actuellement connecte.\n"
+                "Deconnectez-vous pour que le changement prenne effet."
+            )
+        else:
+            # Client deconnecte: applique a la prochaine connexion
+            self.WorkDirNoteLabel.setText("(applique a la connexion)")
+            self.WorkDirNoteLabel.setProperty("class", "hint-success")
+            self.WorkDirInput.setToolTip(
+                "Repertoire pour les fichiers temporaires de traitement\n"
+                "Laissez vide pour utiliser le dossier par defaut\n\n"
+                "Le changement sera applique a la prochaine connexion."
+            )
+
+        # Refresh le style
+        self.WorkDirNoteLabel.style().unpolish(self.WorkDirNoteLabel)
+        self.WorkDirNoteLabel.style().polish(self.WorkDirNoteLabel)
+
     def UpdateDiskSpaceDisplay(self):
-        """Met à jour l'affichage de l'espace disque disponible"""
+        """Met a jour l'affichage de l'espace disque disponible"""
         import shutil
+        import os
 
         WorkDir = self.WorkDirInput.text() or self.ConfigManager.GetDefaultWorkDirectory()
 
         try:
-            # Vérifie si le chemin existe, sinon utilise le parent
-            import os
+            # Verifie si le chemin existe, sinon utilise le parent
             CheckPath = WorkDir
             while CheckPath and not os.path.exists(CheckPath):
                 CheckPath = os.path.dirname(CheckPath)
@@ -457,7 +593,7 @@ class PerformanceTab(QWidget):
             self.DiskSpaceLabel.setProperty("class", "hint-danger")
 
     def CreateActionBar(self) -> QWidget:
-        """Crée la barre d'actions"""
+        """Cree la barre d'actions"""
         ActionWidget = QWidget()
         ActionLayout = QHBoxLayout(ActionWidget)
 
@@ -465,19 +601,190 @@ class PerformanceTab(QWidget):
         self.AutoConfigButton = QPushButton("Configuration automatique")
         self.AutoConfigButton.setObjectName("AutoConfigButton")
         self.AutoConfigButton.setProperty("class", "info")
+        self.AutoConfigButton.setToolTip(
+            "Configure automatiquement selon le materiel detecte\n"
+            "Selectionne les meilleurs GPU et optimise les parametres"
+        )
         self.AutoConfigButton.clicked.connect(self.AutoConfigure)
         ActionLayout.addWidget(self.AutoConfigButton)
 
         ActionLayout.addStretch()
 
-        # Restaurer défauts
+        # Restaurer defauts
         self.ResetButton = QPushButton("Reinitialiser")
+        self.ResetButton.setToolTip("Restaure tous les parametres par defaut")
         self.ResetButton.clicked.connect(self.ResetConfig)
         ActionLayout.addWidget(self.ResetButton)
 
-        # Note: Plus de bouton "Sauvegarder" - auto-save actif
-
         return ActionWidget
+
+    # =========================================================================
+    # GPU Mode Synchronization
+    # =========================================================================
+
+    def _OnGpuModeChanged(self, Index: int):
+        """Appele quand le mode GPU change"""
+        if self.IsLoading:
+            return
+
+        if Index == self.GPU_MODE_AUTO:
+            # Mode Auto: desactive les checkboxes, decoche tout
+            self._SetAllGpuCheckboxesEnabled(False)
+            self._UncheckAllGpus()
+        elif Index == self.GPU_MODE_SINGLE:
+            # Mode Single: active les checkboxes, force 1 seul
+            self._SetAllGpuCheckboxesEnabled(True)
+            self._EnforceSingleGpuSelection()
+        elif Index == self.GPU_MODE_MULTI:
+            # Mode Multi: active les checkboxes, coche tous les GPU dedies
+            self._SetAllGpuCheckboxesEnabled(True)
+            self._CheckAllDedicatedGpus()
+
+        # Sauvegarde
+        self.OnConfigChanged()
+
+    def _OnGpuCheckboxChanged(self, State):
+        """Appele quand une checkbox GPU change"""
+        if self.IsLoading:
+            return
+
+        Mode = self.GpuModeCombo.currentIndex()
+
+        if Mode == self.GPU_MODE_SINGLE:
+            # En mode Single, comportement radio (1 seul selectionne)
+            Sender = self.sender()
+            if State == Qt.Checked:
+                self._UncheckOtherGpus(Sender)
+
+        self.OnConfigChanged()
+
+    def _SetAllGpuCheckboxesEnabled(self, Enabled: bool):
+        """Active ou desactive toutes les checkboxes GPU"""
+        for Checkbox in self.GpuCheckboxes:
+            Checkbox.setEnabled(Enabled)
+
+    def _UncheckAllGpus(self):
+        """Decoche tous les GPU"""
+        WasLoading = self.IsLoading
+        self.IsLoading = True
+        for Checkbox in self.GpuCheckboxes:
+            Checkbox.setChecked(False)
+        self.IsLoading = WasLoading
+
+    def _UncheckOtherGpus(self, ExceptCheckbox: QCheckBox):
+        """Decoche tous les GPU sauf celui specifie"""
+        WasLoading = self.IsLoading
+        self.IsLoading = True
+        for Checkbox in self.GpuCheckboxes:
+            if Checkbox != ExceptCheckbox:
+                Checkbox.setChecked(False)
+        self.IsLoading = WasLoading
+
+    def _EnforceSingleGpuSelection(self):
+        """Force la selection d'un seul GPU (le meilleur)"""
+        if not self.DetectedHardware:
+            return
+
+        WasLoading = self.IsLoading
+        self.IsLoading = True
+
+        # Trouve le meilleur GPU
+        BestIndex = self._GetBestGpuIndex()
+
+        for i, Checkbox in enumerate(self.GpuCheckboxes):
+            Checkbox.setChecked(i == BestIndex)
+
+        self.IsLoading = WasLoading
+
+    def _CheckAllDedicatedGpus(self):
+        """Coche tous les GPU dedies"""
+        if not self.DetectedHardware:
+            return
+
+        WasLoading = self.IsLoading
+        self.IsLoading = True
+
+        Gpus = self.DetectedHardware.get("gpu", [])
+        for i, Checkbox in enumerate(self.GpuCheckboxes):
+            if i < len(Gpus):
+                GpuName = Gpus[i].get("name", "")
+                IsDedicated = not self.ConfigManager._IsIntegratedGpu(GpuName)
+                Checkbox.setChecked(IsDedicated and Gpus[i].get("id", -1) >= 0)
+            else:
+                Checkbox.setChecked(False)
+
+        self.IsLoading = WasLoading
+
+    def _GetBestGpuIndex(self) -> int:
+        """Retourne l'index du meilleur GPU"""
+        if not self.DetectedHardware:
+            return 0
+
+        Gpus = self.DetectedHardware.get("gpu", [])
+        if not Gpus:
+            return 0
+
+        BestIndex = 0
+        BestScore = -1
+
+        for i, Gpu in enumerate(Gpus):
+            if Gpu.get("id", -1) < 0:
+                continue
+            Score = self.ConfigManager._GetGpuScore(Gpu)
+            if Score > BestScore:
+                BestScore = Score
+                BestIndex = i
+
+        return BestIndex
+
+    def _GetDedicatedGpuCount(self) -> int:
+        """Retourne le nombre de GPU dedies"""
+        if not self.DetectedHardware:
+            return 0
+
+        Gpus = self.DetectedHardware.get("gpu", [])
+        Count = 0
+        for Gpu in Gpus:
+            if Gpu.get("id", -1) >= 0:
+                GpuName = Gpu.get("name", "")
+                if not self.ConfigManager._IsIntegratedGpu(GpuName):
+                    Count += 1
+        return Count
+
+    def _CountCheckedGpus(self) -> int:
+        """Compte le nombre de GPU coches"""
+        return sum(1 for Cb in self.GpuCheckboxes if Cb.isChecked())
+
+    def _UpdateGpuModeAvailability(self):
+        """Desactive Multi-GPU si pas assez de GPUs"""
+        DedicatedCount = self._GetDedicatedGpuCount()
+        Model = self.GpuModeCombo.model()
+
+        # Index 2 = Multi-GPU
+        if Model.rowCount() > 2:
+            Item = Model.item(2)
+            if Item:
+                Item.setEnabled(DedicatedCount >= 2)
+                if DedicatedCount < 2:
+                    Item.setToolTip("Necessite au moins 2 GPUs dedies")
+                else:
+                    Item.setToolTip("")
+
+    def _ValidateGpuConfig(self) -> Tuple[bool, str]:
+        """Valide la configuration GPU avant sauvegarde"""
+        Mode = self.GpuModeCombo.currentIndex()
+        CheckedCount = self._CountCheckedGpus()
+
+        if Mode == self.GPU_MODE_SINGLE and CheckedCount != 1:
+            return False, "Mode 'GPU unique' necessite exactement 1 GPU selectionne"
+        if Mode == self.GPU_MODE_MULTI and CheckedCount < 2:
+            return False, "Mode 'Multi-GPU' necessite au moins 2 GPUs selectionnes"
+
+        return True, ""
+
+    # =========================================================================
+    # Hardware Detection
+    # =========================================================================
 
     def TryUseCachedHardware(self):
         """Essaie d'utiliser le cache hardware du parent"""
@@ -485,44 +792,43 @@ class PerformanceTab(QWidget):
             CachedHardware = self.ParentWindow.GetCachedHardware()
             if CachedHardware:
                 self.OnHardwareCacheReady(CachedHardware)
-            # Sinon, attend que OnHardwareCacheReady soit appelé par le parent
 
     def OnHardwareCacheReady(self, Hardware: dict):
-        """Appelé quand le cache hardware du parent est prêt"""
+        """Appele quand le cache hardware du parent est pret"""
         if Hardware and not self.DetectedHardware:
             self.DetectedHardware = Hardware
             self.UpdateHardwareDisplay()
 
-            # Auto-configure au premier lancement si nécessaire
+            # Auto-configure au premier lancement si necessaire
             if self.ConfigManager.IsFirstRun():
                 self.AutoConfigureQuiet()
 
     def DetectHardware(self):
-        """Lance la re-détection du matériel"""
+        """Lance la re-detection du materiel"""
         self.HardwareLoadingLabel.setText("Detection en cours...")
         self.HardwareLoadingLabel.setVisible(True)
 
-        # Lance la détection dans un thread
+        # Lance la detection dans un thread
         self.DetectionThread = HardwareDetectionThread()
         self.DetectionThread.Finished.connect(self.OnHardwareDetected)
         self.DetectionThread.Error.connect(self.OnHardwareError)
         self.DetectionThread.start()
 
     def OnHardwareDetected(self, Hardware: dict):
-        """Appelé quand la détection est terminée"""
+        """Appele quand la detection est terminee"""
         self.HardwareLoadingLabel.setVisible(False)
         self.DetectedHardware = Hardware
         self.UpdateHardwareDisplay()
 
     def OnHardwareError(self, ErrorMsg: str):
-        """Appelé si une erreur survient pendant la détection"""
+        """Appele si une erreur survient pendant la detection"""
         self.HardwareLoadingLabel.setText(f"Erreur: {ErrorMsg}")
         self.HardwareLoadingLabel.setProperty("class", "hint-danger")
         self.HardwareLoadingLabel.style().unpolish(self.HardwareLoadingLabel)
         self.HardwareLoadingLabel.style().polish(self.HardwareLoadingLabel)
 
     def UpdateHardwareDisplay(self):
-        """Met à jour l'affichage du matériel détecté"""
+        """Met a jour l'affichage du materiel detecte"""
         if not self.DetectedHardware:
             return
 
@@ -541,27 +847,65 @@ class PerformanceTab(QWidget):
         # GPU
         Gpus = self.DetectedHardware.get("gpu", [])
         self.GpuTable.setRowCount(len(Gpus))
+        self.GpuCheckboxes.clear()
 
-        # Bloque les signaux pendant la mise à jour
+        # Bloque les signaux pendant la mise a jour
         WasLoading = self.IsLoading
         self.IsLoading = True
 
+        # Charge la config pour connaitre le mode et les GPU selectionnes
+        Config = self.ConfigManager.GetAll()
+        GpuMode = Config.get("gpu_mode", "auto")
+        SavedGpuIds = Config.get("gpu_ids", [])
+
+        # Determine l'index du mode
+        if GpuMode == "auto":
+            ModeIndex = self.GPU_MODE_AUTO
+        elif GpuMode == "single":
+            ModeIndex = self.GPU_MODE_SINGLE
+        elif GpuMode == "multi":
+            ModeIndex = self.GPU_MODE_MULTI
+        else:
+            ModeIndex = self.GPU_MODE_AUTO
+
+        BestGpuIndex = self._GetBestGpuIndex() if Gpus else 0
+
         for Row, Gpu in enumerate(Gpus):
+            GpuId = Gpu.get("id", -1)
+            GpuName = Gpu.get("name", "")
+            IsDedicated = not self.ConfigManager._IsIntegratedGpu(GpuName)
+
             # Checkbox
             CheckBox = QCheckBox()
-            CheckBox.setChecked(Gpu.get("id", -1) >= 0)
-            CheckBox.stateChanged.connect(self.OnGpuSelectionChanged)
+            CheckBox.stateChanged.connect(self._OnGpuCheckboxChanged)
+            self.GpuCheckboxes.append(CheckBox)
+
+            # Determine l'etat de la checkbox selon le mode
+            if ModeIndex == self.GPU_MODE_AUTO:
+                CheckBox.setChecked(False)
+                CheckBox.setEnabled(False)
+            elif ModeIndex == self.GPU_MODE_SINGLE:
+                if SavedGpuIds:
+                    CheckBox.setChecked(GpuId in SavedGpuIds)
+                else:
+                    CheckBox.setChecked(Row == BestGpuIndex)
+                CheckBox.setEnabled(True)
+            elif ModeIndex == self.GPU_MODE_MULTI:
+                if SavedGpuIds:
+                    CheckBox.setChecked(GpuId in SavedGpuIds)
+                else:
+                    CheckBox.setChecked(IsDedicated and GpuId >= 0)
+                CheckBox.setEnabled(True)
+
             self.GpuTable.setCellWidget(Row, 0, CheckBox)
 
             # ID
-            IdItem = QTableWidgetItem(str(Gpu.get("id", "?")))
+            IdItem = QTableWidgetItem(str(GpuId))
             IdItem.setFlags(IdItem.flags() & ~Qt.ItemIsEditable)
             self.GpuTable.setItem(Row, 1, IdItem)
 
-            # Nom (avec indication dédié/intégré)
-            GpuName = Gpu.get("name", "Inconnu")
-            IsIntegrated = self.ConfigManager._IsIntegratedGpu(GpuName)
-            TypeSuffix = " (integre)" if IsIntegrated else ""
+            # Nom (avec indication dedie/integre)
+            TypeSuffix = " (integre)" if not IsDedicated else ""
             NameItem = QTableWidgetItem(f"{GpuName}{TypeSuffix}")
             NameItem.setFlags(NameItem.flags() & ~Qt.ItemIsEditable)
             self.GpuTable.setItem(Row, 2, NameItem)
@@ -575,11 +919,24 @@ class PerformanceTab(QWidget):
 
         self.IsLoading = WasLoading
 
-        # Met à jour la recommandation de tile size
+        # Met a jour le mode GPU dans le combo
+        self.GpuModeCombo.setCurrentIndex(ModeIndex)
+
+        # Met a jour la disponibilite du mode Multi-GPU
+        self._UpdateGpuModeAvailability()
+
+        # Met a jour la recommandation de tile size
         self.UpdateTileSizeRecommendation()
 
+        # Met a jour le badge du panneau
+        DedicatedCount = self._GetDedicatedGpuCount()
+        if DedicatedCount > 0:
+            self.GpuHardwarePanel.SetBadge(f"{DedicatedCount} GPU{'s' if DedicatedCount > 1 else ''}")
+        else:
+            self.GpuHardwarePanel.SetBadge("")
+
     def UpdateTileSizeRecommendation(self):
-        """Met à jour la recommandation de tile size"""
+        """Met a jour la recommandation de tile size"""
         if not self.DetectedHardware:
             self.TileSizeRecommendLabel.setText("")
             return
@@ -589,19 +946,36 @@ class PerformanceTab(QWidget):
             self.TileSizeRecommendLabel.setText("")
             return
 
-        # Trouve la plus petite VRAM parmi les GPU sélectionnés
+        # Trouve la plus petite VRAM parmi les GPU selectionnes
         MinVram = None
-        for Gpu in Gpus:
+        GpuName = ""
+        for i, Gpu in enumerate(Gpus):
             if Gpu.get("id", -1) >= 0:
-                VramMb = Gpu.get("vram_mb", 0)
-                if VramMb and (MinVram is None or VramMb < MinVram):
-                    MinVram = VramMb
+                # Verifie si ce GPU est selectionne
+                if i < len(self.GpuCheckboxes) and self.GpuCheckboxes[i].isChecked():
+                    VramMb = Gpu.get("vram_mb", 0)
+                    if VramMb and (MinVram is None or VramMb < MinVram):
+                        MinVram = VramMb
+                        GpuName = Gpu.get("name", "")
+
+        # Si aucun GPU selectionne, utilise le premier GPU valide
+        if MinVram is None:
+            for Gpu in Gpus:
+                if Gpu.get("id", -1) >= 0:
+                    VramMb = Gpu.get("vram_mb", 0)
+                    if VramMb and (MinVram is None or VramMb < MinVram):
+                        MinVram = VramMb
+                        GpuName = Gpu.get("name", "")
 
         if MinVram:
-            RecommendedTileSize = self.ConfigManager.GetTileSizeForVram(MinVram)
+            RecommendedTileSize = self.ConfigManager.GetTileSizeForVram(MinVram, GpuName)
             self.TileSizeRecommendLabel.setText(f"(Recommande: {RecommendedTileSize})")
         else:
             self.TileSizeRecommendLabel.setText("")
+
+    # =========================================================================
+    # Configuration
+    # =========================================================================
 
     def LoadConfig(self):
         """Charge la configuration actuelle"""
@@ -616,13 +990,15 @@ class PerformanceTab(QWidget):
             self.TileSizeSpinBox.setValue(TileSize)
 
             # GPU mode
-            GpuIds = Config.get("gpu_ids", [])
-            if not GpuIds:
-                self.GpuModeCombo.setCurrentIndex(0)  # Auto
-            elif len(GpuIds) == 1:
-                self.GpuModeCombo.setCurrentIndex(1)  # GPU unique
+            GpuMode = Config.get("gpu_mode", "auto")
+            if GpuMode == "auto":
+                self.GpuModeCombo.setCurrentIndex(self.GPU_MODE_AUTO)
+            elif GpuMode == "single":
+                self.GpuModeCombo.setCurrentIndex(self.GPU_MODE_SINGLE)
+            elif GpuMode == "multi":
+                self.GpuModeCombo.setCurrentIndex(self.GPU_MODE_MULTI)
             else:
-                self.GpuModeCombo.setCurrentIndex(2)  # Multi-GPU
+                self.GpuModeCombo.setCurrentIndex(self.GPU_MODE_AUTO)
 
             # Threads
             Threads = Config.get("threads", {})
@@ -634,13 +1010,13 @@ class PerformanceTab(QWidget):
             CompressionLevel = Config.get("compression_level", CompressionConfig.LEVEL_DEFAULT)
             self.CompressionLevelSpinBox.setValue(CompressionLevel)
 
-            # Thème
+            # Theme
             ThemeValue = Config.get("theme", ThemeManager.THEME_AUTO)
             ThemeIndex = self.ThemeComboBox.findData(ThemeValue)
             if ThemeIndex >= 0:
                 self.ThemeComboBox.setCurrentIndex(ThemeIndex)
 
-            # Répertoire de travail
+            # Repertoire de travail
             WorkDir = Config.get("work_directory", "")
             self.WorkDirInput.setText(WorkDir)
 
@@ -648,42 +1024,52 @@ class PerformanceTab(QWidget):
             MaxConcurrentBatches = Config.get("max_concurrent_batches", 2)
             self.MaxConcurrentBatchesSpinBox.setValue(MaxConcurrentBatches)
 
-            # Met à jour l'affichage de l'espace disque
+            # Met a jour l'affichage de l'espace disque
             self.UpdateDiskSpaceDisplay()
 
         finally:
-            # Réactive l'auto-save
+            # Reactive l'auto-save
             self.IsLoading = False
 
     def OnConfigChanged(self):
-        """Appelé quand une valeur de configuration change - déclenche l'auto-save"""
+        """Appele quand une valeur de configuration change - declenche l'auto-save"""
         if self.IsLoading:
             return
 
-        # Redémarre le timer de debounce
+        # Redemarre le timer de debounce
         self.AutoSaveTimer.stop()
         self.AutoSaveTimer.start(self.AUTOSAVE_DELAY_MS)
 
     def OnGpuSelectionChanged(self, State):
-        """Appelé quand la sélection GPU change"""
+        """Appele quand la selection GPU change"""
         self.OnConfigChanged()
 
     def DoAutoSave(self):
         """Effectue la sauvegarde automatique"""
+        # Valide la config GPU
+        IsValid, ErrorMsg = self._ValidateGpuConfig()
+        if not IsValid:
+            # Affiche un avertissement mais sauvegarde quand meme
+            if hasattr(self.ParentWindow, 'Logger'):
+                self.ParentWindow.Logger.warning(f"Config GPU: {ErrorMsg}")
+
         Config = self.BuildConfigFromUI()
 
         if self.ConfigManager.Save(Config):
-            # Affiche l'indicateur "Sauvegardé"
+            # Determine le message selon ce qui a change
             self.ShowSavedIndicator()
 
             # Propage la config au processeur actif
             if hasattr(self.ParentWindow, 'ReloadPerformanceConfig'):
                 self.ParentWindow.ReloadPerformanceConfig()
 
-    def ShowSavedIndicator(self):
-        """Affiche brièvement l'indicateur de sauvegarde"""
-        self.SavedIndicator.setText("Sauvegarde")
-        self.SavedIndicatorTimer.start(2000)  # Masque après 2 secondes
+    def ShowSavedIndicator(self, Message: str = None):
+        """Affiche brievement l'indicateur de sauvegarde"""
+        if Message:
+            self.SavedIndicator.setText(Message)
+        else:
+            self.SavedIndicator.setText("Sauvegarde")
+        self.SavedIndicatorTimer.start(2000)  # Masque apres 2 secondes
 
     def HideSavedIndicator(self):
         """Masque l'indicateur de sauvegarde"""
@@ -695,20 +1081,30 @@ class PerformanceTab(QWidget):
         GpuIds = []
         GpuMode = self.GpuModeCombo.currentIndex()
 
-        if self.DetectedHardware:
+        # Convertit l'index en string
+        if GpuMode == self.GPU_MODE_AUTO:
+            GpuModeStr = "auto"
+        elif GpuMode == self.GPU_MODE_SINGLE:
+            GpuModeStr = "single"
+        elif GpuMode == self.GPU_MODE_MULTI:
+            GpuModeStr = "multi"
+        else:
+            GpuModeStr = "auto"
+
+        if self.DetectedHardware and GpuMode != self.GPU_MODE_AUTO:
             Gpus = self.DetectedHardware.get("gpu", [])
-            for Row in range(self.GpuTable.rowCount()):
-                CheckBox = self.GpuTable.cellWidget(Row, 0)
-                if CheckBox and CheckBox.isChecked():
+            for Row, Checkbox in enumerate(self.GpuCheckboxes):
+                if Checkbox.isChecked():
                     if Row < len(Gpus):
                         GpuId = Gpus[Row].get("id", -1)
                         if GpuId >= 0:
                             GpuIds.append(GpuId)
 
         return {
-            "auto_detect": GpuMode == 0,
+            "auto_detect": GpuMode == self.GPU_MODE_AUTO,
             "tile_size": self.TileSizeSpinBox.value(),
             "gpu_ids": GpuIds,
+            "gpu_mode": GpuModeStr,
             "threads": {
                 "load": self.LoadThreadsSpinBox.value(),
                 "process": self.ProcessThreadsSpinBox.value(),
@@ -728,25 +1124,34 @@ class PerformanceTab(QWidget):
 
         UseMultiGpu = False
         Config = self.ConfigManager.AutoConfigure(self.DetectedHardware, UseMultiGpu=UseMultiGpu)
+        Config["gpu_mode"] = "auto"  # Force mode auto au premier lancement
         self.ApplyConfigToUI(Config)
 
     def AutoConfigure(self):
-        """Applique la configuration automatique avec sélection intelligente des GPU"""
+        """Applique la configuration automatique avec selection intelligente des GPU"""
         if not self.DetectedHardware:
-            # Détecte d'abord le matériel
+            # Detecte d'abord le materiel
             self.DetectHardware()
             return
 
-        # Détermine si on utilise le multi-GPU basé sur la sélection actuelle
-        UseMultiGpu = self.GpuModeCombo.currentIndex() == 2  # "Multi-GPU (tous)"
+        # Determine si on utilise le multi-GPU base sur la selection actuelle
+        UseMultiGpu = self.GpuModeCombo.currentIndex() == self.GPU_MODE_MULTI
 
-        # Auto-configure avec sélection intelligente (préfère les GPU dédiés)
+        # Auto-configure avec selection intelligente (prefere les GPU dedies)
         Config = self.ConfigManager.AutoConfigure(self.DetectedHardware, UseMultiGpu=UseMultiGpu)
 
-        # Applique à l'UI (déclenchera auto-save)
+        # Met a jour le mode GPU
+        if UseMultiGpu:
+            Config["gpu_mode"] = "multi"
+        elif len(Config.get("gpu_ids", [])) == 1:
+            Config["gpu_mode"] = "single"
+        else:
+            Config["gpu_mode"] = "auto"
+
+        # Applique a l'UI (declenchera auto-save)
         self.ApplyConfigToUI(Config)
 
-        # Affiche les GPU sélectionnés dans le message
+        # Affiche les GPU selectionnes dans le message
         SelectedGpuIds = Config.get("gpu_ids", [])
         Gpus = self.DetectedHardware.get("gpu", [])
         SelectedNames = []
@@ -764,13 +1169,13 @@ class PerformanceTab(QWidget):
         )
 
     def ApplyConfigToUI(self, Config: dict):
-        """Applique une configuration à l'UI"""
-        # Bloque temporairement pour éviter multiple saves
+        """Applique une configuration a l'UI"""
+        # Bloque temporairement pour eviter multiple saves
         WasLoading = self.IsLoading
         self.IsLoading = True
 
         try:
-            # Met à jour l'UI
+            # Met a jour l'UI
             self.TileSizeSpinBox.setValue(Config.get("tile_size", 0))
 
             Threads = Config.get("threads", {})
@@ -778,36 +1183,38 @@ class PerformanceTab(QWidget):
             self.ProcessThreadsSpinBox.setValue(Threads.get("process", 2))
             self.SaveThreadsSpinBox.setValue(Threads.get("save", 2))
 
-            # Sélectionne uniquement les GPU choisis par l'auto-configuration
+            # Met a jour le mode GPU
+            GpuMode = Config.get("gpu_mode", "auto")
+            if GpuMode == "auto":
+                self.GpuModeCombo.setCurrentIndex(self.GPU_MODE_AUTO)
+            elif GpuMode == "single":
+                self.GpuModeCombo.setCurrentIndex(self.GPU_MODE_SINGLE)
+            elif GpuMode == "multi":
+                self.GpuModeCombo.setCurrentIndex(self.GPU_MODE_MULTI)
+
+            # Selectionne les GPU selon le mode
             SelectedGpuIds = Config.get("gpu_ids", [])
 
-            for Row in range(self.GpuTable.rowCount()):
-                CheckBox = self.GpuTable.cellWidget(Row, 0)
-                if CheckBox:
-                    IdItem = self.GpuTable.item(Row, 1)
-                    if IdItem:
-                        try:
-                            GpuId = int(IdItem.text())
-                            CheckBox.setChecked(GpuId in SelectedGpuIds)
-                        except ValueError:
-                            CheckBox.setChecked(False)
-
-            # Met à jour le mode GPU
-            if len(SelectedGpuIds) > 1:
-                self.GpuModeCombo.setCurrentIndex(2)  # Multi-GPU
-            elif len(SelectedGpuIds) == 1:
-                self.GpuModeCombo.setCurrentIndex(1)  # GPU unique
-            else:
-                self.GpuModeCombo.setCurrentIndex(0)  # Auto
+            for Row, Checkbox in enumerate(self.GpuCheckboxes):
+                if self.DetectedHardware:
+                    Gpus = self.DetectedHardware.get("gpu", [])
+                    if Row < len(Gpus):
+                        GpuId = Gpus[Row].get("id", -1)
+                        if GpuMode == "auto":
+                            Checkbox.setChecked(False)
+                            Checkbox.setEnabled(False)
+                        else:
+                            Checkbox.setChecked(GpuId in SelectedGpuIds)
+                            Checkbox.setEnabled(True)
 
         finally:
             self.IsLoading = WasLoading
 
-        # Déclenche une sauvegarde manuelle (car IsLoading était True)
+        # Declenche une sauvegarde manuelle (car IsLoading etait True)
         self.DoAutoSave()
 
     def ResetConfig(self):
-        """Réinitialise la configuration"""
+        """Reinitialise la configuration"""
         Reply = QMessageBox.question(
             self,
             "Reinitialiser",
@@ -819,6 +1226,11 @@ class PerformanceTab(QWidget):
         if Reply == QMessageBox.Yes:
             self.ConfigManager.Reset()
             self.LoadConfig()
+
+            # Remet le mode auto et rafraichit l'affichage
+            if self.DetectedHardware:
+                self.UpdateHardwareDisplay()
+
             self.ShowSavedIndicator()
 
             # Propage la config
@@ -826,7 +1238,10 @@ class PerformanceTab(QWidget):
                 self.ParentWindow.ReloadPerformanceConfig()
 
     def Refresh(self):
-        """Rafraîchit l'onglet"""
-        # Ne recharge pas la config pour éviter de perdre les changements non sauvés
+        """Rafraichit l'onglet"""
+        # Ne recharge pas la config pour eviter de perdre les changements non sauves
         if self.DetectedHardware:
             self.UpdateHardwareDisplay()
+
+        # Met a jour la note du repertoire de travail selon l'etat de connexion
+        self._UpdateWorkDirNote()

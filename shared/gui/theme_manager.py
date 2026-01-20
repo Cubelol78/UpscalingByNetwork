@@ -765,6 +765,47 @@ QToolTip {{
 QDialog {{
     background-color: {P['background']};
 }}
+
+/* === CollapsiblePanel === */
+#CollapsibleHeader {{
+    background-color: {P['surface']};
+    border: 1px solid {P['border']};
+    border-radius: 6px 6px 0 0;
+}}
+
+#CollapsibleHeader:hover {{
+    background-color: {P['surface_variant']};
+}}
+
+#CollapsibleArrow {{
+    color: {P['text_secondary']};
+    font-size: 10px;
+}}
+
+#CollapsibleTitle {{
+    color: {P['text']};
+}}
+
+#CollapsibleBadge {{
+    background-color: {P['primary']};
+    color: white;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: bold;
+}}
+
+#CollapsibleContent {{
+    background-color: {P['surface']};
+    border: 1px solid {P['border']};
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+}}
+
+/* CollapsiblePanel quand replie - header avec border-radius complet */
+CollapsiblePanel[collapsed="true"] #CollapsibleHeader {{
+    border-radius: 6px;
+}}
 """
 
     def ForceRefresh(self):

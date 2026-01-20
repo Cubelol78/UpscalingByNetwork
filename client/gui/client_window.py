@@ -204,14 +204,15 @@ class ClientWindow(QMainWindow):
             QMessageBox.warning(self, "Avertissement", f"Erreur lors de la déconnexion:\n{str(e)}")
 
     def RefreshInterface(self):
-        """Rafraîchit toutes les données de l'interface"""
+        """Rafraichit toutes les donnees de l'interface"""
         try:
-            # Rafraîchir chaque onglet
+            # Rafraichir chaque onglet
             self.ConnectionTab.Refresh()
             self.MonitoringTab.Refresh()
             self.ServersTab.Refresh()
+            self.PerformanceTab.Refresh()
         except Exception as e:
-            self.Logger.error(f"Erreur lors du rafraîchissement de l'interface: {e}")
+            self.Logger.error(f"Erreur lors du rafraichissement de l'interface: {e}")
 
     def UpdateStatusBar(self, Message: str):
         """Met à jour la barre de statut"""

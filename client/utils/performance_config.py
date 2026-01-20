@@ -59,6 +59,7 @@ class PerformanceConfigManager:
         "auto_detect": True,
         "tile_size": 0,  # 0 = auto
         "gpu_ids": [],   # vide = auto (utilise le premier GPU)
+        "gpu_mode": "auto",  # "auto", "single", "multi"
         "threads": {
             "load": PerformancePresets.DEFAULT_LOAD_THREADS,
             "process": PerformancePresets.DEFAULT_PROCESS_THREADS,
@@ -67,10 +68,10 @@ class PerformanceConfigManager:
         "tta_mode": False,
         "output_format": "png",
         "first_run": True,
-        "compression_level": CompressionConfig.LEVEL_DEFAULT,  # Niveau de compression réseau (1-10)
-        "work_directory": "",  # Vide = utilise ~/.upscaling_client/ par défaut
+        "compression_level": CompressionConfig.LEVEL_DEFAULT,  # Niveau de compression reseau (1-10)
+        "work_directory": "",  # Vide = utilise ~/.upscaling_client/ par defaut
         # Pipeline multi-batch
-        "max_concurrent_batches": 2   # Nombre max de batches en pipeline (1 = désactivé)
+        "max_concurrent_batches": 2   # Nombre max de batches en pipeline (1 = desactive)
     }
 
     def __init__(self, ConfigDir: Optional[str] = None):
