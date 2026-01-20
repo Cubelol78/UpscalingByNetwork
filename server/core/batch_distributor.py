@@ -224,6 +224,46 @@ class BatchDistributor:
 
         return AvailableClients
 
+    def GetClientBatchInfo(self, ClientId: str) -> dict:
+        """
+        Retourne les informations sur les batches actifs d'un client
+
+        Args:
+            ClientId: ID du client
+
+        Returns:
+            Dict avec:
+            - active_count: Nombre de batches actifs
+            - max_batches: Capacite maximale du client
+            - batch_ids: Liste des IDs de batches actifs
+        """
+        ClientInfo = self.ClientManager.Clients.get(ClientId)
+        MaxBatches = ClientInfo.MaxConcurrentBatches if ClientInfo else 2
+
+        # Liste des batches actifs pour ce client
+        ActiveBatchIds = [
+            BatchId for BatchId, Info in self.ActiveBatches.items()
+            if Info.get("client_id") == ClientId
+        ]
+
+        return {
+            "active_count": len(ActiveBatchIds),
+            "max_batches": MaxBatches,
+            "batch_ids": ActiveBatchIds
+        }
+
+    def GetAllClientsBatchInfo(self) -> dict:
+        """
+        Retourne les informations de batches pour tous les clients connectes
+
+        Returns:
+            Dict {ClientId: {active_count, max_batches, batch_ids}}
+        """
+        Result = {}
+        for ClientId in self.ClientManager.GetConnectedClients():
+            Result[ClientId] = self.GetClientBatchInfo(ClientId)
+        return Result
+
     async def AssignBatch(self, BatchId: str, ClientId: str, VideoId: str) -> bool:
         """
         Assigne un batch à un client

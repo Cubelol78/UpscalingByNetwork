@@ -4,6 +4,7 @@ Connecte au serveur, reçoit et traite les batches d'images
 """
 
 import asyncio
+import threading
 import time
 import os
 import json
@@ -108,6 +109,11 @@ class UpscalingClient:
         # Tâche de réception sur le canal Data
         self.DataReceiveTask = None
 
+        # Event loop du client (pour arrêt thread-safe)
+        self._Loop: asyncio.AbstractEventLoop = None
+        self._StopRequested = False
+        self._StopComplete = threading.Event()
+
         # État de reconnexion automatique
         self.IsReconnecting = False  # True si en cours de reconnexion
         self.ReconnectEnabled = NetworkConfig.RECONNECT_ENABLED  # Active/désactive la reconnexion auto
@@ -130,9 +136,14 @@ class UpscalingClient:
             True si démarrage réussi
         """
         try:
-            self.Logger.info("Démarrage du client...")
+            self.Logger.info("Demarrage du client...")
 
-            # Par défaut, le port Data est le port Control + 1
+            # Sauvegarde l'event loop pour l'arret thread-safe
+            self._Loop = asyncio.get_event_loop()
+            self._StopRequested = False
+            self._StopComplete.clear()
+
+            # Par defaut, le port Data est le port Control + 1
             if DataPort is None:
                 DataPort = Port + 1
 
@@ -246,10 +257,44 @@ class UpscalingClient:
         # Nettoie les fichiers temporaires
         self.LocalProcessor.CleanupAll()
 
-        # Nettoie le cache des résultats en attente
+        # Nettoie le cache des resultats en attente
         self._CleanupResultCache()
 
-        self.Logger.info("✓ Client arrêté")
+        self.Logger.info("Client arrete")
+
+        # Signale que l'arret est termine
+        self._StopComplete.set()
+
+    def RequestStop(self, Timeout: float = 10.0) -> bool:
+        """
+        Demande l'arret du client de maniere thread-safe.
+        Peut etre appele depuis n'importe quel thread.
+
+        Args:
+            Timeout: Temps max d'attente en secondes
+
+        Returns:
+            True si l'arret s'est termine dans le delai
+        """
+        if not self.Running:
+            return True
+
+        if self._StopRequested:
+            # Deja en cours d'arret, attend juste la fin
+            return self._StopComplete.wait(timeout=Timeout)
+
+        self._StopRequested = True
+
+        # Si on a une reference a l'event loop, planifie Stop() dessus
+        if self._Loop and self._Loop.is_running():
+            # Planifie l'arret sur l'event loop du client
+            asyncio.run_coroutine_threadsafe(self.Stop(), self._Loop)
+        else:
+            # Pas d'event loop, met juste Running a False
+            self.Running = False
+
+        # Attend que l'arret soit termine
+        return self._StopComplete.wait(timeout=Timeout)
 
     async def MainLoop(self):
         """
@@ -260,20 +305,34 @@ class UpscalingClient:
         """
         while self.Running:
             try:
-                while self.Running:
-                    # Détermine le timeout adapté :
+                while self.Running and not self._StopRequested:
+                    # Determine le timeout adapte :
                     # - Si en PROCESSING ou envoi en cours : timeout long (5 min)
                     # - Sinon : timeout court (60s)
+                    # - Mais jamais plus de 5s si arret demande (pour reagir vite)
+                    if self._StopRequested:
+                        break
+
                     if self.Status == ClientStatus.PROCESSING or (self.ResultQueue and not self.ResultQueue.empty()):
                         CommunicationTimeout = NetworkConfig.BATCH_TIMEOUT
                     else:
                         CommunicationTimeout = NetworkConfig.HEARTBEAT_TIMEOUT * 2
 
-                    # Reçoit un message du serveur via Control
-                    MessageData = await asyncio.wait_for(
-                        self.ConnectionManager.ReceiveControlMessage(Decrypt=True),
-                        timeout=CommunicationTimeout
-                    )
+                    # Utilise un timeout court (5s) pour verifier regulierement _StopRequested
+                    ActualTimeout = min(CommunicationTimeout, 5.0)
+
+                    # Recoit un message du serveur via Control
+                    try:
+                        MessageData = await asyncio.wait_for(
+                            self.ConnectionManager.ReceiveControlMessage(Decrypt=True),
+                            timeout=ActualTimeout
+                        )
+                    except asyncio.TimeoutError:
+                        # Verifie si arret demande
+                        if self._StopRequested:
+                            break
+                        # Sinon continue (c'est juste le timeout court qui a expire)
+                        continue
 
                     if not MessageData:
                         self.Logger.warning("Message Control vide reçu, déconnexion probable")
@@ -285,14 +344,13 @@ class UpscalingClient:
                     # Traite le message (Control: heartbeats, disconnect, status)
                     await self._HandleControlMessage(Message)
 
-            except asyncio.TimeoutError:
-                self.Logger.error("Timeout de communication Control avec le serveur")
             except Exception as e:
-                self.Logger.error(f"Erreur dans la boucle principale Control: {e}")
+                if not self._StopRequested:
+                    self.Logger.error(f"Erreur dans la boucle principale Control: {e}")
 
-            # Si on arrive ici, c'est qu'il y a eu une déconnexion
-            # Vérifie si on doit tenter une reconnexion automatique
-            if not self.Running:
+            # Si on arrive ici, c'est qu'il y a eu une deconnexion ou un arret demande
+            # Verifie si on doit tenter une reconnexion automatique
+            if not self.Running or self._StopRequested:
                 # Client arrêté volontairement, on sort
                 break
 
@@ -345,21 +403,23 @@ class UpscalingClient:
 
     async def _DataReceiveLoop(self):
         """
-        Boucle de réception sur le canal Data.
-        Reçoit les BatchAssignment du serveur.
+        Boucle de reception sur le canal Data.
+        Recoit les BatchAssignment du serveur.
         """
         try:
-            while self.Running:
-                # Reçoit un batch via le canal Data (timeout long)
+            while self.Running and not self._StopRequested:
+                # Recoit un batch via le canal Data (timeout court pour reagir vite)
                 MessageData = await self.ConnectionManager.ReceiveDataMessage(
                     Decrypt=True,
-                    Timeout=5.0  # Timeout court pour vérifier self.Running régulièrement
+                    Timeout=5.0  # Timeout court pour verifier self.Running regulierement
                 )
 
                 if not MessageData:
                     # Timeout ou erreur de connexion
+                    if self._StopRequested:
+                        break
                     if not self.ConnectionManager.IsDataConnected():
-                        self.Logger.warning("Canal Data déconnecté")
+                        self.Logger.warning("Canal Data deconnecte")
                         break
                     continue
 
@@ -755,21 +815,23 @@ class UpscalingClient:
 
     async def _SenderLoop(self):
         """
-        Boucle d'envoi des résultats en arrière-plan.
-        Consomme la queue (chemins de fichiers) et envoie les résultats un par un (FIFO).
-        Charge les données depuis le disque pour éviter de remplir la RAM.
+        Boucle d'envoi des resultats en arriere-plan.
+        Consomme la queue (chemins de fichiers) et envoie les resultats un par un (FIFO).
+        Charge les donnees depuis le disque pour eviter de remplir la RAM.
         Utilise un Lock pour synchroniser avec les heartbeats.
-        Passe le client à IDLE après l'envoi réussi.
+        Passe le client a IDLE apres l'envoi reussi.
         """
-        while self.Running:
+        while self.Running and not self._StopRequested:
             try:
-                # Attend un chemin de fichier dans la queue (timeout pour vérifier self.Running)
+                # Attend un chemin de fichier dans la queue (timeout pour verifier self.Running)
                 try:
                     CachePath = await asyncio.wait_for(
                         self.ResultQueue.get(),
                         timeout=1.0
                     )
                 except asyncio.TimeoutError:
+                    if self._StopRequested:
+                        break
                     continue
 
                 # Charge le résultat depuis le disque
@@ -835,10 +897,10 @@ class UpscalingClient:
     async def _OutgoingMessageLoop(self):
         """
         Boucle d'envoi des messages prioritaires via le canal Control.
-        Gère les heartbeats et status updates.
-        Les messages sont traités par ordre de priorité (0 = haute, 1 = normale).
+        Gere les heartbeats et status updates.
+        Les messages sont traites par ordre de priorite (0 = haute, 1 = normale).
         """
-        while self.Running:
+        while self.Running and not self._StopRequested:
             try:
                 # Attend un message dans la queue (bloquant async)
                 try:
@@ -847,6 +909,8 @@ class UpscalingClient:
                         timeout=1.0
                     )
                 except asyncio.TimeoutError:
+                    if self._StopRequested:
+                        break
                     continue
 
                 # Envoie via le canal Control (heartbeats, status)

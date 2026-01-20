@@ -177,31 +177,23 @@ class ClientWindow(QMainWindow):
             return False
 
     def DisconnectFromServer(self):
-        """Se déconnecte du serveur"""
+        """Se deconnecte du serveur"""
         try:
-            self.Logger.info("Déconnexion du serveur...")
+            self.Logger.info("Deconnexion du serveur...")
 
             if self.Client and self.IsRunning:
-                # Arrêter le client dans son propre thread
-                import threading
-
-                def StopClientAsync():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(self.Client.Stop())
-                    loop.close()
-
-                StopThread = threading.Thread(target=StopClientAsync)
-                StopThread.start()
-                StopThread.join(timeout=5)
+                # Demande l'arret thread-safe (planifie sur l'event loop du client)
+                StopSuccess = self.Client.RequestStop(Timeout=10.0)
+                if not StopSuccess:
+                    self.Logger.warning("Timeout lors de l'arret du client, arret force")
 
             self.IsRunning = False
-            self.UpdateStatusBar("Déconnecté")
-            self.Logger.info("Déconnexion réussie")
+            self.UpdateStatusBar("Deconnecte")
+            self.Logger.info("Deconnexion reussie")
 
         except Exception as e:
-            self.Logger.error(f"Erreur lors de la déconnexion: {e}")
-            QMessageBox.warning(self, "Avertissement", f"Erreur lors de la déconnexion:\n{str(e)}")
+            self.Logger.error(f"Erreur lors de la deconnexion: {e}")
+            QMessageBox.warning(self, "Avertissement", f"Erreur lors de la deconnexion:\n{str(e)}")
 
     def RefreshInterface(self):
         """Rafraichit toutes les donnees de l'interface"""

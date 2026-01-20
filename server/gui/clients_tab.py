@@ -33,9 +33,9 @@ class ClientsTab(QWidget):
 
         # Tableau des clients
         self.ClientsTable = QTableWidget()
-        self.ClientsTable.setColumnCount(6)
+        self.ClientsTable.setColumnCount(7)
         self.ClientsTable.setHorizontalHeaderLabels([
-            "ID", "Adresse IP", "Statut", "Batch actuel", "Dernier heartbeat", "Actions"
+            "ID", "Adresse IP", "Statut", "Batches", "Batches en cours", "Dernier heartbeat", "Actions"
         ])
 
         # Configuration du tableau
@@ -43,9 +43,10 @@ class ClientsTab(QWidget):
         Header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         Header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         Header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        Header.setSectionResizeMode(3, QHeaderView.Stretch)
-        Header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        Header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        Header.setSectionResizeMode(4, QHeaderView.Stretch)
         Header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        Header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
 
         self.ClientsTable.setAlternatingRowColors(True)
 
@@ -74,7 +75,7 @@ class ClientsTab(QWidget):
         return ActionWidget
 
     def Refresh(self):
-        """Rafraîchit la liste des clients"""
+        """Rafraichit la liste des clients"""
         try:
             Server = self.ParentWindow.GetServer()
 
@@ -82,7 +83,7 @@ class ClientsTab(QWidget):
                 self.ClientsTable.setRowCount(0)
                 return
 
-            # Sauvegarder la sélection actuelle
+            # Sauvegarder la selection actuelle
             SelectedClientId = None
             CurrentRow = self.ClientsTable.currentRow()
             if CurrentRow >= 0:
@@ -90,8 +91,13 @@ class ClientsTab(QWidget):
                 if IdItem:
                     SelectedClientId = IdItem.data(Qt.UserRole)
 
-            # Récupérer les clients connectés
+            # Recuperer les clients connectes
             Clients = Server.ClientManager.GetAllClients()
+
+            # Recuperer les infos de batches par client depuis le BatchDistributor
+            BatchInfoByClient = {}
+            if Server.BatchDistributor:
+                BatchInfoByClient = Server.BatchDistributor.GetAllClientsBatchInfo()
 
             # Vider le tableau
             self.ClientsTable.setRowCount(0)
@@ -108,7 +114,7 @@ class ClientsTab(QWidget):
                 IdItem.setData(Qt.UserRole, ClientId)  # Stocker l'ID complet
                 self.ClientsTable.setItem(RowPosition, 0, IdItem)
 
-                # Vérifier si c'est la ligne précédemment sélectionnée
+                # Verifier si c'est la ligne precedemment selectionnee
                 if SelectedClientId and ClientId == SelectedClientId:
                     RowToSelect = RowPosition
 
@@ -124,11 +130,40 @@ class ClientsTab(QWidget):
                 StatusItem.setForeground(QColor("white"))
                 self.ClientsTable.setItem(RowPosition, 2, StatusItem)
 
-                # Batch actuel
-                CurrentBatch = ClientInfo.CurrentBatch if ClientInfo.CurrentBatch else "-"
-                if CurrentBatch != "-":
-                    CurrentBatch = CurrentBatch[:16] + "..."
-                self.ClientsTable.setItem(RowPosition, 3, QTableWidgetItem(CurrentBatch))
+                # Infos batches depuis le distributeur
+                BatchInfo = BatchInfoByClient.get(ClientId, {
+                    "active_count": 0,
+                    "max_batches": ClientInfo.MaxConcurrentBatches or 2,
+                    "batch_ids": []
+                })
+
+                # Colonne Batches: X/Y (actifs/max)
+                ActiveCount = BatchInfo.get("active_count", 0)
+                MaxBatches = BatchInfo.get("max_batches", 2)
+                BatchCountText = f"{ActiveCount}/{MaxBatches}"
+                BatchCountItem = QTableWidgetItem(BatchCountText)
+                # Coloration selon l'utilisation
+                if ActiveCount == 0:
+                    BatchCountItem.setForeground(QColor("#9E9E9E"))  # Gris
+                elif ActiveCount >= MaxBatches:
+                    BatchCountItem.setForeground(QColor("#FF9800"))  # Orange (plein)
+                else:
+                    BatchCountItem.setForeground(QColor("#4CAF50"))  # Vert (actif)
+                self.ClientsTable.setItem(RowPosition, 3, BatchCountItem)
+
+                # Colonne Batches en cours: liste des IDs
+                BatchIds = BatchInfo.get("batch_ids", [])
+                if BatchIds:
+                    # Affiche les IDs courts separes par virgule
+                    ShortBatchIds = [bid[:8] + "..." for bid in BatchIds]
+                    BatchIdsText = ", ".join(ShortBatchIds)
+                else:
+                    BatchIdsText = "-"
+                BatchIdsItem = QTableWidgetItem(BatchIdsText)
+                # Tooltip avec les IDs complets
+                if BatchIds:
+                    BatchIdsItem.setToolTip("\n".join(BatchIds))
+                self.ClientsTable.setItem(RowPosition, 4, BatchIdsItem)
 
                 # Dernier heartbeat
                 import time
@@ -137,23 +172,23 @@ class ClientsTab(QWidget):
                     HeartbeatText = f"Il y a {int(TimeDiff)}s"
                 else:
                     HeartbeatText = "Jamais"
-                self.ClientsTable.setItem(RowPosition, 4, QTableWidgetItem(HeartbeatText))
+                self.ClientsTable.setItem(RowPosition, 5, QTableWidgetItem(HeartbeatText))
 
-                # Actions (bouton déconnecter)
+                # Actions (bouton deconnecter)
                 ActionsWidget = QWidget()
                 ActionsLayout = QHBoxLayout(ActionsWidget)
                 ActionsLayout.setContentsMargins(4, 2, 4, 2)
                 ActionsLayout.setSpacing(4)
 
-                DisconnectBtn = QPushButton("✖")
-                DisconnectBtn.setToolTip("Déconnecter ce client")
+                DisconnectBtn = QPushButton("X")
+                DisconnectBtn.setToolTip("Deconnecter ce client")
                 DisconnectBtn.setProperty("class", "danger")
                 DisconnectBtn.setMaximumWidth(40)
                 DisconnectBtn.setMaximumHeight(28)
                 DisconnectBtn.clicked.connect(lambda checked, cid=ClientId: self.DisconnectClient(cid))
                 ActionsLayout.addWidget(DisconnectBtn)
 
-                self.ClientsTable.setCellWidget(RowPosition, 5, ActionsWidget)
+                self.ClientsTable.setCellWidget(RowPosition, 6, ActionsWidget)
 
             # Restaurer la sélection
             if RowToSelect >= 0:
