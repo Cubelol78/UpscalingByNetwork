@@ -404,9 +404,12 @@ class ClientManager:
             MessageSize = len(MessageBytes)
             SizeBytes = MessageSize.to_bytes(4, byteorder='big')
 
+            self.Logger.debug(f"SendDataMessage: envoi de {MessageSize} bytes au client {ClientInfo.ClientId[:8]}...")
+
             ClientInfo.DataWriter.write(SizeBytes + MessageBytes)
             await ClientInfo.DataWriter.drain()
 
+            self.Logger.debug(f"SendDataMessage: {MessageSize} bytes envoyes avec succes")
             return True
 
         except (ConnectionResetError, BrokenPipeError) as e:

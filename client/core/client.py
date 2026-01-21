@@ -611,9 +611,25 @@ class UpscalingClient:
                                   f"batch {BatchId} refusé")
                 return
 
-            self.Logger.info(f"Nouveau batch reçu: {BatchId} "
+            # Debug: verifie le contenu du batch recu
+            Images = Assignment.Payload.get('images', [])
+            ImagesWithData = sum(1 for img in Images if img.get('data'))
+            TotalDataSize = sum(len(img.get('data', '')) for img in Images)
+
+            self.Logger.info(f"Nouveau batch recu: {BatchId} "
                            f"(actifs: {len(self.ActiveBatches) + 1}/{self.MaxConcurrentBatches})")
-            self.Logger.info(f"  Nombre d'images: {ImageCount}")
+            self.Logger.info(f"  Nombre d'images declarees: {ImageCount}")
+            self.Logger.info(f"  Nombre d'images recues: {len(Images)}")
+            self.Logger.info(f"  Images avec donnees: {ImagesWithData}")
+            self.Logger.info(f"  Taille totale base64: {TotalDataSize / 1024:.1f} KB")
+
+            if ImagesWithData == 0:
+                self.Logger.error(f"ERREUR: Aucune image avec donnees dans le batch!")
+                # Log les premiers champs de la premiere image pour debug
+                if Images:
+                    FirstImg = Images[0]
+                    self.Logger.error(f"  Premiere image - cles: {list(FirstImg.keys())}")
+                    self.Logger.error(f"  Premiere image - id: {FirstImg.get('id')}, data vide: {not FirstImg.get('data')}")
 
             # Ajoute le batch aux batches actifs
             self.ActiveBatches[BatchId] = {

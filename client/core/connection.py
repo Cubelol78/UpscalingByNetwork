@@ -926,8 +926,9 @@ class DualConnectionManager:
             return False
 
     async def ReceiveDataMessage(self, Decrypt: bool = True, Timeout: float = None) -> Optional[str]:
-        """Reçoit un message via le canal Data"""
+        """Recoit un message via le canal Data"""
         if not self.DataConnected:
+            self.Logger.warning("ReceiveDataMessage: canal Data non connecte")
             return None
 
         try:
@@ -940,22 +941,36 @@ class DualConnectionManager:
                 SizeBytes = await self.DataReader.readexactly(4)
 
             MessageSize = int.from_bytes(SizeBytes, byteorder='big')
+            self.Logger.debug(f"ReceiveDataMessage: taille annoncee = {MessageSize} bytes")
 
             if MessageSize <= 0 or MessageSize > NetworkConfig.MAX_MESSAGE_SIZE:
+                self.Logger.error(f"ReceiveDataMessage: taille invalide ({MessageSize}), max={NetworkConfig.MAX_MESSAGE_SIZE}")
                 return None
 
+            self.Logger.debug(f"ReceiveDataMessage: lecture de {MessageSize} bytes...")
             MessageBytes = await self.DataReader.readexactly(MessageSize)
+            self.Logger.debug(f"ReceiveDataMessage: {len(MessageBytes)} bytes recus")
+
             ReceivedData = MessageBytes.decode('utf-8')
 
             if Decrypt and self.DataEncryption.IsReady():
-                return self.DataEncryption.DecryptMessage(ReceivedData)
+                DecryptedData = self.DataEncryption.DecryptMessage(ReceivedData)
+                if DecryptedData:
+                    self.Logger.debug(f"ReceiveDataMessage: message dechiffre ({len(DecryptedData)} chars)")
+                else:
+                    self.Logger.error("ReceiveDataMessage: echec du dechiffrement")
+                return DecryptedData
 
             return ReceivedData
 
         except asyncio.TimeoutError:
             return None
+        except asyncio.IncompleteReadError as e:
+            self.Logger.error(f"ReceiveDataMessage: lecture incomplete - attendu {e.expected} bytes, recu {len(e.partial)} bytes")
+            self.DataConnected = False
+            return None
         except Exception as e:
-            self.Logger.error(f"Erreur réception Data: {e}")
+            self.Logger.error(f"Erreur reception Data: {e}")
             self.DataConnected = False
             return None
 
