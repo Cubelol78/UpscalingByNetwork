@@ -26,7 +26,11 @@ from server.database.db_manager import DatabaseManager
 from server.database.models import Batch, Video
 from shared.protocol.messages import BatchAssignment, BatchResult, MessageFactory
 from shared.utils.logger import GetModuleLogger
-from shared.utils.constants import BatchStatus, ClientStatus, NetworkConfig, Limits
+from shared.utils.constants import BatchStatus, ClientStatus, NetworkConfig, Limits, RetryConfig
+from shared.utils.retry import RetryAsync, RetryExhaustedError
+from shared.utils.cleanup import CleanupPartialFrames
+from shared.utils.error_events import EmitError, ErrorCategory, ErrorSeverity
+from shared.exceptions import BatchTimeoutError
 
 
 class BatchDistributor:
@@ -430,12 +434,34 @@ class BatchDistributor:
                 TtaMode=VideoObj.TtaMode
             )
 
-            # Envoie via le canal Data
-            Success = await self.ClientManager.SendDataMessage(
-                ClientId,
-                Message.ToJson(),
-                Encrypted=True
-            )
+            # Envoie via le canal Data avec retry
+            MessageJson = Message.ToJson()
+
+            def OnRetry(Attempt: int, Error: Exception):
+                self.Logger.warning(
+                    f"Retry {Attempt}/{RetryConfig.BATCH_SEND_MAX_RETRIES} "
+                    f"pour batch {BatchObj.BatchId} vers {ClientId}: {Error}"
+                )
+
+            try:
+                Success = await RetryAsync(
+                    lambda: self.ClientManager.SendDataMessage(
+                        ClientId,
+                        MessageJson,
+                        Encrypted=True
+                    ),
+                    max_retries=RetryConfig.BATCH_SEND_MAX_RETRIES,
+                    delay=RetryConfig.BATCH_SEND_RETRY_DELAY,
+                    exceptions=(ConnectionError, BrokenPipeError, OSError),
+                    on_retry=OnRetry,
+                    logger=self.Logger
+                )
+            except RetryExhaustedError as e:
+                self.Logger.error(
+                    f"Échec de l'envoi du batch {BatchObj.BatchId} après "
+                    f"{RetryConfig.BATCH_SEND_MAX_RETRIES} tentatives: {e.last_exception}"
+                )
+                return False
 
             if Success:
                 self.Logger.info(f"✓ Batch {BatchObj.BatchId} envoyé au client {ClientId} (Data)")
@@ -668,14 +694,43 @@ class BatchDistributor:
 
             elif SavedCount < ExpectedCount:
                 # Succès partiel - certaines images manquantes
+                # Selon la configuration: supprimer les résultats partiels et réassigner le batch
                 self.Logger.warning(
                     f"Batch {BatchId}: Succès partiel - {SavedCount}/{ExpectedCount} images sauvegardées. "
                     f"Images manquantes: {FailedImages}"
                 )
 
+                # Nettoyage des images partiellement sauvegardées
+                self.Logger.info(f"Nettoyage des images partielles du batch {BatchId}...")
+                CleanedCount = CleanupPartialFrames(
+                    UpscaledDir,
+                    BatchObj.StartFrame,
+                    BatchObj.EndFrame,
+                    logger=self.Logger
+                )
+                self.Logger.info(f"✓ {CleanedCount} images partielles supprimées")
+
+                # Incrémente le compteur de retry
+                BatchObj.RetryCount += 1
+                BatchObj.ErrorMessage = f"Batch partiel: {SavedCount}/{ExpectedCount} images"
+
+                # Retire du tracking
+                if BatchId in self.ActiveBatches:
+                    del self.ActiveBatches[BatchId]
+
+                # Remet en PENDING pour réassignation complète
+                self.Logger.warning(f"⟳ Batch {BatchId} remis en file d'attente (tentative #{BatchObj.RetryCount})")
+                BatchObj.Status = BatchStatus.PENDING
+                BatchObj.AssignedClientId = None
+                self.Database.UpdateBatch(BatchObj)
+
+                # Remet le client en idle si pas d'autres batches
+                self._SetClientIdleIfNoOtherBatches(ClientId)
+                return False
+
             self.Logger.info(f"✓ {SavedCount}/{ExpectedCount} images upscalées sauvegardées")
 
-            # Marque le batch comme complété (même si partiel, on continue)
+            # Marque le batch comme complété
             BatchObj.Status = BatchStatus.COMPLETED
             BatchObj.CompletedAt = datetime.now()
             self.Database.UpdateBatch(BatchObj)
@@ -790,6 +845,17 @@ class BatchDistributor:
             ClientId = BatchInfo["client_id"]
 
             self.Logger.warning(f"Timeout du batch {BatchId} (client {ClientId})")
+
+            # Émet un événement de timeout
+            EmitError(
+                BatchTimeoutError(BatchId, NetworkConfig.BATCH_TIMEOUT, ClientId),
+                ErrorCategory.BATCH,
+                ErrorSeverity.WARNING,
+                "BatchDistributor",
+                context={"batch_id": BatchId, "client_id": ClientId, "timeout": NetworkConfig.BATCH_TIMEOUT},
+                recoverable=True,
+                suggested_action="reassign"
+            )
 
             # Récupère le batch
             BatchObj = self.Database.GetBatch(BatchId)

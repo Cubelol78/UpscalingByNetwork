@@ -16,6 +16,7 @@ from client.utils.realcugan_handler import RealCUGANHandler
 from client.utils.performance_config import PerformanceConfigManager
 from shared.utils.logger import GetClientLogger
 from shared.utils.constants import ProcessingConfig
+from shared.utils.error_events import EmitError, ErrorCategory, ErrorSeverity
 from shared.protocol.messages import BatchResult
 
 
@@ -172,6 +173,9 @@ class LocalProcessor:
 
             if not SavedImages:
                 self.Logger.error("Aucune image sauvegardée")
+                # Nettoyage du répertoire du batch en cas d'erreur
+                if BatchId:
+                    self._Cleanup(BatchId)
                 return None
 
             # Upscale les images (GPU) avec le bon engine
@@ -190,6 +194,21 @@ class LocalProcessor:
                 # Log l'erreur mais retourne None (l'appelant gère l'erreur)
                 if UpscaleError:
                     self.Logger.error(f"Détails: {UpscaleError}")
+
+                # Émet un événement d'erreur de traitement
+                EmitError(
+                    Exception(UpscaleError or "Échec de l'upscaling"),
+                    ErrorCategory.PROCESSING,
+                    ErrorSeverity.ERROR,
+                    "LocalProcessor",
+                    context={"batch_id": BatchId, "video_id": VideoId, "engine": Engine, "model": Model},
+                    recoverable=True,
+                    suggested_action="reassign"
+                )
+
+                # Nettoyage du répertoire du batch en cas d'erreur
+                if BatchId:
+                    self._Cleanup(BatchId)
                 return None
 
             self.Logger.info(f"✓ [GPU] Batch {BatchId} upscalé ({len(UpscaledImages)} images)")
@@ -197,6 +216,9 @@ class LocalProcessor:
 
         except Exception as e:
             self.Logger.error(f"Erreur lors de l'upscaling GPU du batch: {e}")
+            # Nettoyage du répertoire du batch en cas d'exception
+            if BatchId:
+                self._Cleanup(BatchId)
             return None
 
     def ConvertAndEncode(self, BatchId: str, UpscaledPaths: List[str],

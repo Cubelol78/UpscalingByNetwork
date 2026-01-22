@@ -146,7 +146,7 @@ class NetworkConfig:
     CONNECTION_TIMEOUT = 15  # secondes - Réduit de 60s pour feedback rapide
     HANDSHAKE_TIMEOUT = 10  # secondes - Timeout spécifique pour handshake
     AUTH_TIMEOUT = 10  # secondes - Timeout spécifique pour authentification
-    BATCH_TIMEOUT = 600  # 10 minutes - Augmenté pour Real-ESRGAN sur GPU faibles
+    BATCH_TIMEOUT = 120  # 2 minutes - Timeout avec vérification heartbeat sur Control
 
     # Reconnexion automatique
     RECONNECT_ENABLED = True  # Active la reconnexion automatique
@@ -415,5 +415,29 @@ class Limits:
     MAX_VIDEO_SIZE = 100 * 1024 * 1024 * 1024  # 100 GB
     MAX_CONCURRENT_JOBS = 10
     MAX_CONCURRENT_BATCH_SENDS = 3  # Limite par défaut des envois simultanés
-    MAX_RETRY_ATTEMPTS = 3
-    RETRY_DELAY = 5  # secondes
+    MAX_RETRY_ATTEMPTS = 5  # Nombre de tentatives de retry pour les opérations réseau
+    RETRY_DELAY = 5  # Délai en secondes entre chaque tentative de retry
+
+
+# ============================================================================
+# CONFIGURATION RETRY
+# ============================================================================
+
+class RetryConfig:
+    """Configuration des mécanismes de retry"""
+
+    # Retry réseau (envoi/réception messages)
+    NETWORK_MAX_RETRIES = 5
+    NETWORK_RETRY_DELAY = 5.0  # secondes
+
+    # Retry envoi batch
+    BATCH_SEND_MAX_RETRIES = 5
+    BATCH_SEND_RETRY_DELAY = 5.0  # secondes
+
+    # Retry base de données (erreurs transitoires SQLite)
+    DATABASE_MAX_RETRIES = 3
+    DATABASE_RETRY_DELAY = 1.0  # secondes
+
+    # Retry connexion
+    CONNECTION_MAX_RETRIES = 5
+    CONNECTION_RETRY_DELAY = 5.0  # secondes

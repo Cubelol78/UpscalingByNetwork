@@ -7,10 +7,12 @@ import os
 import subprocess
 import json
 import re
+import shutil
 from typing import Optional, List, Dict, Tuple
 from pathlib import Path
 
 from shared.utils.logger import GetModuleLogger
+from shared.utils.cleanup import CleanupDirectory, CleanupFile
 
 
 class FFmpegHandler:
@@ -445,10 +447,14 @@ class FFmpegHandler:
                 return True
             else:
                 self.Logger.error(f"Erreur FFmpeg: {Result.stderr}")
+                # Nettoyage des fichiers partiels en cas d'erreur
+                CleanupDirectory(OutputDir, self.Logger)
                 return False
 
         except Exception as e:
             self.Logger.error(f"Erreur lors du découpage en images: {e}")
+            # Nettoyage des fichiers partiels en cas d'exception
+            CleanupDirectory(OutputDir, self.Logger)
             return False
 
     def FramesToVideo(self, FramesDir: str, OutputPath: str, Fps: float,
@@ -489,10 +495,14 @@ class FFmpegHandler:
                 return True
             else:
                 self.Logger.error(f"Erreur FFmpeg: {Result.stderr}")
+                # Nettoyage du fichier partiel en cas d'erreur
+                CleanupFile(OutputPath, self.Logger)
                 return False
 
         except Exception as e:
             self.Logger.error(f"Erreur lors du réassemblage: {e}")
+            # Nettoyage du fichier partiel en cas d'exception
+            CleanupFile(OutputPath, self.Logger)
             return False
 
     def MergeAudioSubtitles(self, VideoPath: str, AudioTracks: List[str],
@@ -581,7 +591,7 @@ class FFmpegHandler:
             ]
 
             self.Logger.info(f"Encodage en AV1 (CRF={Crf})...")
-            self.Logger.warning("⚠ L'encodage AV1 peut être très lent!")
+            self.Logger.warning("L'encodage AV1 peut être très lent!")
 
             Result = subprocess.run(Command, capture_output=True, text=True)
 
@@ -590,10 +600,14 @@ class FFmpegHandler:
                 return True
             else:
                 self.Logger.error(f"Erreur FFmpeg: {Result.stderr}")
+                # Nettoyage du fichier partiel/corrompu en cas d'erreur
+                CleanupFile(OutputPath, self.Logger)
                 return False
 
         except Exception as e:
             self.Logger.error(f"Erreur lors de l'encodage AV1: {e}")
+            # Nettoyage du fichier partiel/corrompu en cas d'exception
+            CleanupFile(OutputPath, self.Logger)
             return False
 
     def GetVideoDuration(self, VideoPath: str) -> Optional[float]:

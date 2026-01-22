@@ -18,6 +18,7 @@ from shared.protocol.encryption import EncryptionHandler, PasswordHasher
 from shared.protocol.compression import NegotiateCompression
 from shared.utils.logger import GetModuleLogger
 from shared.utils.constants import ClientStatus, ErrorCode, NetworkConfig, CompressionConfig
+from shared.utils.error_events import EmitError, ErrorCategory, ErrorSeverity
 from server.database.db_manager import DatabaseManager
 from server.database.models import ClientHistory
 
@@ -639,7 +640,8 @@ class ClientManager:
                         if DecryptedData:
                             ClientFound = ClientInfo
                             break
-                    except:
+                    except Exception as e:
+                        self.Logger.debug(f"Échec déchiffrement pour client {ClientId}: {e}")
                         continue
 
             # Si pas trouvé, essaie avec tous les clients (fallback pour reconnexions)
@@ -651,7 +653,8 @@ class ClientManager:
                             if DecryptedData:
                                 ClientFound = ClientInfo
                                 break
-                        except:
+                        except Exception as e:
+                            self.Logger.debug(f"Échec déchiffrement pour client {ClientId}: {e}")
                             continue
 
             if not DecryptedData or not ClientFound:
@@ -714,8 +717,8 @@ class ClientManager:
             try:
                 Writer.close()
                 await Writer.wait_closed()
-            except:
-                pass
+            except Exception:
+                pass  # Ignorer les erreurs de fermeture lors du cleanup
             return False
 
     async def RemoveClient(self, ClientId: str):
@@ -783,6 +786,17 @@ class ClientManager:
         if ClientId in self.Clients:
             del self.Clients[ClientId]
             self.Logger.info(f"Client {ClientId} retiré")
+
+            # Émet un événement de déconnexion
+            EmitError(
+                Exception(f"Client {ClientId} déconnecté"),
+                ErrorCategory.CLIENT,
+                ErrorSeverity.INFO,
+                "ClientManager",
+                context={"client_id": ClientId, "ip_address": ClientInfo.IpAddress if ClientInfo else None},
+                recoverable=True,
+                suggested_action="ignore"
+            )
 
     def GetClientStatus(self, ClientId: str) -> Optional[str]:
         """Récupère le statut d'un client"""

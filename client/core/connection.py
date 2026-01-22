@@ -980,8 +980,8 @@ class DualConnectionManager:
             try:
                 self.ControlWriter.close()
                 await self.ControlWriter.wait_closed()
-            except:
-                pass
+            except Exception:
+                pass  # Ignorer les erreurs de fermeture lors de la déconnexion
         self.ControlConnected = False
 
     async def _DisconnectData(self):
@@ -990,8 +990,8 @@ class DualConnectionManager:
             try:
                 self.DataWriter.close()
                 await self.DataWriter.wait_closed()
-            except:
-                pass
+            except Exception:
+                pass  # Ignorer les erreurs de fermeture lors de la déconnexion
         self.DataConnected = False
 
     async def Disconnect(self):
