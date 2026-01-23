@@ -143,6 +143,10 @@ class ClientWindow(QMainWindow):
 
             # Démarrer le client dans un thread asyncio séparé
             import threading
+            import concurrent.futures
+
+            # Future pour récupérer le résultat de la connexion de manière thread-safe
+            ConnectionResult = concurrent.futures.Future()
 
             def RunClientAsync():
                 # Créer une nouvelle boucle pour ce thread
@@ -151,9 +155,12 @@ class ClientWindow(QMainWindow):
 
                 try:
                     # Démarrer le client (connecte et lance la boucle)
-                    loop.run_until_complete(self.Client.Start(Host, Port, Password))
+                    # Start() retourne True si connexion réussie, False sinon
+                    Success = loop.run_until_complete(self.Client.Start(Host, Port, Password))
+                    ConnectionResult.set_result(Success)
                 except Exception as e:
                     self.Logger.error(f"Erreur dans la boucle client: {e}")
+                    ConnectionResult.set_exception(e)
                 finally:
                     self.IsRunning = False
                     loop.close()
@@ -161,13 +168,36 @@ class ClientWindow(QMainWindow):
             self.ClientThread = threading.Thread(target=RunClientAsync, daemon=True)
             self.ClientThread.start()
 
-            # Attendre un peu pour vérifier que la connexion est établie
-            import time
-            time.sleep(0.5)
+            # Attend le résultat réel de la connexion (timeout: 10 secondes)
+            try:
+                Success = ConnectionResult.result(timeout=10.0)
+            except concurrent.futures.TimeoutError:
+                self.Logger.error("Timeout lors de la tentative de connexion")
+                QMessageBox.critical(self, "Erreur", "Timeout lors de la connexion au serveur.\nLe serveur ne répond pas.")
+                return False
+            except Exception as e:
+                self.Logger.error(f"Exception lors de la connexion: {e}")
+                QMessageBox.critical(self, "Erreur", f"Erreur lors de la connexion:\n{str(e)}")
+                return False
 
+            # Vérifie le résultat de la connexion
+            if not Success:
+                self.Logger.error("Échec de la connexion (handshake ou authentification)")
+                QMessageBox.critical(
+                    self,
+                    "Erreur de connexion",
+                    "Impossible de se connecter au serveur.\n\n"
+                    "Vérifiez:\n"
+                    "  - L'adresse et le port du serveur\n"
+                    "  - Le mot de passe (si requis)\n"
+                    "  - Que le serveur est bien démarré"
+                )
+                return False
+
+            # Connexion réussie !
             self.IsRunning = True
             self.UpdateStatusBar(f"Connecté à {Host}:{Port}")
-            self.Logger.info("Connexion établie")
+            self.Logger.info("Connexion établie avec succès")
 
             return True
 

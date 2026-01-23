@@ -81,15 +81,61 @@ class BatchDistributor:
         )
 
     async def StopDistribution(self):
-        """Arrête la distribution"""
+        """Arrête la distribution avec sauvegarde de l'état"""
+        self.Logger.info("Arrêt de la distribution des batches...")
+
         self.Running = False
+
+        # Sauvegarde l'état des batches actifs
+        await self._SaveActiveBatchesState()
+
+        # Annule la tâche de distribution
         if self.DistributionTask:
             self.DistributionTask.cancel()
             try:
                 await self.DistributionTask
             except asyncio.CancelledError:
-                pass
-        self.Logger.info("Distribution arrêtée")
+                self.Logger.debug("Tâche de distribution annulée")
+
+        self.Logger.info("✓ Distribution arrêtée")
+
+    async def _SaveActiveBatchesState(self):
+        """
+        Sauvegarde l'état des batches actifs avant l'arrêt.
+        Remet les batches ASSIGNED et PROCESSING en PENDING pour qu'ils soient
+        réattribués au prochain démarrage.
+        """
+        try:
+            if not self.ActiveBatches:
+                return
+
+            self.Logger.info(f"Sauvegarde de l'état de {len(self.ActiveBatches)} batches actifs...")
+
+            saved_count = 0
+            for batch_id, batch_info in self.ActiveBatches.items():
+                batch_obj = self.Database.GetBatch(batch_id)
+
+                if batch_obj and batch_obj.Status in [BatchStatus.ASSIGNED, BatchStatus.PROCESSING]:
+                    # Remet le batch en PENDING pour qu'il soit réassigné
+                    old_status = batch_obj.Status
+                    batch_obj.Status = BatchStatus.PENDING
+                    batch_obj.AssignedClientId = None
+                    self.Database.UpdateBatch(batch_obj)
+
+                    saved_count += 1
+                    self.Logger.debug(
+                        f"Batch {batch_id}: {old_status} → PENDING "
+                        f"(client: {batch_info.get('client_id', 'unknown')})"
+                    )
+
+            # Vide le dictionnaire des batches actifs
+            self.ActiveBatches.clear()
+
+            if saved_count > 0:
+                self.Logger.info(f"✓ {saved_count} batches remis en attente pour réattribution")
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la sauvegarde de l'état des batches: {e}")
 
     async def _DistributionLoop(self, VideoId: str):
         """

@@ -235,7 +235,13 @@ class ServerWindow(QMainWindow):
 
                 async def DoStop():
                     try:
+                        # Arrête le JobManager d'abord
+                        if self.JobManager:
+                            await self.JobManager.Stop()
+
+                        # Puis arrête le serveur (qui arrête le BatchDistributor)
                         await self.Server.Stop()
+
                         StopComplete.set_result(True)
                     except Exception as e:
                         StopComplete.set_exception(e)

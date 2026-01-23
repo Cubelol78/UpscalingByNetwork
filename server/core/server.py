@@ -7,6 +7,7 @@ import asyncio
 import os
 import socket
 import platform
+import signal
 from typing import Optional
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from server.core.network_manager import NetworkManager, DualNetworkManager
 from server.database.db_manager import DatabaseManager
 from shared.utils.logger import GetServerLogger
 from shared.utils.constants import NetworkConfig, PathConfig, ClientStatus
-from shared.protocol.messages import MessageFactory, HeartbeatPong, BatchResult, StatusUpdate
+from shared.protocol.messages import MessageFactory, HeartbeatPong, BatchResult, StatusUpdate, DisconnectMessage
 
 
 def ConfigureSocket(Writer: asyncio.StreamWriter, Logger):
@@ -187,6 +188,9 @@ class UpscalingServer:
                 self.Logger.error("Échec du démarrage des listeners TCP")
                 return False
 
+            # Configure les handlers de signaux pour un arrêt gracieux
+            self._SetupSignalHandlers()
+
             self.Running = True
 
             # Démarre le monitoring des heartbeats
@@ -203,35 +207,154 @@ class UpscalingServer:
             self.Logger.error(f"Erreur lors du démarrage du serveur: {e}")
             return False
 
-    async def Stop(self):
-        """Arrête le serveur"""
+    async def Stop(self, timeout: float = 30.0):
+        """
+        Arrête le serveur avec un arrêt gracieux.
+
+        Args:
+            timeout: Timeout global en secondes (défaut: 30s)
+        """
         if not self.Running:
             self.Logger.warning("Le serveur n'est pas en cours d'exécution")
             return
 
-        self.Logger.info("Arrêt du serveur...")
+        self.Logger.info(f"Arrêt gracieux du serveur (timeout: {timeout}s)...")
 
         self.Running = False
 
-        # Arrête le monitoring des heartbeats
+        try:
+            # Enveloppe toute la séquence d'arrêt dans un timeout global
+            await asyncio.wait_for(
+                self._GracefulShutdown(),
+                timeout=timeout
+            )
+            self.Logger.info("✓ Serveur arrêté avec succès")
+
+        except asyncio.TimeoutError:
+            self.Logger.error(
+                f"Timeout de {timeout}s atteint lors de l'arrêt gracieux. "
+                "Forçage de la fermeture..."
+            )
+            # Force la fermeture de la base de données même en cas de timeout
+            if self.Database:
+                try:
+                    self.Database.Close()
+                except Exception as e:
+                    self.Logger.error(f"Erreur lors de la fermeture forcée de la DB: {e}")
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de l'arrêt du serveur: {e}")
+            # Force la fermeture de la base de données même en cas d'erreur
+            if self.Database:
+                try:
+                    self.Database.Close()
+                except Exception:
+                    pass
+
+    def _SetupSignalHandlers(self):
+        """
+        Configure les handlers de signaux pour un arrêt gracieux.
+        Gère SIGINT (Ctrl+C) et SIGTERM (kill).
+        """
+        # Note: Windows ne supporte que SIGINT
+        if platform.system() == 'Windows':
+            signals = [signal.SIGINT]
+        else:
+            signals = [signal.SIGINT, signal.SIGTERM]
+
+        loop = asyncio.get_event_loop()
+
+        def signal_handler(signum, frame):
+            """Handler appelé lors de la réception d'un signal"""
+            signal_name = signal.Signals(signum).name
+            self.Logger.info(f"Signal {signal_name} reçu, arrêt gracieux du serveur...")
+
+            # Planifie l'arrêt dans la boucle asyncio
+            if self.Running:
+                asyncio.create_task(self.Stop())
+
+        # Enregistre les handlers
+        for sig in signals:
+            try:
+                signal.signal(sig, signal_handler)
+                self.Logger.debug(f"Handler installé pour {signal.Signals(sig).name}")
+            except (OSError, ValueError) as e:
+                # Certains signaux ne peuvent pas être capturés sur certaines plateformes
+                self.Logger.debug(f"Impossible d'installer le handler pour {sig}: {e}")
+
+    async def _GracefulShutdown(self):
+        """
+        Séquence d'arrêt gracieux du serveur.
+        Cette méthode est appelée avec un timeout global par Stop().
+        """
+        # Étape 1: Notifie tous les clients que le serveur va s'arrêter
+        if self.ClientManager:
+            ClientIds = self.ClientManager.GetConnectedClients()
+            if ClientIds:
+                self.Logger.info(f"Notification d'arrêt à {len(ClientIds)} clients...")
+
+                # Crée le message de déconnexion
+                disconnect_msg = DisconnectMessage(Reason="server_shutdown")
+                disconnect_json = disconnect_msg.ToJson()
+
+                # Envoie le message à tous les clients en parallèle
+                notification_tasks = []
+                for client_id in ClientIds:
+                    task = self.ClientManager.SendMessage(client_id, disconnect_json, Encrypted=True)
+                    notification_tasks.append(task)
+
+                # Attend que toutes les notifications soient envoyées (avec timeout de 5s)
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*notification_tasks, return_exceptions=True),
+                        timeout=5.0
+                    )
+                    self.Logger.info("✓ Notifications envoyées aux clients")
+                except asyncio.TimeoutError:
+                    self.Logger.warning("Timeout lors de l'envoi des notifications (5s)")
+
+                # Attend 2 secondes pour que les clients traitent le message
+                self.Logger.info("Attente de déconnexion gracieuse des clients (2s)...")
+                await asyncio.sleep(2)
+
+        # Étape 2: Arrête la distribution des batches et sauvegarde l'état
+        if self.BatchDistributor:
+            await self.BatchDistributor.StopDistribution()
+
+        # Étape 3: Arrête le monitoring des heartbeats
         if self.ClientManager:
             await self.ClientManager.StopHeartbeatMonitoring()
 
-        # Ferme le listener TCP via NetworkManager
+        # Étape 4: Ferme le listener TCP pour empêcher de nouvelles connexions
         if self.NetworkManager:
+            self.Logger.info("Fermeture des listeners réseau...")
             await self.NetworkManager.Stop()
 
-        # Déconnecte tous les clients
+        # Étape 4: Déconnecte tous les clients restants
         if self.ClientManager:
             ClientIds = self.ClientManager.GetConnectedClients()
-            for ClientId in ClientIds:
-                await self.ClientManager.RemoveClient(ClientId)
+            if ClientIds:
+                self.Logger.info(f"Déconnexion de {len(ClientIds)} clients restants...")
 
-        # Ferme la base de données
+                # Déconnecte en parallèle avec timeout
+                disconnect_tasks = []
+                for ClientId in ClientIds:
+                    task = self.ClientManager.RemoveClient(ClientId)
+                    disconnect_tasks.append(task)
+
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*disconnect_tasks, return_exceptions=True),
+                        timeout=10.0
+                    )
+                    self.Logger.info("✓ Tous les clients déconnectés")
+                except asyncio.TimeoutError:
+                    self.Logger.warning("Timeout lors de la déconnexion des clients (10s)")
+
+        # Étape 5: Ferme la base de données
         if self.Database:
+            self.Logger.info("Fermeture de la base de données...")
             self.Database.Close()
-
-        self.Logger.info("✓ Serveur arrêté")
 
     async def _HandleControlConnection(self, Reader: asyncio.StreamReader,
                                         Writer: asyncio.StreamWriter):

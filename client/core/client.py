@@ -162,6 +162,9 @@ class UpscalingClient:
         # Tâche de réception sur le canal Data
         self.DataReceiveTask = None
 
+        # Tâche de la boucle principale
+        self.MainLoopTask = None
+
         # Event loop du client (pour arrêt thread-safe)
         self._Loop: asyncio.AbstractEventLoop = None
         self._StopRequested = False
@@ -240,11 +243,13 @@ class UpscalingClient:
             # Démarre la réception des batches sur le canal Data
             self.DataReceiveTask = asyncio.create_task(self._DataReceiveLoop())
 
+            # Lance la boucle principale en arrière-plan (Control: heartbeats)
+            self.MainLoopTask = asyncio.create_task(self.MainLoop())
+
             self.Logger.info("✓ Client démarré et connecté (dual-port)")
 
-            # Lance la boucle principale (Control: heartbeats)
-            await self.MainLoop()
-
+            # Retourne True immédiatement pour indiquer que la connexion est établie
+            # La boucle principale continue en arrière-plan
             return True
 
         except Exception as e:
@@ -301,6 +306,14 @@ class UpscalingClient:
             self.DataReceiveTask.cancel()
             try:
                 await self.DataReceiveTask
+            except asyncio.CancelledError:
+                pass
+
+        # Annule la tâche de la boucle principale
+        if self.MainLoopTask and not self.MainLoopTask.done():
+            self.MainLoopTask.cancel()
+            try:
+                await self.MainLoopTask
             except asyncio.CancelledError:
                 pass
 

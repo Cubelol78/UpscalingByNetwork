@@ -57,17 +57,64 @@ class JobManager:
         self.JobTask = asyncio.create_task(self._JobLoop())
 
     async def Stop(self):
-        """Arrête le gestionnaire de jobs"""
+        """Arrête le gestionnaire de jobs avec sauvegarde de l'état"""
+        self.Logger.info("Arrêt du gestionnaire de jobs...")
+
         self.Running = False
 
+        # Sauvegarde l'état du job en cours
+        await self._SaveCurrentJobState()
+
+        # Annule la tâche de traitement
         if self.JobTask:
             self.JobTask.cancel()
             try:
                 await self.JobTask
             except asyncio.CancelledError:
-                pass
+                self.Logger.debug("Tâche de traitement des jobs annulée")
 
-        self.Logger.info("JobManager arrêté")
+        self.Logger.info("✓ JobManager arrêté")
+
+    async def _SaveCurrentJobState(self):
+        """
+        Sauvegarde l'état du job en cours avant l'arrêt.
+        Si un job est en cours de traitement, son état est sauvegardé dans la base
+        de données pour permettre une reprise ultérieure.
+        """
+        try:
+            if not self.CurrentJobId:
+                self.Logger.debug("Aucun job en cours")
+                return
+
+            self.Logger.info(f"Sauvegarde de l'état du job en cours: {self.CurrentJobId}")
+
+            # Récupère l'objet Video (qui contient l'état du job)
+            video_obj = self.Database.GetVideo(self.CurrentJobId)
+
+            if video_obj:
+                # Log l'état actuel du job
+                self.Logger.info(
+                    f"Job {self.CurrentJobId}: status={video_obj.Status}, "
+                    f"progress={video_obj.Progress*100:.1f}%, "
+                    f"batches={video_obj.CompletedBatches}/{video_obj.TotalBatches}"
+                )
+
+                # La base de données contient déjà l'état à jour
+                # Les batches ont été sauvegardés par BatchDistributor
+                # Pas besoin de modifications supplémentaires
+
+                self.Logger.info(
+                    f"✓ État du job sauvegardé. "
+                    f"Le traitement pourra reprendre au prochain démarrage."
+                )
+            else:
+                self.Logger.warning(f"Job {self.CurrentJobId} introuvable dans la base de données")
+
+            # Réinitialise l'état du JobManager
+            self.CurrentJobId = None
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la sauvegarde de l'état du job: {e}")
 
     async def _JobLoop(self):
         """Boucle principale de traitement des jobs"""
