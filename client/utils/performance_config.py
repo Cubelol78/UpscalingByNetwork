@@ -5,11 +5,15 @@ Gère la sauvegarde et le chargement des paramètres de performance
 
 import os
 import json
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
 from shared.utils.logger import GetModuleLogger
 from shared.utils.constants import CompressionConfig
+from shared.utils.path_validator import (
+    ValidateWorkDirectory, PathValidationResult,
+    GetDefaultWorkDirectory, NormalizePath
+)
 
 
 class PerformancePresets:
@@ -237,7 +241,8 @@ class PerformanceConfigManager:
 
     def GetWorkDirectory(self) -> str:
         """
-        Récupère le répertoire de travail effectif
+        Récupère le répertoire de travail effectif avec validation.
+        Si le répertoire configuré est invalide, retourne le répertoire par défaut.
 
         Returns:
             Chemin du répertoire de travail (custom ou défaut)
@@ -247,10 +252,56 @@ class PerformanceConfigManager:
 
         CustomDir = self.Config.get("work_directory", "")
         if CustomDir and CustomDir.strip():
-            return CustomDir.strip()
+            # Normalise le chemin
+            normalized_path = NormalizePath(CustomDir.strip())
+
+            # Valide le répertoire
+            validation = ValidateWorkDirectory(normalized_path, create_if_missing=False)
+
+            if validation.is_valid:
+                return normalized_path
+            else:
+                # Le répertoire configuré est invalide, log et utilise le défaut
+                self.Logger.warning(
+                    f"Répertoire de travail invalide '{CustomDir}': {validation.error_message}. "
+                    f"Utilisation du répertoire par défaut."
+                )
 
         # Utilise le répertoire par défaut
-        return os.path.join(str(Path.home()), ".upscaling_client")
+        return GetDefaultWorkDirectory()
+
+    def ValidateAndSetWorkDirectory(self, path: str) -> Tuple[bool, Optional[str]]:
+        """
+        Valide et configure un nouveau répertoire de travail.
+
+        Args:
+            path: Chemin du répertoire à valider
+
+        Returns:
+            Tuple (succès, message_erreur)
+        """
+        if not path or not path.strip():
+            # Vide = utilise le défaut
+            self.Config["work_directory"] = ""
+            self.Save()
+            return True, None
+
+        # Normalise le chemin
+        normalized_path = NormalizePath(path.strip())
+
+        # Valide le répertoire (sans créer)
+        validation = ValidateWorkDirectory(normalized_path, create_if_missing=False)
+
+        if validation.is_valid:
+            self.Config["work_directory"] = normalized_path
+            self.Save()
+            self.Logger.info(f"Répertoire de travail configuré: {normalized_path}")
+            return True, None
+        else:
+            error_msg = validation.error_message
+            if validation.suggested_fix:
+                error_msg += f"\n{validation.suggested_fix}"
+            return False, error_msg
 
     def GetDefaultWorkDirectory(self) -> str:
         """

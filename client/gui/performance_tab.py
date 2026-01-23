@@ -20,6 +20,7 @@ from PyQt5.QtGui import QFont
 from client.utils.hardware_detector import HardwareDetector
 from client.utils.performance_config import PerformanceConfigManager, PerformancePresets
 from shared.utils.constants import CompressionConfig
+from shared.utils.path_validator import ValidateWorkDirectory, NormalizePath
 from shared.gui.theme_manager import ThemeManager
 from shared.gui.collapsible_panel import CollapsiblePanel
 
@@ -1052,6 +1053,35 @@ class PerformanceTab(QWidget):
             # Affiche un avertissement mais sauvegarde quand meme
             if hasattr(self.ParentWindow, 'Logger'):
                 self.ParentWindow.Logger.warning(f"Config GPU: {ErrorMsg}")
+
+        # Valide le répertoire de travail
+        WorkDir = self.WorkDirInput.text().strip()
+        if WorkDir:  # Uniquement si l'utilisateur a spécifié un chemin
+            WorkDir = NormalizePath(WorkDir)
+            validation = ValidateWorkDirectory(WorkDir, create_if_missing=False)
+
+            if not validation.is_valid:
+                # Affiche un message d'erreur et ne sauvegarde pas
+                error_msg = validation.error_message
+                if validation.suggested_fix:
+                    error_msg += f"\n\n{validation.suggested_fix}"
+
+                QMessageBox.warning(
+                    self,
+                    "Répertoire de travail invalide",
+                    f"Le répertoire de travail spécifié est invalide:\n\n{error_msg}\n\n"
+                    "Veuillez corriger le chemin ou laisser vide pour utiliser le répertoire par défaut."
+                )
+
+                # Remets le focus sur le champ pour correction
+                self.WorkDirInput.setFocus()
+                return
+
+            # Mise à jour avec le chemin normalisé
+            if self.WorkDirInput.text() != WorkDir:
+                self.IsLoading = True
+                self.WorkDirInput.setText(WorkDir)
+                self.IsLoading = False
 
         Config = self.BuildConfigFromUI()
 

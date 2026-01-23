@@ -22,6 +22,8 @@ from shared.protocol.messages import (
 )
 from shared.utils.logger import GetClientLogger
 from shared.utils.constants import ClientStatus, NetworkConfig
+from shared.utils.path_validator import ValidateWorkDirectory, GetDefaultWorkDirectory, NormalizePath
+from shared.exceptions import ProcessingError
 
 
 @dataclass(order=True)
@@ -52,20 +54,71 @@ class UpscalingClient:
         # Fallback ConnectionManager pour compatibilité avec anciens serveurs
         self._UseDualPort = True  # Sera mis à False si connexion dual échoue
 
-        # Détermine le répertoire de travail
+        # Détermine et valide le répertoire de travail
         if WorkDirectory and WorkDirectory.strip():
-            self.WorkDirectory = WorkDirectory.strip()
-        else:
-            self.WorkDirectory = os.path.join(Path.home(), '.upscaling_client')
+            WorkDirectory = NormalizePath(WorkDirectory.strip())
+            validation = ValidateWorkDirectory(WorkDirectory, create_if_missing=True)
 
-        # Crée les sous-répertoires nécessaires
+            if not validation.is_valid:
+                error_msg = (
+                    f"Répertoire de travail invalide '{WorkDirectory}': {validation.error_message}"
+                )
+                self.Logger.error(error_msg)
+                if validation.suggested_fix:
+                    self.Logger.info(f"Solution suggérée: {validation.suggested_fix}")
+
+                # Utilise le répertoire par défaut en fallback
+                self.Logger.warning("Utilisation du répertoire par défaut à la place")
+                WorkDirectory = GetDefaultWorkDirectory()
+
+            self.WorkDirectory = WorkDirectory
+        else:
+            self.WorkDirectory = GetDefaultWorkDirectory()
+
+        # Valide et crée les sous-répertoires nécessaires
         TempDir = os.path.join(self.WorkDirectory, 'temp')
         self.ResultCacheDir = os.path.join(self.WorkDirectory, 'result_cache')
-        os.makedirs(TempDir, exist_ok=True)
-        os.makedirs(self.ResultCacheDir, exist_ok=True)
+
+        try:
+            os.makedirs(TempDir, exist_ok=True)
+            os.makedirs(self.ResultCacheDir, exist_ok=True)
+        except PermissionError as e:
+            raise ProcessingError(
+                f"Permission refusée lors de la création des répertoires de travail: {e}",
+                code="WORK_DIR_PERMISSION_DENIED",
+                details={"work_directory": self.WorkDirectory, "temp_dir": TempDir},
+                is_recoverable=False,
+                suggested_action="abort"
+            )
+        except OSError as e:
+            if e.errno == 28:  # ENOSPC - No space left on device
+                raise ProcessingError(
+                    "Espace disque insuffisant pour créer les répertoires de travail",
+                    code="WORK_DIR_DISK_FULL",
+                    details={"work_directory": self.WorkDirectory, "error": str(e)},
+                    is_recoverable=False,
+                    suggested_action="abort"
+                )
+            else:
+                raise ProcessingError(
+                    f"Erreur lors de la création des répertoires de travail: {e}",
+                    code="WORK_DIR_CREATION_ERROR",
+                    details={"work_directory": self.WorkDirectory, "error": str(e)},
+                    is_recoverable=False,
+                    suggested_action="abort"
+                )
 
         # Initialise le processeur local avec le bon répertoire temp
-        self.LocalProcessor = LocalProcessor(TempDirectory=TempDir)
+        try:
+            self.LocalProcessor = LocalProcessor(TempDirectory=TempDir)
+        except Exception as e:
+            raise ProcessingError(
+                f"Erreur lors de l'initialisation du processeur: {e}",
+                code="PROCESSOR_INIT_ERROR",
+                details={"temp_directory": TempDir, "error": str(e)},
+                is_recoverable=False,
+                suggested_action="abort"
+            )
 
         self.Running = False
         self.Status = ClientStatus.IDLE

@@ -17,6 +17,8 @@ from client.utils.performance_config import PerformanceConfigManager
 from shared.utils.logger import GetClientLogger
 from shared.utils.constants import ProcessingConfig
 from shared.utils.error_events import EmitError, ErrorCategory, ErrorSeverity
+from shared.utils.path_validator import ValidateWorkDirectory, GetDefaultWorkDirectory
+from shared.exceptions import ProcessingError
 from shared.protocol.messages import BatchResult
 
 
@@ -37,9 +39,29 @@ class LocalProcessor:
         if TempDirectory:
             self.TempDir = TempDirectory
         else:
-            self.TempDir = os.path.join(Path.home(), '.upscaling_client', 'temp')
+            default_work_dir = GetDefaultWorkDirectory()
+            self.TempDir = os.path.join(default_work_dir, 'temp')
 
-        os.makedirs(self.TempDir, exist_ok=True)
+        # Valide et crée le répertoire temporaire
+        validation = ValidateWorkDirectory(self.TempDir, create_if_missing=True)
+
+        if not validation.is_valid:
+            error_msg = (
+                f"Répertoire temporaire invalide '{self.TempDir}': {validation.error_message}"
+            )
+            self.Logger.error(error_msg)
+
+            raise ProcessingError(
+                error_msg,
+                code="TEMP_DIR_INVALID",
+                details={
+                    "temp_directory": self.TempDir,
+                    "error_code": validation.error_code,
+                    "suggested_fix": validation.suggested_fix
+                },
+                is_recoverable=False,
+                suggested_action="abort"
+            )
 
         # Charge la configuration de performance
         self.PerformanceConfigManager = PerformanceConfigManager()
