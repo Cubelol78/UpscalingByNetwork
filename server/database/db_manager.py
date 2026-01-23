@@ -636,6 +636,74 @@ class DatabaseManager:
             self.Logger.error(f"Erreur lors de la mise à jour du batch: {e}")
             return False
 
+    def UpdateBatchConditional(self, BatchId: str, NewStatus: str, ExpectedStatus: str,
+                                AssignedClientId: Optional[str] = None,
+                                AssignedAt: Optional[datetime] = None) -> bool:
+        """
+        Met à jour un batch de manière conditionnelle (UPDATE avec WHERE sur status).
+        Évite les race conditions en garantissant que le batch est dans l'état attendu.
+
+        Cette méthode est atomique : soit l'update réussit (batch était dans ExpectedStatus),
+        soit il échoue (batch dans un autre état = déjà assigné/traité par un autre processus).
+
+        Args:
+            BatchId: ID du batch à mettre à jour
+            NewStatus: Nouveau statut à appliquer
+            ExpectedStatus: Statut attendu actuel (condition WHERE)
+            AssignedClientId: ID du client assigné (optionnel)
+            AssignedAt: Date d'assignation (optionnel)
+
+        Returns:
+            True si mise à jour réussie (batch était dans ExpectedStatus)
+            False si batch n'était pas dans ExpectedStatus (race condition évitée)
+
+        Example:
+            >>> # Assigner un batch seulement s'il est PENDING
+            >>> success = db.UpdateBatchConditional(
+            ...     batch_id, BatchStatus.ASSIGNED, BatchStatus.PENDING,
+            ...     assigned_client_id="client123", assigned_at=datetime.now()
+            ... )
+            >>> if not success:
+            ...     # Batch déjà assigné par un autre processus
+        """
+        try:
+            Cursor = self.Connection.cursor()
+
+            # UPDATE conditionnel : WHERE batch_id = ? AND status = expected_status
+            Cursor.execute(
+                """
+                UPDATE batches
+                SET status = ?, assigned_client_id = ?, assigned_at = ?
+                WHERE batch_id = ? AND status = ?
+                """,
+                (
+                    NewStatus,
+                    AssignedClientId,
+                    AssignedAt,
+                    BatchId,
+                    ExpectedStatus
+                )
+            )
+
+            self.Connection.commit()
+
+            # Vérifie le nombre de lignes affectées
+            # rowcount == 1 : UPDATE réussi (batch était dans ExpectedStatus)
+            # rowcount == 0 : Aucune ligne affectée (batch pas dans ExpectedStatus ou n'existe pas)
+            if Cursor.rowcount == 1:
+                self.Logger.debug(f"✓ UpdateBatchConditional: batch {BatchId} mis à jour {ExpectedStatus} → {NewStatus}")
+                return True
+            else:
+                self.Logger.debug(
+                    f"✗ UpdateBatchConditional: batch {BatchId} n'était pas dans l'état {ExpectedStatus} "
+                    f"(race condition évitée)"
+                )
+                return False
+
+        except Exception as e:
+            self.Logger.error(f"Erreur UpdateBatchConditional pour batch {BatchId}: {e}")
+            return False
+
     def GetPendingBatches(self, VideoId: str) -> List[Batch]:
         """
         Récupère les batches en attente pour une vidéo

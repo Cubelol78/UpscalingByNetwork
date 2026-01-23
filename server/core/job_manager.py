@@ -5,6 +5,7 @@ Gère la file d'attente FIFO et le pipeline complet
 
 import asyncio
 import os
+import shutil
 import uuid
 import time
 from typing import Optional, List
@@ -44,6 +45,10 @@ class JobManager:
         self.CurrentJobId = None
         self.JobTask = None
 
+        # HAUTE Problème 6: Lock pour protéger CurrentJobId des race conditions
+        # Risque: CancelVideo et ProcessJob modifient CurrentJobId concurrentiellement
+        self.CurrentJobIdLock = asyncio.Lock()
+
     async def Start(self):
         """Démarre le gestionnaire de jobs"""
         if self.Running:
@@ -82,19 +87,23 @@ class JobManager:
         de données pour permettre une reprise ultérieure.
         """
         try:
-            if not self.CurrentJobId:
-                self.Logger.debug("Aucun job en cours")
-                return
+            # Protège l'accès à CurrentJobId
+            async with self.CurrentJobIdLock:
+                if not self.CurrentJobId:
+                    self.Logger.debug("Aucun job en cours")
+                    return
 
-            self.Logger.info(f"Sauvegarde de l'état du job en cours: {self.CurrentJobId}")
+                CurrentJobIdCopy = self.CurrentJobId
+
+            self.Logger.info(f"Sauvegarde de l'état du job en cours: {CurrentJobIdCopy}")
 
             # Récupère l'objet Video (qui contient l'état du job)
-            video_obj = self.Database.GetVideo(self.CurrentJobId)
+            video_obj = self.Database.GetVideo(CurrentJobIdCopy)
 
             if video_obj:
                 # Log l'état actuel du job
                 self.Logger.info(
-                    f"Job {self.CurrentJobId}: status={video_obj.Status}, "
+                    f"Job {CurrentJobIdCopy}: status={video_obj.Status}, "
                     f"progress={video_obj.Progress*100:.1f}%, "
                     f"batches={video_obj.CompletedBatches}/{video_obj.TotalBatches}"
                 )
@@ -108,20 +117,25 @@ class JobManager:
                     f"Le traitement pourra reprendre au prochain démarrage."
                 )
             else:
-                self.Logger.warning(f"Job {self.CurrentJobId} introuvable dans la base de données")
+                self.Logger.warning(f"Job {CurrentJobIdCopy} introuvable dans la base de données")
 
-            # Réinitialise l'état du JobManager
-            self.CurrentJobId = None
+            # Réinitialise l'état du JobManager (protégé par lock)
+            async with self.CurrentJobIdLock:
+                self.CurrentJobId = None
 
         except Exception as e:
-            self.Logger.error(f"Erreur lors de la sauvegarde de l'état du job: {e}")
+            # MOYENNE Problème 7: WARNING au lieu d'ERROR (pas critique)
+            self.Logger.warning(f"Erreur lors de la sauvegarde de l'état du job: {e}")
 
     async def _JobLoop(self):
         """Boucle principale de traitement des jobs"""
         try:
             while self.Running:
-                # Vérifie s'il y a un job en cours
-                if self.CurrentJobId:
+                # Vérifie s'il y a un job en cours (protégé par lock)
+                async with self.CurrentJobIdLock:
+                    HasCurrentJob = self.CurrentJobId is not None
+
+                if HasCurrentJob:
                     # Attend que le job se termine
                     await asyncio.sleep(5)
                     continue
@@ -239,6 +253,8 @@ class JobManager:
             self.Logger.info(f"Annulation de la vidéo {VideoId}...")
 
             # Si c'est le job en cours, on l'arrête
+            # Note: Petite race condition acceptable ici (fonction synchrone appelée du GUI)
+            # La protection principale est dans ProcessJob (async)
             if self.CurrentJobId == VideoId:
                 self.CurrentJobId = None
                 # Annuler les batches en cours
@@ -301,7 +317,9 @@ class JobManager:
             True si succès
         """
         try:
-            self.CurrentJobId = VideoId
+            # Enregistre le job en cours (protégé par lock)
+            async with self.CurrentJobIdLock:
+                self.CurrentJobId = VideoId
             StartTime = time.time()
 
             self.Logger.info("="*60)
@@ -312,35 +330,40 @@ class JobManager:
             VideoObj = self.Database.GetVideo(VideoId)
             if not VideoObj:
                 self.Logger.error(f"Vidéo {VideoId} non trouvée")
-                self.CurrentJobId = None
+                async with self.CurrentJobIdLock:
+                    self.CurrentJobId = None
                 return False
 
             # Phase 1: EXTRACTION
             Success = await self._PhaseExtraction(VideoObj)
             if not Success:
                 await self._MarkJobFailed(VideoObj, "Échec de l'extraction")
-                self.CurrentJobId = None
+                async with self.CurrentJobIdLock:
+                    self.CurrentJobId = None
                 return False
 
             # Phase 2: DÉCOUPAGE
             Success = await self._PhaseDecoupage(VideoObj)
             if not Success:
                 await self._MarkJobFailed(VideoObj, "Échec du découpage")
-                self.CurrentJobId = None
+                async with self.CurrentJobIdLock:
+                    self.CurrentJobId = None
                 return False
 
             # Phase 3: DISTRIBUTION
             Success = await self._PhaseDistribution(VideoObj)
             if not Success:
                 await self._MarkJobFailed(VideoObj, "Échec de la distribution")
-                self.CurrentJobId = None
+                async with self.CurrentJobIdLock:
+                    self.CurrentJobId = None
                 return False
 
             # Phase 4: RÉASSEMBLAGE
             Success = await self._PhaseReassemblage(VideoObj)
             if not Success:
                 await self._MarkJobFailed(VideoObj, "Échec du réassemblage")
-                self.CurrentJobId = None
+                async with self.CurrentJobIdLock:
+                    self.CurrentJobId = None
                 return False
 
             # Phase 5: ENCODAGE (optionnel)
@@ -360,12 +383,26 @@ class JobManager:
             # Nettoyage des fichiers temporaires (garde la vidéo de sortie)
             self.VideoProcessor.CleanupVideoData(VideoId, KeepOutput=True)
 
-            self.CurrentJobId = None
+            async with self.CurrentJobIdLock:
+                self.CurrentJobId = None
             return True
 
         except Exception as e:
-            self.Logger.error(f"Erreur lors du traitement du job: {e}")
-            self.CurrentJobId = None
+            self.Logger.error(f"Erreur critique lors du traitement du job {VideoId}: {e}", exc_info=True)
+
+            # Met à jour le statut en DB
+            try:
+                VideoObj = self.Database.GetVideo(VideoId)
+                if VideoObj:
+                    VideoObj.Status = JobStatus.FAILED
+                    VideoObj.ErrorMessage = f"Erreur critique: {str(e)}"
+                    VideoObj.CompletedAt = datetime.now()
+                    self.Database.UpdateVideo(VideoObj)
+            except Exception as db_error:
+                self.Logger.error(f"Impossible de mettre à jour la DB après erreur: {db_error}")
+
+            async with self.CurrentJobIdLock:
+                self.CurrentJobId = None
             return False
 
     async def _PhaseExtraction(self, VideoObj: Video) -> bool:
@@ -385,6 +422,10 @@ class JobManager:
             )
 
             if not VideoData:
+                self.Logger.error(f"Échec de l'extraction des données pour {VideoObj.VideoId}")
+                VideoObj.Status = JobStatus.FAILED
+                VideoObj.ErrorMessage = "Échec de l'extraction des données vidéo (codec non supporté ou fichier corrompu)"
+                self.Database.UpdateVideo(VideoObj)
                 return False
 
             # Met à jour les informations
@@ -396,7 +437,10 @@ class JobManager:
             return True
 
         except Exception as e:
-            self.Logger.error(f"Erreur phase extraction: {e}")
+            self.Logger.error(f"Erreur phase extraction: {e}", exc_info=True)
+            VideoObj.Status = JobStatus.FAILED
+            VideoObj.ErrorMessage = f"Erreur lors de l'extraction: {str(e)}"
+            self.Database.UpdateVideo(VideoObj)
             return False
 
     async def _PhaseDecoupage(self, VideoObj: Video) -> bool:
@@ -415,6 +459,10 @@ class JobManager:
             )
 
             if not Success:
+                self.Logger.error(f"Échec du découpage en frames pour {VideoObj.VideoId}")
+                VideoObj.Status = JobStatus.FAILED
+                VideoObj.ErrorMessage = "Échec du découpage de la vidéo en images (erreur FFmpeg)"
+                self.Database.UpdateVideo(VideoObj)
                 return False
 
             # Crée les batches
@@ -426,6 +474,19 @@ class JobManager:
             )
 
             if not Batches:
+                self.Logger.error(f"Échec de la création des batches pour {VideoObj.VideoId}")
+                # Rollback: nettoie les frames créées
+                try:
+                    FramesDir = self.VideoProcessor.GetVideoFramesDir(VideoObj.VideoId)
+                    if os.path.exists(FramesDir):
+                        shutil.rmtree(FramesDir)
+                        self.Logger.info(f"✓ Frames nettoyées après échec création batches")
+                except Exception as cleanup_err:
+                    self.Logger.error(f"Erreur lors du nettoyage des frames: {cleanup_err}")
+
+                VideoObj.Status = JobStatus.FAILED
+                VideoObj.ErrorMessage = "Échec de la création des batches (aucune frame valide trouvée)"
+                self.Database.UpdateVideo(VideoObj)
                 return False
 
             # Met à jour le nombre de batches
@@ -438,7 +499,19 @@ class JobManager:
             return True
 
         except Exception as e:
-            self.Logger.error(f"Erreur phase découpage: {e}")
+            self.Logger.error(f"Erreur phase découpage: {e}", exc_info=True)
+            # Rollback: nettoie les frames créées
+            try:
+                FramesDir = self.VideoProcessor.GetVideoFramesDir(VideoObj.VideoId)
+                if os.path.exists(FramesDir):
+                    shutil.rmtree(FramesDir)
+                    self.Logger.info(f"✓ Frames nettoyées après erreur")
+            except Exception as cleanup_err:
+                self.Logger.error(f"Erreur lors du nettoyage des frames: {cleanup_err}")
+
+            VideoObj.Status = JobStatus.FAILED
+            VideoObj.ErrorMessage = f"Erreur lors du découpage: {str(e)}"
+            self.Database.UpdateVideo(VideoObj)
             return False
 
     async def _PhaseDistribution(self, VideoObj: Video) -> bool:
@@ -466,8 +539,13 @@ class JobManager:
 
                 # Trop d'échecs?
                 if Stats['failed'] > Stats['total'] * 0.5:  # >50% échec
-                    self.Logger.error("Trop de batches échoués")
+                    self.Logger.error(f"Trop de batches échoués ({Stats['failed']}/{Stats['total']})")
                     await self.BatchDistributor.StopDistribution()
+
+                    # Met à jour le statut de la vidéo en DB
+                    VideoObj.Status = JobStatus.FAILED
+                    VideoObj.ErrorMessage = f"Trop de batches ont échoué: {Stats['failed']}/{Stats['total']} ({Stats['failed']/Stats['total']*100:.1f}%)"
+                    self.Database.UpdateVideo(VideoObj)
                     return False
 
                 await asyncio.sleep(5)
@@ -479,13 +557,45 @@ class JobManager:
             return True
 
         except Exception as e:
-            self.Logger.error(f"Erreur phase distribution: {e}")
+            self.Logger.error(f"Erreur phase distribution: {e}", exc_info=True)
+            await self.BatchDistributor.StopDistribution()
+            VideoObj.Status = JobStatus.FAILED
+            VideoObj.ErrorMessage = f"Erreur lors de la distribution: {str(e)}"
+            self.Database.UpdateVideo(VideoObj)
             return False
 
     async def _PhaseReassemblage(self, VideoObj: Video) -> bool:
         """Phase 4: Réassemblage de la vidéo"""
         try:
             self.Logger.info("PHASE 4: RÉASSEMBLAGE")
+
+            # VÉRIFICATION CRITIQUE: S'assure que TOUS les batches sont vraiment COMPLETED
+            from server.database.models import Batch, BatchStatus
+            AllBatches = self.Database.GetBatchesByVideo(VideoObj.VideoId)
+
+            if not AllBatches:
+                self.Logger.error(f"Aucun batch trouvé pour la vidéo {VideoObj.VideoId}")
+                VideoObj.Status = JobStatus.FAILED
+                VideoObj.ErrorMessage = "Aucun batch trouvé pour le réassemblage"
+                self.Database.UpdateVideo(VideoObj)
+                return False
+
+            # Vérifie que tous les batches sont COMPLETED
+            NonCompletedBatches = [b for b in AllBatches if b.Status != BatchStatus.COMPLETED]
+            if NonCompletedBatches:
+                BatchStatuses = {}
+                for batch in NonCompletedBatches:
+                    status = batch.Status.name if hasattr(batch.Status, 'name') else str(batch.Status)
+                    BatchStatuses[batch.BatchId] = status
+
+                self.Logger.error(f"{len(NonCompletedBatches)} batches non complétés: {BatchStatuses}")
+                VideoObj.Status = JobStatus.FAILED
+                VideoObj.ErrorMessage = f"{len(NonCompletedBatches)} batches non complétés, réassemblage impossible"
+                self.Database.UpdateVideo(VideoObj)
+                return False
+
+            self.Logger.info(f"✓ Tous les {len(AllBatches)} batches sont COMPLETED, début réassemblage")
+
             VideoObj.Status = JobStatus.REASSEMBLING
             self.Database.UpdateVideo(VideoObj)
 
@@ -503,6 +613,10 @@ class JobManager:
             )
 
             if not OutputPath:
+                self.Logger.error(f"Échec du réassemblage pour {VideoObj.VideoId}")
+                VideoObj.Status = JobStatus.FAILED
+                VideoObj.ErrorMessage = "Échec du réassemblage de la vidéo (erreur FFmpeg ou images manquantes)"
+                self.Database.UpdateVideo(VideoObj)
                 return False
 
             VideoObj.OutputPath = OutputPath
@@ -512,7 +626,10 @@ class JobManager:
             return True
 
         except Exception as e:
-            self.Logger.error(f"Erreur phase réassemblage: {e}")
+            self.Logger.error(f"Erreur phase réassemblage: {e}", exc_info=True)
+            VideoObj.Status = JobStatus.FAILED
+            VideoObj.ErrorMessage = f"Erreur lors du réassemblage: {str(e)}"
+            self.Database.UpdateVideo(VideoObj)
             return False
 
     async def _PhaseEncodage(self, VideoObj: Video) -> bool:
@@ -544,11 +661,23 @@ class JobManager:
                 self.Logger.info("✓ Encodage AV1 terminé")
                 return True
             else:
-                self.Logger.warning("Encodage AV1 échoué, garde la version H264")
+                self.Logger.warning("Encodage AV1 échoué, conservation de la version H264")
+                # Ajoute un warning (non bloquant) dans ErrorMessage
+                if VideoObj.ErrorMessage:
+                    VideoObj.ErrorMessage += " | Warning: Encodage AV1 échoué, vidéo en H264"
+                else:
+                    VideoObj.ErrorMessage = "Warning: Encodage AV1 échoué, vidéo en H264"
+                self.Database.UpdateVideo(VideoObj)
                 return True  # Pas bloquant
 
         except Exception as e:
-            self.Logger.error(f"Erreur phase encodage: {e}")
+            self.Logger.error(f"Erreur phase encodage: {e}", exc_info=True)
+            # Ajoute un warning (non bloquant) dans ErrorMessage
+            if VideoObj.ErrorMessage:
+                VideoObj.ErrorMessage += f" | Warning: Erreur encodage AV1: {str(e)}"
+            else:
+                VideoObj.ErrorMessage = f"Warning: Erreur encodage AV1: {str(e)}"
+            self.Database.UpdateVideo(VideoObj)
             return True  # Pas bloquant
 
     async def _MarkJobFailed(self, VideoObj: Video, ErrorMessage: str):

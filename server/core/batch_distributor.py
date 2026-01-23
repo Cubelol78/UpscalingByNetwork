@@ -28,6 +28,7 @@ from shared.protocol.messages import BatchAssignment, BatchResult, MessageFactor
 from shared.utils.logger import GetModuleLogger
 from shared.utils.constants import BatchStatus, ClientStatus, NetworkConfig, Limits, RetryConfig
 from shared.utils.retry import RetryAsync, RetryExhaustedError
+from shared.utils.atomic_operations import AtomicImageSave
 from shared.utils.cleanup import CleanupPartialFrames
 from shared.utils.error_events import EmitError, ErrorCategory, ErrorSeverity
 from shared.exceptions import BatchTimeoutError
@@ -154,11 +155,12 @@ class BatchDistributor:
                     AllBatches = self.Database.GetBatchesByVideo(VideoId)
                     CompletedCount = sum(1 for b in AllBatches if b.Status == BatchStatus.COMPLETED)
 
-                    if CompletedCount == len(AllBatches):
+                    # MOYENNE Problème 29: Break immédiat si tous complétés
+                    if CompletedCount == len(AllBatches) and len(AllBatches) > 0:
                         self.Logger.info(f"Tous les batches complétés pour {VideoId}")
                         break
 
-                    # Attend un peu avant de revérifier
+                    # Attend un peu avant de revérifier (backoff pour réduire charge CPU)
                     await asyncio.sleep(5)
                     continue
 
@@ -178,19 +180,37 @@ class BatchDistributor:
                     ClientId = AvailableClients.pop(0)
                     # Crée une tâche pour chaque assignation
                     Task = self._AssignBatchConcurrent(BatchObj.BatchId, ClientId, VideoId)
-                    AssignmentTasks.append(Task)
+                    AssignmentTasks.append((Task, BatchObj))
 
                     if not AvailableClients:
                         break
 
                 # Attend que tous les envois se terminent (avec gestion d'erreurs)
                 if AssignmentTasks:
-                    Results = await asyncio.gather(*AssignmentTasks, return_exceptions=True)
+                    Tasks = [task for task, _ in AssignmentTasks]
+                    Results = await asyncio.gather(*Tasks, return_exceptions=True)
 
-                    # Log les erreurs sans arrêter la boucle
+                    # MOYENNE Problème 9: Remettre batches échoués en PENDING
                     for Index, Result in enumerate(Results):
-                        if isinstance(Result, Exception):
-                            self.Logger.error(f"Erreur lors de l'assignation du batch #{Index}: {Result}")
+                        BatchObj = AssignmentTasks[Index][1]
+                        if isinstance(Result, Exception) or Result is False:
+                            self.Logger.error(
+                                f"Erreur lors de l'assignation du batch {BatchObj.BatchId}: {Result}"
+                            )
+
+                            # Remet le batch en PENDING pour retry
+                            try:
+                                BatchObj.Status = BatchStatus.PENDING
+                                BatchObj.AssignedClientId = None
+                                self.Database.UpdateBatch(BatchObj)
+
+                                # Nettoie ActiveBatches si présent
+                                if BatchObj.BatchId in self.ActiveBatches:
+                                    del self.ActiveBatches[BatchObj.BatchId]
+
+                                self.Logger.debug(f"Batch {BatchObj.BatchId} remis en PENDING après échec assignation")
+                            except Exception as cleanup_err:
+                                self.Logger.error(f"Échec nettoyage batch {BatchObj.BatchId}: {cleanup_err}")
 
                 # Vérifie les timeouts
                 await self._CheckTimeouts()
@@ -227,8 +247,13 @@ class BatchDistributor:
                     # Réinitialise le batch
                     Batch.Status = BatchStatus.PENDING
                     Batch.AssignedClientId = None
-                    self.Database.UpdateBatch(Batch)
-                    RecoveredCount += 1
+
+                    # MOYENNE Problème 27: Vérifier succès UpdateBatch avant incrémenter
+                    UpdateSuccess = self.Database.UpdateBatch(Batch)
+                    if UpdateSuccess:
+                        RecoveredCount += 1
+                    else:
+                        self.Logger.error(f"Échec mise à jour batch {Batch.BatchId} lors de la récupération")
 
             if RecoveredCount > 0:
                 self.Logger.info(f"✓ {RecoveredCount} batch(es) bloqué(s) récupéré(s)")
@@ -341,11 +366,27 @@ class BatchDistributor:
 
             self.Logger.info(f"Attribution du batch {BatchId} au client {ClientId}")
 
-            # Met à jour le statut du batch
+            # CRITIQUE: Met à jour le statut du batch de manière CONDITIONNELLE
+            # Évite race condition : 2 processus ne peuvent pas assigner le même batch
+            # UPDATE conditionnel : SET status=ASSIGNED WHERE batch_id=? AND status=PENDING
+            AssignedAt = datetime.now()
+            UpdateSuccess = self.Database.UpdateBatchConditional(
+                BatchId=BatchId,
+                NewStatus=BatchStatus.ASSIGNED,
+                ExpectedStatus=BatchStatus.PENDING,
+                AssignedClientId=ClientId,
+                AssignedAt=AssignedAt
+            )
+
+            if not UpdateSuccess:
+                # Race condition : batch déjà assigné par un autre processus
+                self.Logger.warning(f"Batch {BatchId} n'est plus PENDING, assignation abandonnée (race condition évitée)")
+                return False
+
+            # Met à jour l'objet en mémoire pour refléter la DB
             BatchObj.Status = BatchStatus.ASSIGNED
             BatchObj.AssignedClientId = ClientId
-            BatchObj.AssignedAt = datetime.now()
-            self.Database.UpdateBatch(BatchObj)
+            BatchObj.AssignedAt = AssignedAt
 
             # Met à jour le statut du client
             self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.RECEIVING)
@@ -359,7 +400,7 @@ class BatchDistributor:
                 self.Database.UpdateBatch(BatchObj)
                 self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.PROCESSING)
 
-                # Track le batch actif
+                # Track le batch actif SEULEMENT si l'envoi a réussi
                 self.ActiveBatches[BatchId] = {
                     "client_id": ClientId,
                     "start_time": time.time(),
@@ -368,11 +409,15 @@ class BatchDistributor:
 
                 return True
             else:
-                # Échec, remet en pending
+                # Échec envoi, remet en pending
+                self.Logger.warning(f"Échec envoi batch {BatchId} au client {ClientId}")
                 BatchObj.Status = BatchStatus.PENDING
                 BatchObj.AssignedClientId = None
                 self.Database.UpdateBatch(BatchObj)
                 self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.IDLE)
+
+                # IMPORTANT: Ne PAS ajouter à ActiveBatches puisque l'envoi a échoué
+                # (le batch n'a jamais été ajouté à ActiveBatches à ce stade)
                 return False
 
         except Exception as e:
@@ -411,6 +456,15 @@ class BatchDistributor:
             # Vérifie que le canal Data est connecté
             ClientInfo = self.ClientManager.Clients.get(ClientId)
             if not ClientInfo or not ClientInfo.IsDataConnected():
+                # HAUTE Problème 15: Vérification connexion Control avant fallback
+                # Risque : Fallback sur Control même si Control déconnecté
+                if not ClientInfo or not ClientInfo.IsControlConnected():
+                    self.Logger.error(
+                        f"Impossible d'envoyer batch {BatchObj.BatchId} à {ClientId}: "
+                        f"Data ET Control déconnectés"
+                    )
+                    return False
+
                 self.Logger.warning(f"Canal Data non connecté pour {ClientId}, fallback sur Control")
                 return await self._SendBatchViaControl(BatchObj, VideoObj, ClientId)
 
@@ -689,92 +743,100 @@ class BatchDistributor:
 
             self.Logger.info(f"Batch {BatchId}: {ReceivedCount}/{ExpectedCount} images reçues")
 
+            # CRITIQUE Problème 16: Validation continuité des numéros de frames
+            # Vérifie que toutes les frames attendues sont présentes (pas seulement le nombre)
+            # Risque: Accepter batch incomplet (ex: frames 1,2,5,6 au lieu de 1-4)
+            ExpectedFrames = set(range(BatchObj.StartFrame, BatchObj.EndFrame + 1))
+            ReceivedFrames = {img.get("number") for img in UpscaledImages}
+
+            if ExpectedFrames != ReceivedFrames:
+                Missing = ExpectedFrames - ReceivedFrames
+                Extra = ReceivedFrames - ExpectedFrames
+                self.Logger.error(
+                    f"Batch {BatchId}: Frames discontinues - "
+                    f"Manquantes: {sorted(Missing) if Missing else 'aucune'}, "
+                    f"Extra: {sorted(Extra) if Extra else 'aucune'}"
+                )
+
+                # Marque le batch en erreur avec message détaillé
+                BatchObj.Status = BatchStatus.FAILED
+                BatchObj.RetryCount += 1
+                BatchObj.ErrorMessage = (
+                    f"Frames discontinues - "
+                    f"Manquantes: {sorted(Missing) if Missing else 'aucune'}, "
+                    f"Extra: {sorted(Extra) if Extra else 'aucune'}"
+                )
+                self.Database.UpdateBatch(BatchObj)
+
+                # Retire du tracking
+                if BatchId in self.ActiveBatches:
+                    del self.ActiveBatches[BatchId]
+
+                # Remet le client en idle si pas d'autres batches
+                self._SetClientIdleIfNoOtherBatches(ClientId)
+                return False
+
             # Sauvegarde les images upscalées
             VideoId = BatchObj.VideoId
             UpscaledDir = self.VideoProcessor.GetUpscaledDir(VideoId)
-            os.makedirs(UpscaledDir, exist_ok=True)
 
-            SavedCount = 0
-            FailedImages = []
+            try:
+                # CRITIQUE Problème 12: Transaction atomique pour sauvegarde images
+                # Garantit que TOUTES les images sont sauvegardées ou AUCUNE
+                # Risque : Sauvegarde partielle → images orphelines → FFmpeg échouera
+                async with AtomicImageSave(UpscaledDir, logger=self.Logger) as atomic:
+                    for ImageData in UpscaledImages:
+                        # Extraction des données
+                        FrameNumber = ImageData.get("number")
+                        ImageB64 = ImageData.get("data")
+                        ReceivedFormat = ImageData.get("format", "png")
 
-            # Traite les images en parallèle pour ne pas bloquer l'event loop
-            SaveTasks = []
-            for ImageData in UpscaledImages:
-                SaveTasks.append(self._SaveUpscaledImage(ImageData, UpscaledDir))
+                        if not ImageB64:
+                            raise ValueError(f"Données manquantes pour frame {FrameNumber}")
 
-            # Attend que toutes les sauvegardes se terminent
-            SaveResults = await asyncio.gather(*SaveTasks, return_exceptions=True)
+                        # Décode l'image
+                        ImageBytes = base64.b64decode(ImageB64)
 
-            # Compte les succès/échecs
-            for Index, Result in enumerate(SaveResults):
-                if isinstance(Result, Exception):
-                    FailedImages.append(UpscaledImages[Index].get("number", "?"))
-                    self.Logger.error(f"Erreur lors de la sauvegarde de l'image: {Result}")
-                elif Result:
-                    SavedCount += 1
-                else:
-                    FailedImages.append(UpscaledImages[Index].get("number", "?"))
+                        # Convertit en PNG si nécessaire (FFmpeg compatibility)
+                        if ReceivedFormat != "png":
+                            try:
+                                Buffer = io.BytesIO(ImageBytes)
+                                with Image.open(Buffer) as Img:
+                                    OutputBuffer = io.BytesIO()
+                                    Img.save(OutputBuffer, format='PNG')
+                                    ImageBytes = OutputBuffer.getvalue()
+                            except Exception as conv_err:
+                                raise ValueError(
+                                    f"Échec conversion {ReceivedFormat}->PNG frame {FrameNumber}: {conv_err}"
+                                )
 
-            # Vérification du résultat de sauvegarde
-            if SavedCount == 0:
-                # Échec total - aucune image sauvegardée
-                self.Logger.error(f"Batch {BatchId}: Échec total - 0/{ReceivedCount} images sauvegardées")
+                        # Sauvegarde dans le dossier temporaire atomique
+                        Filename = f"frame_{FrameNumber:08d}.png"
+                        await atomic.SaveImage(Filename, ImageBytes)
 
-                # Incrémente le compteur de retry (statistiques uniquement)
+                # Si on arrive ici : toutes les images sauvegardées avec succès (commit auto)
+                self.Logger.info(
+                    f"✓ Batch {BatchId}: {len(UpscaledImages)} images sauvegardées (transaction atomique)"
+                )
+
+            except Exception as e:
+                # Échec : rollback automatique du context manager
+                self.Logger.error(f"Batch {BatchId}: Échec sauvegarde atomique - {e}", exc_info=True)
+
+                # Marque le batch en erreur et remet en PENDING pour retry
                 BatchObj.RetryCount += 1
-                BatchObj.ErrorMessage = "Aucune image sauvegardée sur le serveur"
+                BatchObj.ErrorMessage = f"Échec sauvegarde images: {str(e)}"
+                BatchObj.Status = BatchStatus.PENDING
+                BatchObj.AssignedClientId = None
+                self.Database.UpdateBatch(BatchObj)
 
                 # Retire du tracking
                 if BatchId in self.ActiveBatches:
                     del self.ActiveBatches[BatchId]
 
-                # Toujours remettre en PENDING pour retry (pas de limite)
-                self.Logger.warning(f"⟳ Batch {BatchId} remis en file d'attente (tentative #{BatchObj.RetryCount})")
-                BatchObj.Status = BatchStatus.PENDING
-                BatchObj.AssignedClientId = None
-                self.Database.UpdateBatch(BatchObj)
-
-                # Remet le client en idle si pas d'autres batches
+                # Remet le client en idle
                 self._SetClientIdleIfNoOtherBatches(ClientId)
                 return False
-
-            elif SavedCount < ExpectedCount:
-                # Succès partiel - certaines images manquantes
-                # Selon la configuration: supprimer les résultats partiels et réassigner le batch
-                self.Logger.warning(
-                    f"Batch {BatchId}: Succès partiel - {SavedCount}/{ExpectedCount} images sauvegardées. "
-                    f"Images manquantes: {FailedImages}"
-                )
-
-                # Nettoyage des images partiellement sauvegardées
-                self.Logger.info(f"Nettoyage des images partielles du batch {BatchId}...")
-                CleanedCount = CleanupPartialFrames(
-                    UpscaledDir,
-                    BatchObj.StartFrame,
-                    BatchObj.EndFrame,
-                    logger=self.Logger
-                )
-                self.Logger.info(f"✓ {CleanedCount} images partielles supprimées")
-
-                # Incrémente le compteur de retry
-                BatchObj.RetryCount += 1
-                BatchObj.ErrorMessage = f"Batch partiel: {SavedCount}/{ExpectedCount} images"
-
-                # Retire du tracking
-                if BatchId in self.ActiveBatches:
-                    del self.ActiveBatches[BatchId]
-
-                # Remet en PENDING pour réassignation complète
-                self.Logger.warning(f"⟳ Batch {BatchId} remis en file d'attente (tentative #{BatchObj.RetryCount})")
-                BatchObj.Status = BatchStatus.PENDING
-                BatchObj.AssignedClientId = None
-                self.Database.UpdateBatch(BatchObj)
-
-                # Remet le client en idle si pas d'autres batches
-                self._SetClientIdleIfNoOtherBatches(ClientId)
-                return False
-
-            self.Logger.info(f"✓ {SavedCount}/{ExpectedCount} images upscalées sauvegardées")
 
             # Marque le batch comme complété
             BatchObj.Status = BatchStatus.COMPLETED
@@ -786,9 +848,13 @@ class BatchDistributor:
             if VideoObj:
                 VideoObj.CompletedBatches += 1
                 VideoObj.UpdateProgress()
-                self.Database.UpdateVideo(VideoObj)
-
-                self.Logger.info(f"Progression vidéo: {VideoObj.CompletedBatches}/{VideoObj.TotalBatches} ({VideoObj.Progress*100:.1f}%)")
+                try:
+                    self.Database.UpdateVideo(VideoObj)
+                    self.Logger.info(f"Progression vidéo: {VideoObj.CompletedBatches}/{VideoObj.TotalBatches} ({VideoObj.Progress*100:.1f}%)")
+                except Exception as db_error:
+                    self.Logger.error(f"Erreur mise à jour progression vidéo {VideoId}: {db_error}")
+            else:
+                self.Logger.error(f"ERREUR: Vidéo {VideoId} introuvable dans la DB pour batch {BatchId}!")
 
             # Retire du tracking
             if BatchId in self.ActiveBatches:
@@ -800,7 +866,32 @@ class BatchDistributor:
             return True
 
         except Exception as e:
-            self.Logger.error(f"Erreur lors de la réception du résultat: {e}")
+            self.Logger.error(f"Erreur critique lors de la réception du résultat batch {ResultMessage.Payload.get('batch_id', 'unknown')}: {e}", exc_info=True)
+
+            # Récupère le BatchId depuis le ResultMessage
+            BatchId = ResultMessage.Payload.get("batch_id")
+
+            if BatchId:
+                # Met à jour le statut du batch en PENDING pour retry
+                try:
+                    BatchObj = self.Database.GetBatch(BatchId)
+                    if BatchObj:
+                        BatchObj.Status = BatchStatus.PENDING
+                        BatchObj.AssignedClientId = None
+                        BatchObj.RetryCount += 1
+                        self.Database.UpdateBatch(BatchObj)
+                        self.Logger.warning(f"Batch {BatchId} remis en PENDING après erreur")
+                except Exception as db_error:
+                    self.Logger.error(f"Impossible de mettre à jour le batch après erreur: {db_error}")
+
+                # Nettoie ActiveBatches
+                if BatchId in self.ActiveBatches:
+                    del self.ActiveBatches[BatchId]
+
+            # Remet le client en idle
+            if ClientId:
+                self._SetClientIdleIfNoOtherBatches(ClientId)
+
             return False
 
     async def _SaveUpscaledImage(self, ImageData: dict, UpscaledDir: str) -> bool:
@@ -849,7 +940,8 @@ class BatchDistributor:
                 return True
 
             except Exception as e:
-                raise e
+                # MOYENNE Problème 28: raise au lieu de raise e (préserve traceback)
+                raise
 
         # Exécute la sauvegarde dans un thread séparé
         return await asyncio.to_thread(_DoSave)
@@ -867,12 +959,17 @@ class BatchDistributor:
                     self.Logger.warning(f"Batch {BatchId} en timeout ({ElapsedTime:.0f}s)")
                     TimeoutBatches.append(BatchId)
 
-            # Gère les timeouts
+            # Gère les timeouts - CRITIQUE: wrapper individuel pour éviter qu'un échec bloque les autres
             for BatchId in TimeoutBatches:
-                await self.HandleTimeout(BatchId)
+                try:
+                    await self.HandleTimeout(BatchId)
+                except Exception as e:
+                    self.Logger.error(f"Erreur HandleTimeout pour batch {BatchId}: {e}", exc_info=True)
+                    # Continue avec les autres batches en timeout
+                    continue
 
         except Exception as e:
-            self.Logger.error(f"Erreur lors de la vérification des timeouts: {e}")
+            self.Logger.error(f"Erreur critique lors de la vérification des timeouts: {e}", exc_info=True)
 
     async def HandleTimeout(self, BatchId: str):
         """
@@ -906,28 +1003,51 @@ class BatchDistributor:
             # Récupère le batch
             BatchObj = self.Database.GetBatch(BatchId)
             if not BatchObj:
+                # ALERTE CRITIQUE: batch dans ActiveBatches mais pas dans DB!
+                self.Logger.critical(f"CORRUPTION: Batch {BatchId} dans ActiveBatches mais absent de la DB!")
                 del self.ActiveBatches[BatchId]
                 return
 
             # Incrémente le compteur de retry (statistiques uniquement)
             BatchObj.RetryCount += 1
 
-            # Retire du tracking
+            # CRITIQUE: Remettre en PENDING dans la DB D'ABORD, PUIS retirer de ActiveBatches
+            # Ceci garantit la cohérence : le batch est toujours dans un état valide
+            self.Logger.warning(f"⟳ Batch {BatchId} remis en file d'attente après timeout (tentative #{BatchObj.RetryCount})")
+            BatchObj.Status = BatchStatus.PENDING
+            BatchObj.AssignedClientId = None
+            self.Database.UpdateBatch(BatchObj)
+
+            # MAINTENANT on peut retirer du tracking en mémoire
             del self.ActiveBatches[BatchId]
 
             # Remet le client en IDLE au lieu de le déconnecter
             # Le heartbeat monitoring se charge de déconnecter les clients inactifs
             self._SetClientIdleIfNoOtherBatches(ClientId)
 
-            # Toujours remettre en PENDING pour retry (pas de limite)
-            self.Logger.warning(f"⟳ Batch {BatchId} remis en file d'attente après timeout (tentative #{BatchObj.RetryCount})")
-            await asyncio.sleep(Limits.RETRY_DELAY)
-            BatchObj.Status = BatchStatus.PENDING
-            BatchObj.AssignedClientId = None
-            self.Database.UpdateBatch(BatchObj)
-
         except Exception as e:
-            self.Logger.error(f"Erreur lors de la gestion du timeout: {e}")
+            # MOYENNE Problème 25: Logger CRITICAL et remonter via ErrorEventManager
+            self.Logger.critical(
+                f"ERREUR CRITIQUE lors de la gestion du timeout pour batch {BatchId}: {e}",
+                exc_info=True
+            )
+
+            # Émet un événement d'erreur critique
+            EmitError(
+                e,
+                ErrorCategory.BATCH,
+                ErrorSeverity.CRITICAL,
+                "BatchDistributor.HandleTimeout",
+                context={"batch_id": BatchId},
+                recoverable=False
+            )
+
+            # Tente de nettoyer ActiveBatches même en cas d'erreur
+            try:
+                if BatchId in self.ActiveBatches:
+                    del self.ActiveBatches[BatchId]
+            except Exception:
+                pass
 
     async def ReassignClientBatches(self, ClientId: str):
         """
@@ -954,13 +1074,22 @@ class BatchDistributor:
                 # Retire du tracking actif
                 del self.ActiveBatches[BatchId]
 
-                # Remet le batch en PENDING dans la base de données
+                # CRITIQUE Problème 20: Vérification état avant réallocation
+                # Risque : Remettre batch COMPLETED en PENDING
                 BatchObj = self.Database.GetBatch(BatchId)
                 if BatchObj:
-                    BatchObj.Status = BatchStatus.PENDING
-                    BatchObj.AssignedClientId = None
-                    # Pas d'incrément de RetryCount car ce n'est pas une erreur
-                    self.Database.UpdateBatch(BatchObj)
+                    # Vérifie que le batch est dans un état valide pour réallocation
+                    if BatchObj.Status in [BatchStatus.ASSIGNED, BatchStatus.PROCESSING]:
+                        BatchObj.Status = BatchStatus.PENDING
+                        BatchObj.AssignedClientId = None
+                        # Pas d'incrément de RetryCount car ce n'est pas une erreur
+                        self.Database.UpdateBatch(BatchObj)
+                        self.Logger.debug(f"Batch {BatchId} remis en PENDING pour réallocation")
+                    else:
+                        # Le batch est déjà dans un état final (COMPLETED, FAILED)
+                        self.Logger.warning(
+                            f"Batch {BatchId} ignoré pour réallocation (état: {BatchObj.Status})"
+                        )
                     self.Logger.info(f"Batch {BatchId} remis en file d'attente")
 
         except Exception as e:
@@ -974,9 +1103,10 @@ class BatchDistributor:
         Args:
             ClientId: ID du client
         """
+        # MOYENNE Problème 30: Copie pour éviter "dictionary changed size during iteration"
         ClientHasOtherBatches = any(
             Info.get("client_id") == ClientId
-            for Info in self.ActiveBatches.values()
+            for Info in list(self.ActiveBatches.values())
         )
         if not ClientHasOtherBatches:
             self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.IDLE)
@@ -995,7 +1125,10 @@ class BatchDistributor:
             # Validation minimale
             NewLimit = max(1, NewLimit)
 
-            # Crée un nouveau semaphore avec la nouvelle limite
+            # MOYENNE Problème 26: Créer nouveau semaphore sans bloquer tâches en cours
+            # Les tâches qui ont déjà acquis l'ancien semaphore (via async with)
+            # conservent leur référence locale et continueront normalement.
+            # Seules les NOUVELLES tâches utiliseront le nouveau semaphore.
             self.SendSemaphore = asyncio.Semaphore(NewLimit)
 
             self.Logger.info(f"Limite d'envois concurrents mise à jour: {NewLimit}")
@@ -1017,20 +1150,30 @@ class BatchDistributor:
             if self.Running:
                 asyncio.create_task(self.StopDistribution())
 
+            # HAUTE Problème 21: Thread-safe CancelVideoProcessing
+            # Risque : Modification ActiveBatches pendant itération
             # Retire tous les batches actifs de cette vidéo du tracking
             BatchesToRemove = []
-            for BatchId, BatchInfo in self.ActiveBatches.items():
+            # Copie pour éviter "dictionary changed size during iteration"
+            for BatchId, BatchInfo in list(self.ActiveBatches.items()):
                 BatchObj = self.Database.GetBatch(BatchId)
                 if BatchObj and BatchObj.VideoId == VideoId:
-                    BatchesToRemove.append(BatchId)
-                    # Remet le client en idle
-                    ClientId = BatchInfo.get("client_id")
-                    if ClientId:
-                        self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.IDLE)
+                    BatchesToRemove.append((BatchId, BatchObj, BatchInfo))
 
-            for BatchId in BatchesToRemove:
+            for BatchId, BatchObj, BatchInfo in BatchesToRemove:
+                # Marque le batch comme FAILED dans la DB
+                BatchObj.Status = BatchStatus.FAILED
+                BatchObj.ErrorMessage = "Traitement annulé par l'utilisateur"
+                self.Database.UpdateBatch(BatchObj)
+
+                # Retire du tracking
                 del self.ActiveBatches[BatchId]
-                self.Logger.info(f"Batch {BatchId} retiré du tracking actif")
+                self.Logger.info(f"Batch {BatchId} annulé et retiré du tracking")
+
+                # Remet le client en idle
+                ClientId = BatchInfo.get("client_id")
+                if ClientId:
+                    self.ClientManager.UpdateClientStatus(ClientId, ClientStatus.IDLE)
 
             self.Logger.info(f"✓ Traitement annulé pour la vidéo {VideoId}")
 
