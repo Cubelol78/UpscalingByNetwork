@@ -40,10 +40,14 @@ def ConfigureSocket(Writer: asyncio.StreamWriter, Logger):
 
         if IsWindows:
             # Windows: configure keepalive avec SIO_KEEPALIVE_VALS
-            Sock.ioctl(
-                socket.SIO_KEEPALIVE_VALS,
-                (1, 30000, 10000)  # 30s idle, 10s interval
-            )
+            # Vérifie que le socket supporte ioctl (pas un TransportSocket)
+            if hasattr(Sock, 'ioctl'):
+                Sock.ioctl(
+                    socket.SIO_KEEPALIVE_VALS,
+                    (1, 30000, 10000)  # 30s idle, 10s interval
+                )
+            else:
+                Logger.debug("Socket wrapper détecté, configuration keepalive Windows ignorée")
         else:
             # Linux/Unix: utilise les options TCP standard
             if hasattr(socket, 'TCP_KEEPIDLE'):
