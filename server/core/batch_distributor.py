@@ -190,27 +190,18 @@ class BatchDistributor:
                     Tasks = [task for task, _ in AssignmentTasks]
                     Results = await asyncio.gather(*Tasks, return_exceptions=True)
 
-                    # MOYENNE Problème 9: Remettre batches échoués en PENDING
+                    # Log les erreurs (le rollback est déjà géré dans AssignBatch)
                     for Index, Result in enumerate(Results):
                         BatchObj = AssignmentTasks[Index][1]
-                        if isinstance(Result, Exception) or Result is False:
+                        if isinstance(Result, Exception):
                             self.Logger.error(
-                                f"Erreur lors de l'assignation du batch {BatchObj.BatchId}: {Result}"
+                                f"Erreur lors de l'assignation du batch {BatchObj.BatchId}: {Result}",
+                                exc_info=True
                             )
-
-                            # Remet le batch en PENDING pour retry
-                            try:
-                                BatchObj.Status = BatchStatus.PENDING
-                                BatchObj.AssignedClientId = None
-                                self.Database.UpdateBatch(BatchObj)
-
-                                # Nettoie ActiveBatches si présent
-                                if BatchObj.BatchId in self.ActiveBatches:
-                                    del self.ActiveBatches[BatchObj.BatchId]
-
-                                self.Logger.debug(f"Batch {BatchObj.BatchId} remis en PENDING après échec assignation")
-                            except Exception as cleanup_err:
-                                self.Logger.error(f"Échec nettoyage batch {BatchObj.BatchId}: {cleanup_err}")
+                        elif Result is False:
+                            # AssignBatch a retourné False (race condition ou échec envoi)
+                            # Le rollback est déjà géré en interne par AssignBatch, pas besoin de le refaire ici
+                            self.Logger.debug(f"Assignation du batch {BatchObj.BatchId} échouée (déjà géré)")
 
                 # Vérifie les timeouts
                 await self._CheckTimeouts()
@@ -453,12 +444,17 @@ class BatchDistributor:
             True si succès
         """
         try:
-            # Vérifie que le canal Data est connecté
+            # Vérifie que le client existe
             ClientInfo = self.ClientManager.Clients.get(ClientId)
-            if not ClientInfo or not ClientInfo.IsDataConnected():
+            if not ClientInfo:
+                self.Logger.error(f"Client {ClientId} introuvable")
+                return False
+
+            # Vérifie que le canal Data est connecté
+            if not ClientInfo.IsDataConnected():
                 # HAUTE Problème 15: Vérification connexion Control avant fallback
                 # Risque : Fallback sur Control même si Control déconnecté
-                if not ClientInfo or not ClientInfo.IsControlConnected():
+                if not ClientInfo.IsControlConnected():
                     self.Logger.error(
                         f"Impossible d'envoyer batch {BatchObj.BatchId} à {ClientId}: "
                         f"Data ET Control déconnectés"

@@ -369,6 +369,7 @@ class UpscalingClient:
         Les batches sont reçus via _DataReceiveLoop().
         Gère la reconnexion automatique en cas de perte de connexion.
         """
+        self.Logger.info("MainLoop démarrée - Écoute canal Control pour heartbeats")
         while self.Running:
             try:
                 while self.Running and not self._StopRequested:
@@ -472,6 +473,7 @@ class UpscalingClient:
         Boucle de reception sur le canal Data.
         Recoit les BatchAssignment du serveur.
         """
+        self.Logger.info("DataReceiveLoop démarrée - Écoute canal Data pour batches")
         try:
             while self.Running and not self._StopRequested:
                 # Recoit un batch via le canal Data (timeout court pour reagir vite)
@@ -538,6 +540,7 @@ class UpscalingClient:
         """
         try:
             PingTimestamp = PingMessage.Payload.get("timestamp")
+            self.Logger.info(f"Heartbeat ping reçu (timestamp: {PingTimestamp})")
 
             # Crée la réponse pong
             Pong = HeartbeatPong(
