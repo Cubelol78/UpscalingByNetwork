@@ -158,6 +158,14 @@ class ClientWindow(QMainWindow):
                     # Start() retourne True si connexion réussie, False sinon
                     Success = loop.run_until_complete(self.Client.Start(Host, Port, Password))
                     ConnectionResult.set_result(Success)
+
+                    # CRITIQUE: Garde le loop actif pour que les tâches (MainLoop, DataReceiveLoop) s'exécutent
+                    # Sans cela, le loop se ferme immédiatement et les tâches ne démarrent jamais
+                    if Success and self.Client.MainLoopTask:
+                        self.Logger.info("Event loop actif, les boucles de réception démarrent...")
+                        # Attend que MainLoop se termine (déconnexion ou erreur)
+                        loop.run_until_complete(self.Client.MainLoopTask)
+
                 except Exception as e:
                     self.Logger.error(f"Erreur dans la boucle client: {e}")
                     ConnectionResult.set_exception(e)
