@@ -15,6 +15,7 @@ from .connection_tab import ConnectionTab
 from .monitoring_tab import MonitoringTab
 from .servers_tab import ServersTab
 from .performance_tab import PerformanceTab
+from .update_tab import UpdateTab
 
 from client.core.client import UpscalingClient
 from client.core.connection import ConnectionManager
@@ -114,11 +115,13 @@ class ClientWindow(QMainWindow):
         self.MonitoringTab = MonitoringTab(self)
         self.ServersTab = ServersTab(self)
         self.PerformanceTab = PerformanceTab(self)
+        self.UpdateTab = UpdateTab(self)
 
         self.Tabs.addTab(self.ConnectionTab, "🔌 Connexion")
         self.Tabs.addTab(self.MonitoringTab, "📊 Monitoring")
         self.Tabs.addTab(self.ServersTab, "💾 Serveurs")
         self.Tabs.addTab(self.PerformanceTab, "⚙️ Configuration")
+        self.Tabs.addTab(self.UpdateTab, "🔄 Mise a jour")
 
         MainLayout.addWidget(self.Tabs)
 

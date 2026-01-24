@@ -75,7 +75,13 @@ class PerformanceConfigManager:
         "compression_level": CompressionConfig.LEVEL_DEFAULT,  # Niveau de compression reseau (1-10)
         "work_directory": "",  # Vide = utilise ~/.upscaling_client/ par defaut
         # Pipeline multi-batch
-        "max_concurrent_batches": 2   # Nombre max de batches en pipeline (1 = desactive)
+        "max_concurrent_batches": 2,  # Nombre max de batches en pipeline (1 = desactive)
+        # Parametres de mise a jour
+        "update_channel": "release",  # Canal de mise a jour (dev ou release)
+        "update_auto_check": False,   # Verification automatique des mises a jour au demarrage (desactive par defaut)
+        "update_auto_apply": False,   # Appliquer les mises a jour automatiquement sans confirmation
+        "update_last_check": "",      # Date de la derniere verification de mise a jour
+        "update_skipped_version": ""  # Version ignoree par l'utilisateur
     }
 
     def __init__(self, ConfigDir: Optional[str] = None):

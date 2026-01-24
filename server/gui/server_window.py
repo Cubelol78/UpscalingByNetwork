@@ -16,6 +16,7 @@ from .dashboard_tab import DashboardTab
 from .clients_tab import ClientsTab
 from .jobs_tab import JobsTab
 from .config_tab import ConfigTab
+from .update_tab import UpdateTab
 
 from server.core.server import UpscalingServer
 from server.core.job_manager import JobManager
@@ -84,11 +85,13 @@ class ServerWindow(QMainWindow):
         self.ClientsTab = ClientsTab(self)
         self.JobsTab = JobsTab(self)
         self.ConfigTab = ConfigTab(self)
+        self.UpdateTab = UpdateTab(self)
 
         self.Tabs.addTab(self.DashboardTab, "📊 Dashboard")
         self.Tabs.addTab(self.ClientsTab, "💻 Clients")
         self.Tabs.addTab(self.JobsTab, "🎬 Jobs")
         self.Tabs.addTab(self.ConfigTab, "⚙️ Configuration")
+        self.Tabs.addTab(self.UpdateTab, "🔄 Mise a jour")
 
         MainLayout.addWidget(self.Tabs)
 

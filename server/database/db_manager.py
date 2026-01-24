@@ -29,6 +29,12 @@ DEFAULT_PARAMETERS = {
     "batch_size": ("100", "Nombre d'images par batch"),
     "compression_level": ("5", "Niveau de compression réseau (1=rapide, 10=max)"),
     "max_concurrent_batches": ("3", "Nombre maximum d'envois simultanés de batches"),
+    # Paramètres de mise à jour
+    "update_channel": ("release", "Canal de mise à jour (dev ou release)"),
+    "update_auto_check": ("false", "Vérification automatique des mises à jour au démarrage"),
+    "update_auto_apply": ("false", "Appliquer les mises à jour automatiquement sans confirmation"),
+    "update_last_check": ("", "Date de la dernière vérification de mise à jour"),
+    "update_skipped_version": ("", "Version ignorée par l'utilisateur"),
 }
 
 

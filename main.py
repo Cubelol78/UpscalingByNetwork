@@ -271,6 +271,169 @@ def CheckFirewallPermissions(AppName: str, AutoAccept: bool = False) -> bool:
     return True
 
 
+def HandleUpdate(Args):
+    """
+    Gère la vérification et l'application des mises à jour
+
+    Args:
+        Args: Arguments parsés de argparse
+
+    Returns:
+        True si le programme doit continuer, False si on doit quitter
+    """
+    try:
+        from shared.utils.updater import UpdateManager
+        from shared.utils.updater.github_client import NetworkError, RateLimitError
+        from shared.utils.constants import UpdateConfig
+    except ImportError as e:
+        print(f"⚠ Module de mise à jour non disponible: {e}")
+        return True
+
+    Manager = UpdateManager()
+
+    # Finalise une mise à jour précédente si nécessaire (main.py.new -> main.py)
+    if Manager.FinalizeSelfUpdate():
+        print("✓ Mise à jour précédente finalisée")
+
+    # Détermine le canal (argument CLI > DB > défaut)
+    Channel = Args.channel
+    if not Channel:
+        try:
+            from server.database.db_manager import DatabaseManager
+            Db = DatabaseManager()
+            if Db.Connect():
+                Db.InitializeDefaultParameters()
+                Channel = Db.GetParameter("update_channel", UpdateConfig.DEFAULT_CHANNEL)
+                AutoCheck = Db.GetParameterBool("update_auto_check", True)
+                AutoApply = Db.GetParameterBool("update_auto_apply", False)
+                SkippedVersion = Db.GetParameter("update_skipped_version", "")
+                Db.Close()
+            else:
+                Channel = UpdateConfig.DEFAULT_CHANNEL
+                AutoCheck = True
+                AutoApply = False
+                SkippedVersion = ""
+        except Exception:
+            Channel = UpdateConfig.DEFAULT_CHANNEL
+            AutoCheck = True
+            AutoApply = False
+            SkippedVersion = ""
+    else:
+        AutoCheck = True
+        AutoApply = False
+        SkippedVersion = ""
+
+    # --check-update : vérifie et affiche le statut
+    if Args.check_update:
+        print(f"\nVérification des mises à jour (canal: {Channel})...")
+        try:
+            Info = Manager.CheckUpdate(Channel)
+            if Info.Available:
+                print(f"✓ Nouvelle version disponible: {Info.NewVersion}")
+                if Info.Changelog:
+                    print(f"\nNouveautés:\n{Info.Changelog[:500]}...")
+            else:
+                print(f"✓ Vous utilisez la dernière version ({Info.CurrentVersion})")
+        except NetworkError:
+            print("✗ Impossible de vérifier les mises à jour (hors ligne)")
+        except RateLimitError:
+            print("✗ Limite API GitHub atteinte. Réessayez plus tard.")
+        except Exception as e:
+            print(f"✗ Erreur: {e}")
+        return False  # Quitte après --check-update
+
+    # --update : force la mise à jour
+    if Args.update:
+        print(f"\nMise à jour forcée (canal: {Channel})...")
+        try:
+            Info = Manager.CheckUpdate(Channel)
+            if not Info.Available:
+                print(f"✓ Déjà à jour ({Info.CurrentVersion})")
+                return True
+
+            print(f"Mise à jour: {Info.CurrentVersion} → {Info.NewVersion}")
+
+            # Demande confirmation sauf si --yes
+            if not Args.auto_accept:
+                Response = input("Voulez-vous continuer ? (oui/non): ").strip().lower()
+                if Response not in ["oui", "o", "yes", "y"]:
+                    print("Mise à jour annulée")
+                    return True
+
+            print("Application de la mise à jour...")
+            Manager.ApplyUpdate(Info)
+            print("✓ Mise à jour appliquée avec succès")
+            print("Redémarrage...")
+            Manager.RequestRestart()
+            return False  # Ne devrait pas arriver (execv)
+
+        except NetworkError:
+            print("✗ Impossible de télécharger la mise à jour (hors ligne)")
+        except RateLimitError:
+            print("✗ Limite API GitHub atteinte. Réessayez plus tard.")
+        except Exception as e:
+            print(f"✗ Erreur lors de la mise à jour: {e}")
+        return True
+
+    # Vérification automatique au démarrage (sauf si --skip-update)
+    if Args.skip_update or not AutoCheck:
+        return True
+
+    try:
+        Info = Manager.CheckUpdate(Channel)
+
+        if not Info.Available:
+            return True
+
+        # Ignore si c'est une version déjà ignorée
+        if SkippedVersion and Info.NewVersion == SkippedVersion:
+            return True
+
+        print(f"\n✓ Nouvelle version disponible: {Info.NewVersion}")
+
+        # Auto-apply si configuré ou --yes
+        if AutoApply or Args.auto_accept:
+            print("Application automatique de la mise à jour...")
+            Manager.ApplyUpdate(Info)
+            print("✓ Mise à jour appliquée. Redémarrage...")
+            Manager.RequestRestart()
+            return False
+
+        # Demande confirmation
+        print("Voulez-vous mettre à jour maintenant ?")
+        Response = input("(oui/non/ignorer): ").strip().lower()
+
+        if Response in ["oui", "o", "yes", "y"]:
+            print("Application de la mise à jour...")
+            Manager.ApplyUpdate(Info)
+            print("✓ Mise à jour appliquée. Redémarrage...")
+            Manager.RequestRestart()
+            return False
+        elif Response in ["ignorer", "ignore", "i"]:
+            # Enregistre la version ignorée
+            try:
+                from server.database.db_manager import DatabaseManager
+                Db = DatabaseManager()
+                if Db.Connect():
+                    Db.SetParameter("update_skipped_version", Info.NewVersion)
+                    Db.Close()
+            except Exception:
+                pass
+            print(f"Version {Info.NewVersion} ignorée")
+
+        return True
+
+    except NetworkError:
+        # Silencieux si hors ligne au démarrage auto
+        return True
+    except RateLimitError:
+        print("⚠ Limite API GitHub atteinte pour la vérification des mises à jour")
+        return True
+    except Exception as e:
+        print(f"⚠ Erreur lors de la vérification des mises à jour: {e}")
+        return True
+
+
 def LaunchServer(CliMode, AutoAccept=False):
     """
     Lance le serveur
@@ -356,8 +519,15 @@ Exemples d'utilisation:
   python main.py --server --cli     Lancement direct du serveur (CLI)
   python main.py --client           Lancement direct du client (GUI)
   python main.py --client --cli     Lancement direct du client (CLI)
-  python main.py --server --yes     Serveur avec auto-acceptation (venv, pare-feu)
+  python main.py --server --yes     Serveur avec auto-acceptation (venv, pare-feu, MAJ)
   python main.py --client -y        Client avec auto-acceptation (raccourci)
+
+Mise à jour:
+  python main.py --check-update     Vérifie si une mise à jour est disponible
+  python main.py --update           Force la mise à jour
+  python main.py --update --yes     Met à jour sans confirmation
+  python main.py --channel=dev      Utilise le canal dev (derniers commits)
+  python main.py --skip-update      Ignore la vérification de mise à jour
         """
     )
     Parser.add_argument(
@@ -389,6 +559,31 @@ Exemples d'utilisation:
         action="store_true",
         dest="auto_accept",
         help="Alias pour --yes"
+    )
+
+    # Groupe mise à jour
+    UpdateGroup = Parser.add_argument_group("Mise à jour")
+    UpdateGroup.add_argument(
+        "--update",
+        action="store_true",
+        help="Force la mise à jour immédiatement"
+    )
+    UpdateGroup.add_argument(
+        "--check-update",
+        action="store_true",
+        dest="check_update",
+        help="Vérifie si une mise à jour est disponible (sans installer)"
+    )
+    UpdateGroup.add_argument(
+        "--channel",
+        choices=["dev", "release"],
+        help="Canal de mise à jour (surcharge la valeur en DB)"
+    )
+    UpdateGroup.add_argument(
+        "--skip-update",
+        action="store_true",
+        dest="skip_update",
+        help="Ignore la vérification de mise à jour au démarrage"
     )
 
     Args = Parser.parse_args()
@@ -443,6 +638,11 @@ Exemples d'utilisation:
 
         # Mise à jour automatique des dépendances
         UpdateDependencies()
+
+    # Gestion des mises à jour
+    if not HandleUpdate(Args):
+        # HandleUpdate a demandé de quitter (--check-update ou redémarrage)
+        sys.exit(0)
 
     # Choix du mode
     Mode = ChooseMode(Args.cli, PresetMode)

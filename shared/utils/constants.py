@@ -403,6 +403,39 @@ class AppMetadata:
 
 
 # ============================================================================
+# CONFIGURATION MISE À JOUR
+# ============================================================================
+
+class UpdateConfig:
+    """Configuration du système de mise à jour via GitHub"""
+
+    # Repository GitHub
+    GITHUB_OWNER = "Cubelol78"
+    GITHUB_REPO = "UpscalingByNetwork"
+    GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
+
+    # Canaux de mise à jour
+    CHANNEL_DEV = "dev"
+    CHANNEL_RELEASE = "release"
+    DEFAULT_CHANNEL = CHANNEL_RELEASE
+
+    # Timeouts (en secondes)
+    API_TIMEOUT = 30
+    DOWNLOAD_TIMEOUT = 300  # 5 minutes
+
+    # Fichiers/dossiers à préserver lors de la mise à jour
+    PRESERVE_PATHS = [
+        "venv/",
+        ".upscaling_server/",
+        ".upscaling_client/",
+        "work/",
+        "logs/",
+        ".git/",
+        ".gitignore",
+    ]
+
+
+# ============================================================================
 # LIMITES ET CONTRAINTES
 # ============================================================================
 
