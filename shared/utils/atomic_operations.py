@@ -166,14 +166,20 @@ class AtomicImageSave:
             if self.Logger:
                 self.Logger.info(f"AtomicImageSave: commit de {len(self.SavedFiles)} images vers {self.DestinationDir}")
 
-            # Si destination existe déjà, la supprimer d'abord
-            if os.path.exists(self.DestinationDir):
-                if self.Logger:
-                    self.Logger.warning(f"Destination existe déjà, suppression : {self.DestinationDir}")
-                await asyncio.to_thread(shutil.rmtree, self.DestinationDir)
+            # Crée le dossier destination s'il n'existe pas
+            await asyncio.to_thread(os.makedirs, self.DestinationDir, exist_ok=True)
 
-            # Déplace temp → destination (atomique avec os.rename si même filesystem)
-            await asyncio.to_thread(shutil.move, self.TempDir, self.DestinationDir)
+            # Déplace chaque fichier individuellement (pour ne pas écraser les autres batches)
+            for FileName in self.SavedFiles:
+                SourcePath = os.path.join(self.TempDir, FileName)
+                DestPath = os.path.join(self.DestinationDir, FileName)
+
+                # Déplace le fichier (écrase si existe déjà, ce qui est normal pour un retry)
+                await asyncio.to_thread(shutil.move, SourcePath, DestPath)
+
+            # Supprime le dossier temporaire (maintenant vide)
+            if os.path.exists(self.TempDir):
+                await asyncio.to_thread(shutil.rmtree, self.TempDir)
 
             self.Committed = True
 
