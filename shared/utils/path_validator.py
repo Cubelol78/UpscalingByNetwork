@@ -69,8 +69,15 @@ def ValidateWorkDirectory(path: str, create_if_missing: bool = False) -> PathVal
 
     # Vérification 3: Caractères invalides
     invalid_chars = _GetInvalidPathChars()
-    if any(char in path for char in invalid_chars):
-        found_chars = [char for char in invalid_chars if char in path]
+
+    # Sur Windows, le ':' est valide à la position 1 (lettre de lecteur, ex: C:)
+    path_to_check = path
+    if os.name == 'nt' and len(path) >= 2 and path[1] == ':':
+        # Exclut le premier ':' (lettre de lecteur) de la vérification
+        path_to_check = path[0] + path[2:] if len(path) > 2 else path[0]
+
+    if any(char in path_to_check for char in invalid_chars):
+        found_chars = [char for char in invalid_chars if char in path_to_check]
         return PathValidationResult(
             is_valid=False,
             error_code=PathValidationError.PATH_INVALID_CHARS,
