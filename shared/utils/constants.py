@@ -393,13 +393,157 @@ class PathConfig:
 # VERSIONS ET MÉTADONNÉES
 # ============================================================================
 
+def _GetGitVersion() -> dict:
+    """
+    Détecte la version depuis git (tag, commit SHA, message).
+
+    Returns:
+        dict avec:
+        - version: Version du tag (ex: "1.2.0") ou "dev" si pas de tag
+        - tag: Nom du tag complet (ex: "v1.2.0") ou None
+        - sha: SHA court du commit (8 caractères)
+        - sha_full: SHA complet du commit
+        - message: Message du dernier commit (première ligne)
+        - is_release: True si on est exactement sur un tag
+        - display: Version formatée pour affichage
+    """
+    import subprocess
+    from pathlib import Path
+
+    # Trouve la racine du projet
+    try:
+        CurrentFile = Path(__file__).resolve()
+        ProjectRoot = str(CurrentFile.parent.parent.parent)
+    except Exception:
+        ProjectRoot = "."
+
+    Result = {
+        "version": "dev",
+        "tag": None,
+        "sha": None,
+        "sha_full": None,
+        "message": None,
+        "is_release": False,
+        "display": "dev"
+    }
+
+    try:
+        # Récupère le SHA du commit actuel
+        ShaResult = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, cwd=ProjectRoot, timeout=5
+        )
+        if ShaResult.returncode == 0:
+            Result["sha_full"] = ShaResult.stdout.strip()
+            Result["sha"] = Result["sha_full"][:8]
+
+        # Récupère le message du dernier commit (première ligne)
+        MsgResult = subprocess.run(
+            ["git", "log", "-1", "--format=%s"],
+            capture_output=True, text=True, cwd=ProjectRoot, timeout=5
+        )
+        if MsgResult.returncode == 0:
+            Result["message"] = MsgResult.stdout.strip()
+
+        # Vérifie si on est exactement sur un tag
+        TagResult = subprocess.run(
+            ["git", "describe", "--tags", "--exact-match"],
+            capture_output=True, text=True, cwd=ProjectRoot, timeout=5
+        )
+        if TagResult.returncode == 0:
+            # On est sur un tag exact
+            Tag = TagResult.stdout.strip()
+            Result["tag"] = Tag
+            Result["is_release"] = True
+            # Extrait la version (enlève le préfixe 'v' si présent)
+            Result["version"] = Tag.lstrip("v")
+            Result["display"] = Result["version"]
+        else:
+            # Pas sur un tag exact, essaie de trouver le tag le plus proche
+            DescResult = subprocess.run(
+                ["git", "describe", "--tags", "--abbrev=0"],
+                capture_output=True, text=True, cwd=ProjectRoot, timeout=5
+            )
+            if DescResult.returncode == 0:
+                Tag = DescResult.stdout.strip()
+                Result["tag"] = Tag
+                Result["version"] = Tag.lstrip("v")
+
+            # Version dev avec SHA et message
+            if Result["sha"]:
+                Msg = Result["message"][:30] + "..." if Result["message"] and len(Result["message"]) > 30 else Result["message"]
+                Result["display"] = f"dev ({Result['sha']})"
+                if Msg:
+                    Result["display"] = f"dev ({Result['sha']}: {Msg})"
+            else:
+                Result["display"] = "dev"
+
+    except FileNotFoundError:
+        # Git non installé
+        Result["display"] = "dev (git non disponible)"
+    except subprocess.TimeoutExpired:
+        Result["display"] = "dev (timeout git)"
+    except Exception:
+        Result["display"] = "dev"
+
+    return Result
+
+
+# Cache de la version (calculé une seule fois)
+_GIT_VERSION_CACHE = None
+
+def GetGitVersion() -> dict:
+    """Retourne la version git (avec cache)"""
+    global _GIT_VERSION_CACHE
+    if _GIT_VERSION_CACHE is None:
+        _GIT_VERSION_CACHE = _GetGitVersion()
+    return _GIT_VERSION_CACHE
+
+
 class AppMetadata:
     """Métadonnées de l'application"""
 
-    VERSION = "1.0.0"
+    # Version détectée depuis git
+    _GitInfo = GetGitVersion()
+
+    # Version de l'application (tag git ou "dev")
+    VERSION = _GitInfo["version"]
+
+    # Version complète pour affichage (inclut SHA et message si dev)
+    VERSION_DISPLAY = _GitInfo["display"]
+
+    # SHA du commit actuel
+    COMMIT_SHA = _GitInfo["sha"]
+    COMMIT_SHA_FULL = _GitInfo["sha_full"]
+
+    # Message du dernier commit
+    COMMIT_MESSAGE = _GitInfo["message"]
+
+    # True si on est exactement sur un tag (release)
+    IS_RELEASE = _GitInfo["is_release"]
+
+    # Autres métadonnées
     PROTOCOL_VERSION = "1.0"
     APP_NAME = "UpscalingByNetwork"
     APP_DESCRIPTION = "Système d'upscaling vidéo distribué avec Real-ESRGAN"
+
+    @classmethod
+    def GetVersionString(cls) -> str:
+        """Retourne la version formatée pour affichage"""
+        return cls.VERSION_DISPLAY
+
+    @classmethod
+    def RefreshVersion(cls):
+        """Force le rechargement de la version depuis git"""
+        global _GIT_VERSION_CACHE
+        _GIT_VERSION_CACHE = None
+        Info = GetGitVersion()
+        cls.VERSION = Info["version"]
+        cls.VERSION_DISPLAY = Info["display"]
+        cls.COMMIT_SHA = Info["sha"]
+        cls.COMMIT_SHA_FULL = Info["sha_full"]
+        cls.COMMIT_MESSAGE = Info["message"]
+        cls.IS_RELEASE = Info["is_release"]
 
 
 # ============================================================================

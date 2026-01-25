@@ -123,18 +123,32 @@ class UpdateTab(QWidget):
         Group = QGroupBox("Version")
         FormLayout = QFormLayout()
 
-        # Version actuelle
-        self.VersionLabel = QLabel(AppMetadata.VERSION)
+        # Version actuelle (avec SHA et message si dev)
+        self.VersionLabel = QLabel(AppMetadata.VERSION_DISPLAY)
         self.VersionLabel.setProperty("class", "hint")
         FormLayout.addRow("Version actuelle:", self.VersionLabel)
 
-        # Commit local (si repo git)
-        self.CommitLabel = QLabel("")
-        self.CommitLabel.setProperty("class", "hint")
-        FormLayout.addRow("Commit local:", self.CommitLabel)
+        # Type de version (release ou dev)
+        TypeText = "Release" if AppMetadata.IS_RELEASE else "Developpement"
+        self.TypeLabel = QLabel(TypeText)
+        self.TypeLabel.setProperty("class", "hint")
+        FormLayout.addRow("Type:", self.TypeLabel)
 
-        # Charger le commit local
-        self.LoadLocalCommit()
+        # Commit SHA (si disponible)
+        if AppMetadata.COMMIT_SHA:
+            self.CommitLabel = QLabel(AppMetadata.COMMIT_SHA)
+            self.CommitLabel.setProperty("class", "hint")
+            FormLayout.addRow("Commit:", self.CommitLabel)
+
+            # Message du commit
+            if AppMetadata.COMMIT_MESSAGE:
+                MsgText = AppMetadata.COMMIT_MESSAGE
+                if len(MsgText) > 50:
+                    MsgText = MsgText[:50] + "..."
+                self.MessageLabel = QLabel(MsgText)
+                self.MessageLabel.setProperty("class", "hint")
+                self.MessageLabel.setWordWrap(True)
+                FormLayout.addRow("Message:", self.MessageLabel)
 
         Group.setLayout(FormLayout)
         return Group
@@ -199,19 +213,6 @@ class UpdateTab(QWidget):
 
         Group.setLayout(Layout)
         return Group
-
-    def LoadLocalCommit(self):
-        """Charge le SHA du commit local"""
-        try:
-            from shared.utils.updater import GitHubClient
-            Client = GitHubClient()
-            Sha = Client.GetLocalCommitSha()
-            if Sha:
-                self.CommitLabel.setText(Sha[:8])
-            else:
-                self.CommitLabel.setText("N/A (pas un repo git)")
-        except Exception:
-            self.CommitLabel.setText("N/A")
 
     def GetConfigManager(self):
         """Récupère le gestionnaire de configuration du client"""
