@@ -102,7 +102,7 @@ DEFAULT_WEBHOOK_MESSAGES = {
     },
     WebhookEventType.CLIENT_DISCONNECTED: {
         "title": "Client deconnecte",
-        "message": "Le client **{client_id}** s'est deconnecte. Raison: {reason}",
+        "message": "Le client **{client_id}** s'est deconnecte depuis {ip}",
         "color": "warning",
         "enabled": False,
     },
@@ -146,7 +146,7 @@ DEFAULT_WEBHOOK_MESSAGES = {
     },
     WebhookEventType.DISCONNECTED_FROM_SERVER: {
         "title": "Deconnecte du serveur",
-        "message": "Deconnexion du serveur. Raison: {reason}",
+        "message": "Deconnexion du serveur {server_ip}:{server_port}",
         "color": "warning",
         "enabled": False,
     },
@@ -158,7 +158,7 @@ DEFAULT_WEBHOOK_MESSAGES = {
     },
     WebhookEventType.BATCH_COMPLETED: {
         "title": "Batch termine",
-        "message": "Batch {batch_id} traite avec succes en {duration}",
+        "message": "Batch {batch_id} traite avec succes ({frame_count} images)",
         "color": "success",
         "enabled": False,
     },
