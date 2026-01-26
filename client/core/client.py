@@ -23,6 +23,7 @@ from shared.protocol.messages import (
 from shared.utils.logger import GetClientLogger
 from shared.utils.constants import ClientStatus, NetworkConfig
 from shared.utils.path_validator import ValidateWorkDirectory, GetDefaultWorkDirectory, NormalizePath
+from shared.utils.webhook_manager import InitClientWebhookManager, TriggerClientWebhook
 from shared.exceptions import ProcessingError
 
 
@@ -175,6 +176,9 @@ class UpscalingClient:
         self.ReconnectEnabled = NetworkConfig.RECONNECT_ENABLED  # Active/désactive la reconnexion auto
         self.DisconnectedByServer = False  # True si déconnexion demandée par serveur (pas de reconnexion)
 
+        # Initialise le gestionnaire de webhooks client
+        InitClientWebhookManager(self._GetWebhookConfig)
+
         self.Logger.info(f"Client initialisé avec répertoire de travail: {self.WorkDirectory}")
 
     async def Start(self, Host: str, Port: int, Password: str = "",
@@ -247,6 +251,13 @@ class UpscalingClient:
             self.MainLoopTask = asyncio.create_task(self.MainLoop())
 
             self.Logger.info("✓ Client démarré et connecté (dual-port)")
+
+            # Webhook: connecté au serveur
+            TriggerClientWebhook(
+                "connected_to_server",
+                server_ip=Host,
+                server_port=Port
+            )
 
             # Retourne True immédiatement pour indiquer que la connexion est établie
             # La boucle principale continue en arrière-plan
@@ -327,6 +338,14 @@ class UpscalingClient:
         self._CleanupResultCache()
 
         self.Logger.info("Client arrete")
+
+        # Webhook: déconnecté du serveur
+        ServerInfo = self.ConnectionManager.GetServerInfo()
+        TriggerClientWebhook(
+            "disconnected_from_server",
+            server_ip=ServerInfo[0] if ServerInfo else "unknown",
+            server_port=ServerInfo[1] if len(ServerInfo) > 1 else 0
+        )
 
         # Signale que l'arret est termine
         self._StopComplete.set()
@@ -589,6 +608,16 @@ class UpscalingClient:
             Attempt: Numéro de la tentative
             Delay: Délai avant cette tentative
         """
+        # Webhook: tentative de reconnexion
+        ServerInfo = self.ConnectionManager.GetServerInfo()
+        TriggerClientWebhook(
+            "reconnecting",
+            attempt=Attempt,
+            max_attempts=NetworkConfig.RECONNECT_INFINITE,
+            server_ip=ServerInfo[0] if ServerInfo else "unknown",
+            server_port=ServerInfo[1] if len(ServerInfo) > 1 else 0
+        )
+
         # Notifie via callback si disponible (pour l'interface GUI)
         if self.OnReconnecting:
             try:
@@ -887,6 +916,13 @@ class UpscalingClient:
             self.Logger.error(f"Erreur critique détectée: {ErrorInfo.get('message')}")
             self.Logger.error(f"Type: {ErrorInfo.get('type')}")
 
+            # Webhook: erreur critique
+            TriggerClientWebhook(
+                "critical_error",
+                error=ErrorInfo.get("message", "Erreur critique"),
+                reason=ErrorInfo.get("type", "unknown")
+            )
+
             # Notifie le GUI via callback (thread-safe)
             if self.OnCriticalError:
                 try:
@@ -948,9 +984,24 @@ class UpscalingClient:
                         ImageCount = Result.Payload.get("image_count", 0)
                         self.ImagesProcessed += ImageCount
                         self.Logger.debug(f"Images traitées: +{ImageCount} (total: {self.ImagesProcessed})")
+
+                        # Webhook: batch traité avec succès
+                        TriggerClientWebhook(
+                            "batch_completed",
+                            batch_id=BatchId,
+                            frame_count=ImageCount
+                        )
                     else:
                         self.Logger.warning(f"✗ Résultat batch {BatchId} (échec) envoyé")
                         self.BatchesFailed += 1
+
+                        # Webhook: batch échoué
+                        ErrorMsg = Result.Payload.get("error_message", "Erreur inconnue")
+                        TriggerClientWebhook(
+                            "batch_error",
+                            batch_id=BatchId,
+                            error=ErrorMsg
+                        )
 
                     # Supprime le fichier cache après envoi réussi
                     self._DeleteCacheFile(CachePath)
@@ -1120,6 +1171,25 @@ class UpscalingClient:
                 self.Logger.info("Cache des résultats nettoyé")
         except Exception as e:
             self.Logger.error(f"Erreur lors du nettoyage du cache: {e}")
+
+    def _GetWebhookConfig(self) -> dict:
+        """
+        Retourne la configuration webhook depuis le fichier de configuration
+
+        Returns:
+            Dict avec webhook_enabled, webhook_url, webhook_events
+        """
+        try:
+            from client.utils.performance_config import PerformanceConfigManager
+            ConfigManager = PerformanceConfigManager()
+            Config = ConfigManager.Load()
+            return {
+                "webhook_enabled": Config.get("webhook_enabled", False),
+                "webhook_url": Config.get("webhook_url", ""),
+                "webhook_events": Config.get("webhook_events", {})
+            }
+        except Exception:
+            return {}
 
     def GetStatus(self) -> dict:
         """

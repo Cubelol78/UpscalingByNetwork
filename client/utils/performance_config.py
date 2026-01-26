@@ -81,7 +81,11 @@ class PerformanceConfigManager:
         "update_auto_check": False,   # Verification automatique des mises a jour au demarrage (desactive par defaut)
         "update_auto_apply": False,   # Appliquer les mises a jour automatiquement sans confirmation
         "update_last_check": "",      # Date de la derniere verification de mise a jour
-        "update_skipped_version": ""  # Version ignoree par l'utilisateur
+        "update_skipped_version": "",  # Version ignoree par l'utilisateur
+        # Webhooks Discord
+        "webhook_enabled": False,     # Activer les webhooks Discord
+        "webhook_url": "",            # URL du webhook Discord
+        "webhook_events": {}          # Configuration des evenements webhook
     }
 
     def __init__(self, ConfigDir: Optional[str] = None):

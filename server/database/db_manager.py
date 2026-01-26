@@ -35,6 +35,10 @@ DEFAULT_PARAMETERS = {
     "update_auto_apply": ("false", "Appliquer les mises à jour automatiquement sans confirmation"),
     "update_last_check": ("", "Date de la dernière vérification de mise à jour"),
     "update_skipped_version": ("", "Version ignorée par l'utilisateur"),
+    # Webhooks Discord
+    "webhook_enabled": ("false", "Activer les webhooks Discord"),
+    "webhook_url": ("", "URL du webhook Discord"),
+    "webhook_events": ("", "Configuration JSON des événements webhook"),
 }
 
 

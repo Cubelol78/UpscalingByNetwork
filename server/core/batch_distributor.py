@@ -28,6 +28,7 @@ from shared.protocol.messages import BatchAssignment, BatchResult, MessageFactor
 from shared.utils.logger import GetModuleLogger
 from shared.utils.constants import BatchStatus, ClientStatus, NetworkConfig, Limits, RetryConfig
 from shared.utils.retry import RetryAsync, RetryExhaustedError
+from shared.utils.webhook_manager import TriggerServerWebhook
 from shared.utils.atomic_operations import AtomicImageSave
 from shared.utils.cleanup import CleanupPartialFrames
 from shared.utils.error_events import EmitError, ErrorCategory, ErrorSeverity
@@ -691,6 +692,14 @@ class BatchDistributor:
                 ErrorMsg = ResultMessage.Payload.get("error_message", "Erreur inconnue")
                 self.Logger.error(f"Batch {BatchId} échoué: {ErrorMsg}")
 
+                # Webhook: batch échoué
+                TriggerServerWebhook(
+                    "batch_failed",
+                    batch_id=BatchId,
+                    error=ErrorMsg,
+                    client_id=ClientId
+                )
+
                 # Incrémente le compteur de retry (statistiques uniquement)
                 BatchObj.RetryCount += 1
                 BatchObj.ErrorMessage = ErrorMsg
@@ -838,6 +847,14 @@ class BatchDistributor:
             BatchObj.Status = BatchStatus.COMPLETED
             BatchObj.CompletedAt = datetime.now()
             self.Database.UpdateBatch(BatchObj)
+
+            # Webhook: batch reçu avec succès
+            TriggerServerWebhook(
+                "batch_received",
+                batch_id=BatchId,
+                frame_count=len(UpscaledImages),
+                client_id=ClientId
+            )
 
             # Met à jour la progression de la vidéo
             VideoObj = self.Database.GetVideo(VideoId)

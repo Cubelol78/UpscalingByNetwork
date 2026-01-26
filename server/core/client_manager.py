@@ -19,6 +19,7 @@ from shared.protocol.compression import NegotiateCompression
 from shared.utils.logger import GetModuleLogger
 from shared.utils.constants import ClientStatus, ErrorCode, NetworkConfig, CompressionConfig
 from shared.utils.error_events import EmitError, ErrorCategory, ErrorSeverity
+from shared.utils.webhook_manager import TriggerServerWebhook
 from server.database.db_manager import DatabaseManager
 from server.database.models import ClientHistory
 
@@ -155,6 +156,9 @@ class ClientManager:
             ClientInfo_obj.Authenticated = True
 
             self.Logger.info(f"Client {ClientId} connecté et authentifié depuis {IpAddress}")
+
+            # Webhook: client connecté
+            TriggerServerWebhook("client_connected", client_id=ClientId, ip=IpAddress)
 
             # Ajoute à l'historique
             History = ClientHistory(
@@ -786,6 +790,13 @@ class ClientManager:
         if ClientId in self.Clients:
             del self.Clients[ClientId]
             self.Logger.info(f"Client {ClientId} retiré")
+
+            # Webhook: client déconnecté
+            TriggerServerWebhook(
+                "client_disconnected",
+                client_id=ClientId,
+                ip=ClientInfo.IpAddress if ClientInfo else "unknown"
+            )
 
             # Émet un événement de déconnexion
             EmitError(

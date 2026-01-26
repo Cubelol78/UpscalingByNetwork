@@ -17,6 +17,7 @@ from server.database.db_manager import DatabaseManager
 from server.database.models import Video
 from shared.utils.logger import GetModuleLogger
 from shared.utils.constants import JobStatus, ProcessingConfig
+from shared.utils.webhook_manager import TriggerServerWebhook
 
 
 class JobManager:
@@ -328,6 +329,10 @@ class JobManager:
 
             # Récupère la vidéo
             VideoObj = self.Database.GetVideo(VideoId)
+            VideoName = os.path.basename(VideoObj.VideoPath) if VideoObj else VideoId
+
+            # Webhook: job démarré
+            TriggerServerWebhook("job_started", video_name=VideoName, video_id=VideoId)
             if not VideoObj:
                 self.Logger.error(f"Vidéo {VideoId} non trouvée")
                 async with self.CurrentJobIdLock:
@@ -379,6 +384,16 @@ class JobManager:
             self.Logger.info(f"✓ TRAITEMENT TERMINÉ - Durée: {Duration:.1f}s")
             self.Logger.info(f"Sortie: {VideoObj.OutputPath}")
             self.Logger.info("="*60)
+
+            # Webhook: job terminé
+            VideoName = os.path.basename(VideoObj.VideoPath) if VideoObj else VideoId
+            DurationStr = f"{int(Duration // 60)}m{int(Duration % 60)}s"
+            TriggerServerWebhook(
+                "job_completed",
+                video_name=VideoName,
+                video_id=VideoId,
+                duration=DurationStr
+            )
 
             # Nettoyage des fichiers temporaires (garde la vidéo de sortie)
             self.VideoProcessor.CleanupVideoData(VideoId, KeepOutput=True)
@@ -688,6 +703,15 @@ class JobManager:
         self.Database.UpdateVideo(VideoObj)
 
         self.Logger.error(f"✗ JOB ÉCHOUÉ: {ErrorMessage}")
+
+        # Webhook: job échoué
+        VideoName = os.path.basename(VideoObj.VideoPath) if VideoObj else "unknown"
+        TriggerServerWebhook(
+            "job_failed",
+            video_name=VideoName,
+            video_id=VideoObj.VideoId,
+            error=ErrorMessage
+        )
 
     def GetJobProgress(self, VideoId: str) -> dict:
         """

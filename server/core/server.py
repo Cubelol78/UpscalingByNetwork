@@ -17,6 +17,7 @@ from server.database.db_manager import DatabaseManager
 from shared.utils.logger import GetServerLogger
 from shared.utils.constants import NetworkConfig, PathConfig, ClientStatus
 from shared.protocol.messages import MessageFactory, HeartbeatPong, BatchResult, StatusUpdate, DisconnectMessage
+from shared.utils.webhook_manager import InitServerWebhookManager, TriggerServerWebhook
 
 
 def ConfigureSocket(Writer: asyncio.StreamWriter, Logger):
@@ -139,6 +140,9 @@ class UpscalingServer:
             # Crée le gestionnaire de clients
             self.ClientManager = ClientManager(self.Password, self.Database)
 
+            # Initialise le gestionnaire de webhooks
+            InitServerWebhookManager(self._GetWebhookConfig)
+
             self.Logger.info("Serveur initialisé avec succès")
             return True
 
@@ -205,6 +209,9 @@ class UpscalingServer:
             # Affiche les informations
             self._PrintServerInfo()
 
+            # Webhook: serveur démarré
+            TriggerServerWebhook("server_started", ip=self.Host, port=self.Port)
+
             return True
 
         except Exception as e:
@@ -223,6 +230,9 @@ class UpscalingServer:
             return
 
         self.Logger.info(f"Arrêt gracieux du serveur (timeout: {timeout}s)...")
+
+        # Webhook: serveur arrêté (avant fermeture DB)
+        TriggerServerWebhook("server_stopped", ip=self.Host, port=self.Port)
 
         self.Running = False
 
@@ -568,6 +578,22 @@ class UpscalingServer:
         # Autres types de messages
         else:
             self.Logger.debug(f"Message reçu du client {ClientId}: {MessageType}")
+
+    def _GetWebhookConfig(self) -> dict:
+        """
+        Retourne la configuration webhook depuis la base de données
+
+        Returns:
+            Dict avec webhook_enabled, webhook_url, webhook_events
+        """
+        if not self.Database:
+            return {}
+
+        return {
+            "webhook_enabled": self.Database.GetParameterBool("webhook_enabled", False),
+            "webhook_url": self.Database.GetParameter("webhook_url", ""),
+            "webhook_events": self.Database.GetParameter("webhook_events", "")
+        }
 
     def _PrintServerInfo(self):
         """Affiche les informations du serveur"""
