@@ -15,7 +15,7 @@ from server.core.client_manager import ClientManager
 from server.core.network_manager import NetworkManager, DualNetworkManager
 from server.database.db_manager import DatabaseManager
 from shared.utils.logger import GetServerLogger
-from shared.utils.constants import NetworkConfig, PathConfig, ClientStatus
+from shared.utils.constants import NetworkConfig, PathConfig, ClientStatus, AppMetadata
 from shared.protocol.messages import MessageFactory, HeartbeatPong, BatchResult, StatusUpdate, DisconnectMessage
 from shared.utils.webhook_manager import InitServerWebhookManager, TriggerServerWebhook
 
@@ -172,7 +172,7 @@ class UpscalingServer:
         # Utilise InitializeDefaultParameters() qui ne remplace pas les valeurs existantes
         self.Database.InitializeDefaultParameters()
         # Ajoute/met à jour la version du serveur
-        self.Database.SetParameter("server_version", "1.0.0", "Version du serveur")
+        self.Database.SetParameter("server_version", AppMetadata.VERSION, "Version du serveur")
 
     async def Start(self) -> bool:
         """

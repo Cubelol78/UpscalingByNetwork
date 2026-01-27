@@ -5,6 +5,7 @@ Auto-save avec debounce et indicateur visuel
 Panneaux depliables avec synchronisation GPU
 """
 
+import platform
 from typing import Tuple, List, Optional
 
 from PyQt5.QtWidgets import (
@@ -135,6 +136,10 @@ class PerformanceTab(QWidget):
         # Panneau Stockage - replie par defaut
         self.StoragePanel = self.CreateStoragePanel()
         ContentLayout.addWidget(self.StoragePanel)
+
+        # Panneau Stockage RAM (Full RAM Mode) - replie par defaut
+        self.RamStoragePanel = self.CreateRamStoragePanel()
+        ContentLayout.addWidget(self.RamStoragePanel)
 
         # Barre d'actions (toujours visible)
         ActionBar = self.CreateActionBar()
@@ -483,6 +488,178 @@ class PerformanceTab(QWidget):
 
         return Panel
 
+    def CreateRamStoragePanel(self) -> CollapsiblePanel:
+        """Cree le panneau Stockage RAM (Full RAM Mode) - replie par defaut"""
+        Panel = CollapsiblePanel("Stockage RAM (Full RAM Mode)", Expanded=False)
+
+        FormLayout = QFormLayout()
+
+        # Mode RAM disk
+        ModeWidget = QWidget()
+        ModeLayout = QHBoxLayout(ModeWidget)
+        ModeLayout.setContentsMargins(0, 0, 0, 0)
+
+        self.RamModeCombo = QComboBox()
+        self.RamModeCombo.addItem("Desactive", "disabled")
+        self.RamModeCombo.addItem("Automatique", "auto")
+        self.RamModeCombo.addItem("Manuel", "manual")
+        self.RamModeCombo.setToolTip(
+            "MODE FULL RAM\n\n"
+            "- Desactive: utilise le disque classique (par defaut)\n\n"
+            "- Automatique: detecte et utilise automatiquement\n"
+            "  un RAM disk disponible (tmpfs sur Linux, ImDisk sur Windows)\n\n"
+            "- Manuel: vous specifiez un chemin personnalise\n"
+            "  vers un RAM disk que vous avez cree\n\n"
+            "Avantages: ameliore les performances, evite l'usure du SSD"
+        )
+        self.RamModeCombo.currentIndexChanged.connect(self.OnRamModeChanged)
+        ModeLayout.addWidget(self.RamModeCombo)
+        ModeLayout.addStretch()
+
+        FormLayout.addRow("Mode:", ModeWidget)
+
+        # Informations RAM disk detecte
+        self.RamDiskInfoLabel = QLabel("Aucun RAM disk detecte")
+        self.RamDiskInfoLabel.setProperty("class", "hint")
+        self.RamDiskInfoLabel.setWordWrap(True)
+        FormLayout.addRow("Detection:", self.RamDiskInfoLabel)
+
+        # Chemin manuel (visible uniquement en mode manuel)
+        self.RamDiskPathWidget = QWidget()
+        RamDiskPathLayout = QHBoxLayout(self.RamDiskPathWidget)
+        RamDiskPathLayout.setContentsMargins(0, 0, 0, 0)
+
+        self.RamDiskPathInput = QLineEdit()
+        self.RamDiskPathInput.setPlaceholderText("/dev/shm ou chemin personnalise")
+        self.RamDiskPathInput.textChanged.connect(self.OnRamDiskPathChanged)
+        RamDiskPathLayout.addWidget(self.RamDiskPathInput)
+
+        BrowseRamButton = QPushButton("Parcourir...")
+        BrowseRamButton.clicked.connect(self.BrowseRamDiskPath)
+        RamDiskPathLayout.addWidget(BrowseRamButton)
+
+        FormLayout.addRow("Chemin manuel:", self.RamDiskPathWidget)
+        self.RamDiskPathWidget.setVisible(False)
+
+        # Espace minimum requis
+        MinSpaceWidget = QWidget()
+        MinSpaceLayout = QHBoxLayout(MinSpaceWidget)
+        MinSpaceLayout.setContentsMargins(0, 0, 0, 0)
+
+        self.RamMinSpaceSpinBox = QSpinBox()
+        self.RamMinSpaceSpinBox.setRange(100, 10000)
+        self.RamMinSpaceSpinBox.setValue(500)
+        self.RamMinSpaceSpinBox.setSuffix(" MB")
+        self.RamMinSpaceSpinBox.setToolTip(
+            "Espace minimum requis sur le RAM disk\n"
+            "Si l'espace disponible est inferieur, le systeme\n"
+            "utilisera automatiquement le disque classique"
+        )
+        self.RamMinSpaceSpinBox.valueChanged.connect(self.OnConfigChanged)
+        MinSpaceLayout.addWidget(self.RamMinSpaceSpinBox)
+
+        MinSpaceNote = QLabel("(recommande: 500-2000 MB)")
+        MinSpaceNote.setProperty("class", "hint")
+        MinSpaceLayout.addWidget(MinSpaceNote)
+        MinSpaceLayout.addStretch()
+
+        FormLayout.addRow("Espace minimum:", MinSpaceWidget)
+
+        # Parametres Windows (ImDisk) - visible uniquement sur Windows
+        if platform.system() == "Windows":
+            self.WindowsRamGroup = QGroupBox("Parametres Windows (ImDisk)")
+
+            WindowsLayout = QFormLayout()
+
+            # Statut ImDisk
+            self.ImDiskStatusLabel = QLabel("Verification...")
+            self.ImDiskStatusLabel.setProperty("class", "hint")
+            WindowsLayout.addRow("Statut ImDisk:", self.ImDiskStatusLabel)
+
+            # Lettre du lecteur
+            DriveWidget = QWidget()
+            DriveLayout = QHBoxLayout(DriveWidget)
+            DriveLayout.setContentsMargins(0, 0, 0, 0)
+
+            self.DriveLetterCombo = QComboBox()
+            # Les lettres seront remplies dynamiquement
+            for Letter in "RSTUVWXYZ":
+                self.DriveLetterCombo.addItem(f"{Letter}:", Letter)
+            self.DriveLetterCombo.setToolTip(
+                "Lettre du lecteur pour le RAM disk ImDisk\n"
+                "Par defaut: R:\n"
+                "Choisissez une lettre non utilisee"
+            )
+            self.DriveLetterCombo.currentIndexChanged.connect(self.OnConfigChanged)
+            DriveLayout.addWidget(self.DriveLetterCombo)
+            DriveLayout.addStretch()
+
+            WindowsLayout.addRow("Lettre du lecteur:", DriveWidget)
+
+            # Taille du RAM disk
+            SizeWidget = QWidget()
+            SizeLayout = QHBoxLayout(SizeWidget)
+            SizeLayout.setContentsMargins(0, 0, 0, 0)
+
+            self.RamDiskSizeSpinBox = QSpinBox()
+            self.RamDiskSizeSpinBox.setRange(512, 16384)
+            self.RamDiskSizeSpinBox.setValue(2048)
+            self.RamDiskSizeSpinBox.setSuffix(" MB")
+            self.RamDiskSizeSpinBox.setToolTip(
+                "Taille du RAM disk a creer\n"
+                "Recommandation: 2-4 GB pour un traitement fluide\n"
+                "Ne depassez pas 50% de votre RAM totale"
+            )
+            self.RamDiskSizeSpinBox.valueChanged.connect(self.OnConfigChanged)
+            SizeLayout.addWidget(self.RamDiskSizeSpinBox)
+            SizeLayout.addStretch()
+
+            WindowsLayout.addRow("Taille:", SizeWidget)
+
+            # Options automatiques
+            self.AutoCreateCheckBox = QCheckBox("Creer automatiquement au demarrage du client")
+            self.AutoCreateCheckBox.setChecked(True)
+            self.AutoCreateCheckBox.setToolTip(
+                "Si active, le RAM disk sera cree automatiquement\n"
+                "au demarrage du client (mode auto uniquement)"
+            )
+            self.AutoCreateCheckBox.stateChanged.connect(self.OnConfigChanged)
+            WindowsLayout.addRow("", self.AutoCreateCheckBox)
+
+            self.AutoRemoveCheckBox = QCheckBox("Supprimer automatiquement a l'arret du client")
+            self.AutoRemoveCheckBox.setChecked(True)
+            self.AutoRemoveCheckBox.setToolTip(
+                "Si active, le RAM disk sera supprime automatiquement\n"
+                "a l'arret du client (libere la RAM)"
+            )
+            self.AutoRemoveCheckBox.stateChanged.connect(self.OnConfigChanged)
+            WindowsLayout.addRow("", self.AutoRemoveCheckBox)
+
+            # Note ImDisk
+            ImDiskNote = QLabel(
+                "ImDisk doit etre installe separement:\n"
+                "https://sourceforge.net/projects/imdisk-toolkit/"
+            )
+            ImDiskNote.setProperty("class", "hint-warning")
+            ImDiskNote.setWordWrap(True)
+            ImDiskNote.setOpenExternalLinks(True)
+            WindowsLayout.addRow("", ImDiskNote)
+
+            self.WindowsRamGroup.setLayout(WindowsLayout)
+            FormLayout.addRow(self.WindowsRamGroup)
+
+            # Verification du statut ImDisk
+            self.CheckImDiskStatus()
+
+        FormWidget = QWidget()
+        FormWidget.setLayout(FormLayout)
+        Panel.AddWidget(FormWidget)
+
+        # Mise a jour initiale de l'affichage
+        self.UpdateRamDiskInfo()
+
+        return Panel
+
     def BrowseWorkDirectory(self):
         """Ouvre un dialogue pour selectionner le repertoire de travail"""
         CurrentDir = self.WorkDirInput.text() or self.ConfigManager.GetDefaultWorkDirectory()
@@ -592,6 +769,157 @@ class PerformanceTab(QWidget):
         except Exception as e:
             self.DiskSpaceLabel.setText(f"Erreur: {str(e)}")
             self.DiskSpaceLabel.setProperty("class", "hint-danger")
+
+    # =========================================================================
+    # RAM Storage Management
+    # =========================================================================
+
+    def OnRamModeChanged(self, Index: int):
+        """Appele quand le mode RAM disk change"""
+        if self.IsLoading:
+            return
+
+        Mode = self.RamModeCombo.currentData()
+
+        # Affiche/masque le champ de chemin manuel
+        self.RamDiskPathWidget.setVisible(Mode == "manual")
+
+        # Met a jour les infos
+        self.UpdateRamDiskInfo()
+
+        # Sur Windows, active/desactive les options ImDisk selon le mode
+        if platform.system() == "Windows":
+            IsAuto = Mode == "auto"
+            if hasattr(self, 'DriveLetterCombo'):
+                self.DriveLetterCombo.setEnabled(IsAuto)
+            if hasattr(self, 'RamDiskSizeSpinBox'):
+                self.RamDiskSizeSpinBox.setEnabled(IsAuto)
+            if hasattr(self, 'AutoCreateCheckBox'):
+                self.AutoCreateCheckBox.setEnabled(IsAuto)
+            if hasattr(self, 'AutoRemoveCheckBox'):
+                self.AutoRemoveCheckBox.setEnabled(IsAuto)
+
+        # Declenche l'auto-save
+        self.OnConfigChanged()
+
+    def UpdateRamDiskInfo(self):
+        """Met a jour l'affichage des informations du RAM disk"""
+        from shared.utils.ramdisk_detector import RamDiskDetector
+
+        Mode = self.RamModeCombo.currentData()
+
+        if Mode == "disabled":
+            self.RamDiskInfoLabel.setText("Mode desactive - utilise le disque classique")
+            self.RamDiskInfoLabel.setProperty("class", "hint")
+        elif Mode == "auto":
+            # Detecte les RAM disks disponibles
+            RamDisks = RamDiskDetector.DetectAvailable()
+            if RamDisks:
+                BestRamDisk = RamDiskDetector.GetBestRamDisk(self.RamMinSpaceSpinBox.value())
+                if BestRamDisk:
+                    self.RamDiskInfoLabel.setText(
+                        f"Detecte: {BestRamDisk.path}\n"
+                        f"Espace: {BestRamDisk.available_mb} MB disponible sur {BestRamDisk.total_mb} MB\n"
+                        f"Source: {BestRamDisk.source}"
+                    )
+                    self.RamDiskInfoLabel.setProperty("class", "hint-success")
+                else:
+                    self.RamDiskInfoLabel.setText(
+                        f"RAM disk trouve mais espace insuffisant\n"
+                        f"({RamDisks[0].available_mb} MB < {self.RamMinSpaceSpinBox.value()} MB requis)"
+                    )
+                    self.RamDiskInfoLabel.setProperty("class", "hint-warning")
+            else:
+                if platform.system() == "Windows":
+                    self.RamDiskInfoLabel.setText(
+                        "Aucun RAM disk detecte\n"
+                        "ImDisk peut creer un RAM disk automatiquement\n"
+                        "(voir parametres Windows ci-dessous)"
+                    )
+                    self.RamDiskInfoLabel.setProperty("class", "hint-warning")
+                else:
+                    self.RamDiskInfoLabel.setText("Aucun RAM disk detecte sur ce systeme")
+                    self.RamDiskInfoLabel.setProperty("class", "hint-warning")
+        elif Mode == "manual":
+            ManualPath = self.RamDiskPathInput.text().strip()
+            if not ManualPath:
+                self.RamDiskInfoLabel.setText("Veuillez specifier un chemin")
+                self.RamDiskInfoLabel.setProperty("class", "hint-warning")
+            else:
+                # Valide le chemin
+                ValidationResult = RamDiskDetector.ValidateRamDiskPath(ManualPath)
+                if ValidationResult.is_valid:
+                    RamDiskStatus = "RAM disk" if ValidationResult.is_ramdisk else "disque standard"
+                    self.RamDiskInfoLabel.setText(
+                        f"Chemin valide ({RamDiskStatus})\n"
+                        f"Espace disponible: {ValidationResult.available_mb} MB"
+                    )
+                    if ValidationResult.is_ramdisk:
+                        self.RamDiskInfoLabel.setProperty("class", "hint-success")
+                    else:
+                        self.RamDiskInfoLabel.setProperty("class", "hint-warning")
+                else:
+                    self.RamDiskInfoLabel.setText(f"Invalide: {ValidationResult.error_message}")
+                    self.RamDiskInfoLabel.setProperty("class", "hint-danger")
+
+        # Refresh le style
+        self.RamDiskInfoLabel.style().unpolish(self.RamDiskInfoLabel)
+        self.RamDiskInfoLabel.style().polish(self.RamDiskInfoLabel)
+
+    def CheckImDiskStatus(self):
+        """Verifie si ImDisk est installe (Windows uniquement)"""
+        if platform.system() != "Windows":
+            return
+
+        from shared.utils.ramdisk_detector import WindowsRamDiskManager
+
+        if not hasattr(self, 'ImDiskStatusLabel'):
+            return
+
+        # Verifie si la bibliotheque ramdisk est disponible
+        if not WindowsRamDiskManager.IsImDiskLibraryAvailable():
+            self.ImDiskStatusLabel.setText(
+                "Bibliotheque 'ramdisk' non installee\n"
+                "Installez avec: pip install ramdisk"
+            )
+            self.ImDiskStatusLabel.setProperty("class", "hint-danger")
+        elif WindowsRamDiskManager.IsImDiskInstalled():
+            self.ImDiskStatusLabel.setText("ImDisk installe et fonctionnel")
+            self.ImDiskStatusLabel.setProperty("class", "hint-success")
+        else:
+            self.ImDiskStatusLabel.setText(
+                "ImDisk non installe\n"
+                "Telechargez depuis: sourceforge.net/projects/imdisk-toolkit/"
+            )
+            self.ImDiskStatusLabel.setProperty("class", "hint-warning")
+
+        # Refresh le style
+        self.ImDiskStatusLabel.style().unpolish(self.ImDiskStatusLabel)
+        self.ImDiskStatusLabel.style().polish(self.ImDiskStatusLabel)
+
+    def OnRamDiskPathChanged(self, Text: str):
+        """Appele quand le chemin du RAM disk manuel change"""
+        if self.IsLoading:
+            return
+
+        # Met a jour l'affichage des infos
+        self.UpdateRamDiskInfo()
+
+        # Declenche l'auto-save
+        self.OnConfigChanged()
+
+    def BrowseRamDiskPath(self):
+        """Ouvre un dialogue pour selectionner le chemin du RAM disk"""
+        CurrentPath = self.RamDiskPathInput.text() or "/dev/shm"
+
+        Directory = QFileDialog.getExistingDirectory(
+            self,
+            "Selectionner le chemin du RAM disk",
+            CurrentPath
+        )
+
+        if Directory:
+            self.RamDiskPathInput.setText(Directory)
 
     def CreateActionBar(self) -> QWidget:
         """Cree la barre d'actions"""
@@ -1025,8 +1353,45 @@ class PerformanceTab(QWidget):
             MaxConcurrentBatches = Config.get("max_concurrent_batches", 2)
             self.MaxConcurrentBatchesSpinBox.setValue(MaxConcurrentBatches)
 
+            # Mode RAM disk
+            RamMode = Config.get("ram_mode", "disabled")
+            RamModeIndex = self.RamModeCombo.findData(RamMode)
+            if RamModeIndex >= 0:
+                self.RamModeCombo.setCurrentIndex(RamModeIndex)
+
+            # Chemin manuel du RAM disk
+            RamDiskPath = Config.get("ram_disk_path", "")
+            self.RamDiskPathInput.setText(RamDiskPath)
+
+            # Espace minimum requis
+            RamMinSpace = Config.get("ram_disk_min_size_mb", 500)
+            self.RamMinSpaceSpinBox.setValue(RamMinSpace)
+
+            # Parametres Windows (si disponibles)
+            if platform.system() == "Windows":
+                if hasattr(self, 'DriveLetterCombo'):
+                    DriveLetter = Config.get("ram_disk_drive_letter", "R")
+                    DriveIndex = self.DriveLetterCombo.findData(DriveLetter)
+                    if DriveIndex >= 0:
+                        self.DriveLetterCombo.setCurrentIndex(DriveIndex)
+
+                if hasattr(self, 'RamDiskSizeSpinBox'):
+                    RamDiskSize = Config.get("ram_disk_size_mb", 2048)
+                    self.RamDiskSizeSpinBox.setValue(RamDiskSize)
+
+                if hasattr(self, 'AutoCreateCheckBox'):
+                    AutoCreate = Config.get("ram_disk_auto_create", True)
+                    self.AutoCreateCheckBox.setChecked(AutoCreate)
+
+                if hasattr(self, 'AutoRemoveCheckBox'):
+                    AutoRemove = Config.get("ram_disk_auto_remove", True)
+                    self.AutoRemoveCheckBox.setChecked(AutoRemove)
+
             # Met a jour l'affichage de l'espace disque
             self.UpdateDiskSpaceDisplay()
+
+            # Met a jour l'affichage du RAM disk
+            self.UpdateRamDiskInfo()
 
         finally:
             # Reactive l'auto-save
@@ -1130,7 +1495,7 @@ class PerformanceTab(QWidget):
                         if GpuId >= 0:
                             GpuIds.append(GpuId)
 
-        return {
+        Config = {
             "auto_detect": GpuMode == self.GPU_MODE_AUTO,
             "tile_size": self.TileSizeSpinBox.value(),
             "gpu_ids": GpuIds,
@@ -1144,8 +1509,25 @@ class PerformanceTab(QWidget):
             "first_run": False,
             "compression_level": self.CompressionLevelSpinBox.value(),
             "work_directory": self.WorkDirInput.text().strip(),
-            "max_concurrent_batches": self.MaxConcurrentBatchesSpinBox.value()
+            "max_concurrent_batches": self.MaxConcurrentBatchesSpinBox.value(),
+            # Parametres RAM disk
+            "ram_mode": self.RamModeCombo.currentData(),
+            "ram_disk_path": self.RamDiskPathInput.text().strip(),
+            "ram_disk_min_size_mb": self.RamMinSpaceSpinBox.value()
         }
+
+        # Parametres Windows (si disponibles)
+        if platform.system() == "Windows":
+            if hasattr(self, 'DriveLetterCombo'):
+                Config["ram_disk_drive_letter"] = self.DriveLetterCombo.currentData()
+            if hasattr(self, 'RamDiskSizeSpinBox'):
+                Config["ram_disk_size_mb"] = self.RamDiskSizeSpinBox.value()
+            if hasattr(self, 'AutoCreateCheckBox'):
+                Config["ram_disk_auto_create"] = self.AutoCreateCheckBox.isChecked()
+            if hasattr(self, 'AutoRemoveCheckBox'):
+                Config["ram_disk_auto_remove"] = self.AutoRemoveCheckBox.isChecked()
+
+        return Config
 
     def AutoConfigureQuiet(self):
         """Auto-configure sans afficher de message (pour le premier lancement)"""

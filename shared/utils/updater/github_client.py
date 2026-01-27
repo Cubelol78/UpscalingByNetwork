@@ -157,6 +157,28 @@ class GitHubClient:
             self.Logger.error(f"Erreur lors de la récupération du SHA: {e}")
             return None
 
+    def GetLatestCommitShaViaAPI(self, Branch: str = "main") -> Optional[str]:
+        """
+        Récupère le SHA du dernier commit via l'API GitHub (sans git)
+
+        Args:
+            Branch: Branche à vérifier (défaut: main)
+
+        Returns:
+            SHA du dernier commit ou None si erreur
+        """
+        Url = f"{UpdateConfig.GITHUB_API_URL}/commits/{Branch}"
+
+        try:
+            Response = self._Request(Url, Timeout=UpdateConfig.API_TIMEOUT)
+            CommitData = Response.json()
+            Sha = CommitData["sha"]
+            self.Logger.debug(f"Dernier commit {Branch} (API): {Sha[:8]}")
+            return Sha
+        except Exception as e:
+            self.Logger.error(f"Impossible de récupérer le SHA distant via API: {e}")
+            return None
+
     def GetLocalCommitSha(self, ProjectRoot: str = None) -> Optional[str]:
         """
         Récupère le SHA du commit local actuel

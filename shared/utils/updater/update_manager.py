@@ -53,6 +53,65 @@ class UpdateManager:
             ProjectRoot=self.ProjectRoot
         )
 
+    def GetReleaseVersionInfo(self, VersionTag: str) -> UpdateInfo:
+        """
+        Récupère les infos d'une version release spécifique
+
+        Args:
+            VersionTag: Tag de version (ex: "1.5.0")
+
+        Returns:
+            UpdateInfo avec les détails de cette version
+        """
+        from shared.utils.constants import AppMetadata
+
+        # Récupère toutes les releases
+        Releases = self.Checker.Client.GetReleases()
+
+        # Cherche la release correspondante
+        for Release in Releases:
+            if Release["tag_name"].lstrip("v") == VersionTag:
+                return UpdateInfo(
+                    Available=True,
+                    CurrentVersion=AppMetadata.VERSION,
+                    NewVersion=VersionTag,
+                    Channel="release",
+                    Changelog=Release.get("body", ""),
+                    DownloadUrl=Release["zipball_url"]
+                )
+
+        return UpdateInfo(Available=False)
+
+    def GetDevVersionInfo(self, CommitSha: str) -> UpdateInfo:
+        """
+        Récupère les infos d'un commit dev spécifique
+
+        Args:
+            CommitSha: SHA du commit (court ou complet)
+
+        Returns:
+            UpdateInfo avec les détails de ce commit
+        """
+        from shared.utils.constants import AppMetadata
+
+        # Vérifie que le commit existe via API
+        Url = f"{UpdateConfig.GITHUB_API_URL}/commits/{CommitSha}"
+
+        try:
+            Response = self.Checker.Client._Request(Url)
+            CommitData = Response.json()
+
+            return UpdateInfo(
+                Available=True,
+                CurrentVersion=AppMetadata.VERSION,
+                NewVersion=f"dev-{CommitSha[:7]}",
+                Channel="dev",
+                Changelog=CommitData["commit"]["message"],
+                DownloadUrl=f"https://github.com/{UpdateConfig.GITHUB_OWNER}/{UpdateConfig.GITHUB_REPO}/archive/{CommitSha}.zip"
+            )
+        except Exception:
+            return UpdateInfo(Available=False)
+
     def ApplyUpdate(self, Info: UpdateInfo) -> bool:
         """
         Applique une mise à jour
@@ -81,25 +140,29 @@ class UpdateManager:
 
     def _ApplyDevUpdate(self) -> bool:
         """
-        Applique une mise à jour via git pull
+        Applique une mise à jour via git pull (si repo git) ou téléchargement ZIP
 
         Returns:
             True si succès
         """
         self.Logger.info("Application de la mise à jour (canal dev)")
 
-        if not self.Client.IsGitRepo(self.ProjectRoot):
-            raise UpdateError(
-                "Le canal dev nécessite un repository git. "
-                "Utilisez le canal release."
-            )
-
-        Success = self.Client.GitPull(self.ProjectRoot)
-        if not Success:
-            raise UpdateError("git pull a échoué")
-
-        self.Logger.info("Mise à jour dev appliquée avec succès")
-        return True
+        if self.Client.IsGitRepo(self.ProjectRoot):
+            # Méthode préférée: git pull
+            self.Logger.info("Repository git détecté, utilisation de git pull")
+            Success = self.Client.GitPull(self.ProjectRoot)
+            if not Success:
+                raise UpdateError("git pull a échoué")
+            self.Logger.info("Mise à jour dev appliquée avec succès (git pull)")
+            return True
+        else:
+            # Fallback: télécharge le ZIP du dernier commit
+            self.Logger.info("Pas de repository git local, téléchargement du ZIP...")
+            ZipUrl = f"https://github.com/{UpdateConfig.GITHUB_OWNER}/{UpdateConfig.GITHUB_REPO}/archive/refs/heads/main.zip"
+            Success = self._ApplyReleaseUpdate(ZipUrl)
+            if Success:
+                self.Logger.info("Mise à jour dev appliquée avec succès (téléchargement ZIP)")
+            return Success
 
     def _ApplyReleaseUpdate(self, DownloadUrl: str) -> bool:
         """
@@ -323,7 +386,13 @@ class UpdateManager:
 
         PythonPath = sys.executable
         ScriptPath = os.path.join(self.ProjectRoot, "main.py")
-        Args = sys.argv[1:]  # Arguments originaux
+
+        # Filtre les arguments qui ne doivent pas être préservés après une mise à jour
+        FILTERED_ARGS = {"--update", "--check-update", "--install-version"}
+        Args = [
+            arg for arg in sys.argv[1:]
+            if not any(arg.startswith(f) for f in FILTERED_ARGS)
+        ]
 
         self.Logger.info(f"Exécution: {PythonPath} {ScriptPath} {' '.join(Args)}")
 

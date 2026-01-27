@@ -5,6 +5,7 @@ Gère la sauvegarde et le chargement des paramètres de performance
 
 import os
 import json
+import platform
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
@@ -85,7 +86,16 @@ class PerformanceConfigManager:
         # Webhooks Discord
         "webhook_enabled": False,     # Activer les webhooks Discord
         "webhook_url": "",            # URL du webhook Discord
-        "webhook_events": {}          # Configuration des evenements webhook
+        "webhook_events": {},         # Configuration des evenements webhook
+        # Mode Full RAM (RAM disk)
+        "ram_mode": "disabled",       # "disabled" | "auto" | "manual"
+        "ram_disk_path": "",          # Chemin manuel du RAM disk
+        "ram_disk_min_size_mb": 500,  # Espace minimum requis en MB
+        # Parametres Windows (ImDisk)
+        "ram_disk_drive_letter": "R", # Lettre du lecteur ImDisk (Windows)
+        "ram_disk_size_mb": 2048,     # Taille du RAM disk ImDisk en MB (Windows)
+        "ram_disk_auto_create": True, # Creer automatiquement au demarrage (Windows)
+        "ram_disk_auto_remove": True  # Supprimer a l'arret du client (Windows)
     }
 
     def __init__(self, ConfigDir: Optional[str] = None):
@@ -321,6 +331,127 @@ class PerformanceConfigManager:
             Chemin du répertoire de travail par défaut
         """
         return os.path.join(str(Path.home()), ".upscaling_client")
+
+    def GetEffectiveTempDirectory(self) -> Tuple[str, str]:
+        """
+        Retourne le répertoire temporaire effectif selon le mode RAM.
+
+        Returns:
+            Tuple (chemin, mode):
+                - chemin: Chemin du répertoire temporaire
+                - mode: "ramdisk" ou "disk"
+        """
+        if self.Config is None:
+            self.Load()
+
+        RamMode = self.Config.get("ram_mode", "disabled")
+        System = platform.system()
+
+        # Mode désactivé
+        if RamMode == "disabled":
+            return self._GetStandardTempDir(), "disk"
+
+        # Mode automatique
+        if RamMode == "auto":
+            try:
+                from shared.utils.ramdisk_detector import (
+                    RamDiskDetector, WindowsRamDiskManager
+                )
+
+                MinSpaceMb = self.Config.get("ram_disk_min_size_mb", 500)
+
+                if System == "Linux":
+                    # Linux: détecte /dev/shm automatiquement
+                    RamDisk = RamDiskDetector.GetBestRamDisk(MinSpaceMb)
+                    if RamDisk and RamDisk.is_writable:
+                        TempPath = os.path.join(RamDisk.path, "upscaling_temp")
+                        os.makedirs(TempPath, exist_ok=True)
+                        self.Logger.info(f"Mode Full RAM (auto): {TempPath}")
+                        return TempPath, "ramdisk"
+
+                elif System == "Windows":
+                    # Windows: crée un RAM disk ImDisk si disponible
+                    if WindowsRamDiskManager.IsImDiskInstalled():
+                        AutoCreate = self.Config.get("ram_disk_auto_create", True)
+                        if AutoCreate:
+                            DriveLetter = self.Config.get("ram_disk_drive_letter", "R")
+                            SizeMb = self.Config.get("ram_disk_size_mb", 2048)
+
+                            # Vérifie si le RAM disk existe déjà
+                            ExistingDisk = WindowsRamDiskManager.GetExistingRamDisk(DriveLetter)
+                            if ExistingDisk:
+                                TempPath = os.path.join(ExistingDisk.path, "upscaling_temp")
+                                os.makedirs(TempPath, exist_ok=True)
+                                self.Logger.info(f"Mode Full RAM (ImDisk existant): {TempPath}")
+                                return TempPath, "ramdisk"
+
+                            # Crée un nouveau RAM disk
+                            Manager = WindowsRamDiskManager()
+                            Path = Manager.CreateRamDisk(SizeMb, DriveLetter)
+                            if Path:
+                                TempPath = os.path.join(Path, "upscaling_temp")
+                                os.makedirs(TempPath, exist_ok=True)
+                                self.Logger.info(f"Mode Full RAM (ImDisk créé): {TempPath}")
+                                return TempPath, "ramdisk"
+                    else:
+                        self.Logger.warning(
+                            "Mode Full RAM auto: ImDisk non installé sur Windows. "
+                            "Téléchargez-le depuis: https://sourceforge.net/projects/imdisk-toolkit/"
+                        )
+
+            except ImportError as e:
+                self.Logger.warning(f"Module ramdisk_detector non disponible: {e}")
+            except Exception as e:
+                self.Logger.error(f"Erreur lors de la détection du RAM disk: {e}")
+
+            # Fallback sur disque
+            self.Logger.warning("Mode Full RAM auto: fallback sur disque")
+            return self._GetStandardTempDir(), "disk"
+
+        # Mode manuel
+        if RamMode == "manual":
+            ManualPath = self.Config.get("ram_disk_path", "")
+            if ManualPath and ManualPath.strip():
+                ManualPath = NormalizePath(ManualPath.strip())
+                try:
+                    from shared.utils.ramdisk_detector import RamDiskDetector
+
+                    Validation = RamDiskDetector.ValidateRamDiskPath(ManualPath)
+                    if Validation.is_valid:
+                        TempPath = os.path.join(ManualPath, "upscaling_temp")
+                        os.makedirs(TempPath, exist_ok=True)
+                        self.Logger.info(f"Mode Full RAM (manuel): {TempPath}")
+                        return TempPath, "ramdisk"
+                    else:
+                        self.Logger.warning(
+                            f"Chemin RAM disk manuel invalide: {Validation.error_message}"
+                        )
+                except ImportError:
+                    # Si le module n'est pas disponible, on accepte quand même le chemin manuel
+                    if os.path.isdir(ManualPath) and os.access(ManualPath, os.W_OK):
+                        TempPath = os.path.join(ManualPath, "upscaling_temp")
+                        os.makedirs(TempPath, exist_ok=True)
+                        self.Logger.info(f"Mode Full RAM (manuel, sans validation): {TempPath}")
+                        return TempPath, "ramdisk"
+                except Exception as e:
+                    self.Logger.error(f"Erreur validation chemin manuel: {e}")
+
+            # Fallback sur disque
+            self.Logger.warning("Mode Full RAM manuel: chemin invalide, fallback sur disque")
+            return self._GetStandardTempDir(), "disk"
+
+        # Mode inconnu, fallback sur disque
+        return self._GetStandardTempDir(), "disk"
+
+    def _GetStandardTempDir(self) -> str:
+        """
+        Retourne le répertoire temporaire standard (sur disque)
+
+        Returns:
+            Chemin du répertoire temp
+        """
+        WorkDir = self.GetWorkDirectory()
+        return os.path.join(WorkDir, "temp")
 
     def _GetGpuGeneration(self, GpuName: str) -> str:
         """

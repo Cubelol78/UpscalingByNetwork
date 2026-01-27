@@ -55,14 +55,16 @@ class MonitoringTab(QWidget):
         self.QueueSizeLabel = self.CreateStatLabel("0", "En attente d'envoi")
         self.CurrentBatchLabel = self.CreateStatLabel("-", "Batch en cours")
         self.StatusLabel = self.CreateStatLabel("Inactif", "Statut")
+        self.StorageModeLabel = self.CreateStatLabel("-", "Mode de stockage")
 
-        # Disposition en grille 3x2
+        # Disposition en grille 4x2
         GridLayout.addWidget(self.BatchesProcessedLabel[0], 0, 0)
         GridLayout.addWidget(self.BatchesFailedLabel[0], 0, 1)
         GridLayout.addWidget(self.ImagesProcessedLabel[0], 1, 0)
         GridLayout.addWidget(self.QueueSizeLabel[0], 1, 1)
         GridLayout.addWidget(self.CurrentBatchLabel[0], 2, 0)
         GridLayout.addWidget(self.StatusLabel[0], 2, 1)
+        GridLayout.addWidget(self.StorageModeLabel[0], 3, 0, 1, 2)  # Prend 2 colonnes
 
         Group.setLayout(GridLayout)
         return Group
@@ -180,6 +182,20 @@ class MonitoringTab(QWidget):
                 }.get(ClientStatus, 'Inconnu')
                 self.StatusLabel[1].setText(StatusText)
 
+                # Mode de stockage
+                TempMode = Status.get('temp_mode', 'disk')
+                TempDir = Status.get('temp_dir', '-')
+                if TempMode == 'ramdisk':
+                    StorageModeText = f"💾 RAM Disk"
+                    self.StorageModeLabel[1].setProperty("class", "stat-value-success")
+                else:
+                    StorageModeText = f"💿 Disque"
+                    self.StorageModeLabel[1].setProperty("class", "stat-value")
+                self.StorageModeLabel[1].setText(StorageModeText)
+                # Refresh le style pour appliquer la classe
+                self.StorageModeLabel[1].style().unpolish(self.StorageModeLabel[1])
+                self.StorageModeLabel[1].style().polish(self.StorageModeLabel[1])
+
                 # Récupère la progression du batch en cours
                 BatchProgress = Status.get('batch_progress', 0)
                 BatchTotal = Status.get('batch_total', 0)
@@ -274,6 +290,7 @@ class MonitoringTab(QWidget):
         self.QueueSizeLabel[1].setText("0")
         self.CurrentBatchLabel[1].setText("-")
         self.StatusLabel[1].setText("Inactif")
+        self.StorageModeLabel[1].setText("-")
         self.ActivityLabel.setText("Aucune activité")
         self.LogsTextEdit.setPlainText("Déconnecté - aucun log disponible")
         # Réinitialise et cache la barre de progression

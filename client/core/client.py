@@ -8,6 +8,7 @@ import threading
 import time
 import os
 import json
+import platform
 from typing import Optional
 from asyncio import Queue, PriorityQueue
 from pathlib import Path
@@ -16,6 +17,7 @@ from dataclasses import dataclass, field
 from client.core.connection import ConnectionManager, DualConnectionManager
 from client.core.processor import LocalProcessor
 from client.utils.error_analyzer import GetErrorAnalyzer
+from client.utils.performance_config import PerformanceConfigManager
 from shared.protocol.messages import (
     MessageFactory, BatchAssignment, HeartbeatPing, HeartbeatPong,
     BatchResult, StatusUpdate, DisconnectMessage
@@ -24,6 +26,7 @@ from shared.utils.logger import GetClientLogger
 from shared.utils.constants import ClientStatus, NetworkConfig
 from shared.utils.path_validator import ValidateWorkDirectory, GetDefaultWorkDirectory, NormalizePath
 from shared.utils.webhook_manager import InitClientWebhookManager, TriggerClientWebhook
+from shared.utils.ramdisk_detector import WindowsRamDiskManager
 from shared.exceptions import ProcessingError
 
 
@@ -76,18 +79,42 @@ class UpscalingClient:
         else:
             self.WorkDirectory = GetDefaultWorkDirectory()
 
+        # Détermine le répertoire temporaire (RAM disk ou disque classique)
+        ConfigMgr = PerformanceConfigManager()
+        TempPath, TempMode = ConfigMgr.GetEffectiveTempDirectory()
+
+        # Stocke les informations du répertoire temporaire
+        self.TempDir = TempPath
+        self.TempMode = TempMode  # "ramdisk" ou "disk"
+        self.RamDiskCreated = False  # Flag pour savoir si on a créé le RAM disk
+        self.RamDiskDriveLetter = None  # Lettre du lecteur (Windows uniquement)
+
+        # Si un RAM disk Windows a été créé automatiquement, stocke la lettre
+        if TempMode == "ramdisk" and platform.system() == "Windows":
+            Config = ConfigMgr.GetAll()
+            if Config.get("ram_mode") == "auto" and Config.get("ram_disk_auto_create", True):
+                # Le RAM disk a été créé par GetEffectiveTempDirectory()
+                self.RamDiskCreated = True
+                self.RamDiskDriveLetter = Config.get("ram_disk_drive_letter", "R")
+                self.Logger.info(f"RAM disk Windows créé: {TempPath}")
+
+        # Log du mode de stockage utilisé
+        if TempMode == "ramdisk":
+            self.Logger.info(f"Mode Full RAM activé - Répertoire temporaire: {TempPath}")
+        else:
+            self.Logger.info(f"Mode disque classique - Répertoire temporaire: {TempPath}")
+
         # Valide et crée les sous-répertoires nécessaires
-        TempDir = os.path.join(self.WorkDirectory, 'temp')
         self.ResultCacheDir = os.path.join(self.WorkDirectory, 'result_cache')
 
         try:
-            os.makedirs(TempDir, exist_ok=True)
+            os.makedirs(TempPath, exist_ok=True)
             os.makedirs(self.ResultCacheDir, exist_ok=True)
         except PermissionError as e:
             raise ProcessingError(
                 f"Permission refusée lors de la création des répertoires de travail: {e}",
                 code="WORK_DIR_PERMISSION_DENIED",
-                details={"work_directory": self.WorkDirectory, "temp_dir": TempDir},
+                details={"work_directory": self.WorkDirectory, "temp_dir": self.TempDir},
                 is_recoverable=False,
                 suggested_action="abort"
             )
@@ -111,7 +138,7 @@ class UpscalingClient:
 
         # Initialise le processeur local avec le bon répertoire temp
         try:
-            self.LocalProcessor = LocalProcessor(TempDirectory=TempDir)
+            self.LocalProcessor = LocalProcessor(TempDirectory=self.TempDir)
         except Exception as e:
             raise ProcessingError(
                 f"Erreur lors de l'initialisation du processeur: {e}",
@@ -336,6 +363,18 @@ class UpscalingClient:
 
         # Nettoie le cache des resultats en attente
         self._CleanupResultCache()
+
+        # Supprime le RAM disk Windows si créé automatiquement
+        if self.RamDiskCreated and platform.system() == "Windows":
+            ConfigMgr = PerformanceConfigManager()
+            Config = ConfigMgr.GetAll()
+            if Config.get("ram_disk_auto_remove", True):
+                self.Logger.info(f"Suppression du RAM disk Windows ({self.RamDiskDriveLetter}:)...")
+                Manager = WindowsRamDiskManager()
+                if Manager.RemoveRamDisk(self.RamDiskDriveLetter):
+                    self.Logger.info("RAM disk supprimé avec succès")
+                else:
+                    self.Logger.warning("Échec de la suppression du RAM disk (peut nécessiter une suppression manuelle)")
 
         self.Logger.info("Client arrete")
 
@@ -1221,7 +1260,10 @@ class UpscalingClient:
             "queue_size": QueueSize,  # Batches en attente d'envoi
             # Progression du batch en cours
             "batch_progress": self.CurrentBatchProgress,
-            "batch_total": self.CurrentBatchTotal
+            "batch_total": self.CurrentBatchTotal,
+            # Mode de stockage
+            "temp_mode": self.TempMode,  # "ramdisk" ou "disk"
+            "temp_dir": self.TempDir
         }
 
     def GetRecentLogs(self, Count: int = 20) -> list:

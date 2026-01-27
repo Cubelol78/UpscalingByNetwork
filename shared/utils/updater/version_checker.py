@@ -150,27 +150,36 @@ class VersionChecker:
         Returns:
             UpdateInfo
         """
-        # Vérifie si c'est un repo git
-        if not self.Client.IsGitRepo(ProjectRoot):
-            self.Logger.warning(
-                "Le canal dev nécessite un repository git. "
-                "Utilisez le canal release à la place."
-            )
-            return UpdateInfo(
-                Available=False,
-                Channel=UpdateConfig.CHANNEL_DEV,
-                CurrentVersion=CurrentVersion,
-                NewVersion=CurrentVersion,
-                Changelog="Le canal dev nécessite un repository git"
-            )
-
         try:
-            # Récupère le SHA local et distant
-            LocalSha = self.Client.GetLocalCommitSha(ProjectRoot)
-            RemoteSha = self.Client.GetLatestCommitSha()
+            # Tente d'abord via git local (méthode préférée)
+            if self.Client.IsGitRepo(ProjectRoot):
+                LocalSha = self.Client.GetLocalCommitSha(ProjectRoot)
+                self.Logger.debug("Repository git détecté, utilisation de git local")
+            else:
+                # Fallback: utilise AppMetadata.COMMIT_SHA (détecté au démarrage)
+                from shared.utils.constants import AppMetadata
+                LocalSha = AppMetadata.COMMIT_SHA_FULL
+                self.Logger.debug("Pas de repository git, utilisation de AppMetadata.COMMIT_SHA")
 
-            if not LocalSha or not RemoteSha:
-                self.Logger.warning("Impossible de comparer les commits")
+                if not LocalSha:
+                    # Pas de SHA local du tout, impossible de comparer
+                    self.Logger.warning(
+                        "Aucun SHA local disponible. "
+                        "Le canal dev nécessite un repository git ou une version déployée depuis git."
+                    )
+                    return UpdateInfo(
+                        Available=False,
+                        Channel=UpdateConfig.CHANNEL_DEV,
+                        CurrentVersion=CurrentVersion,
+                        NewVersion=CurrentVersion,
+                        Changelog="Impossible de déterminer la version locale"
+                    )
+
+            # Récupère SHA distant via API GitHub (sans git)
+            RemoteSha = self.Client.GetLatestCommitShaViaAPI()
+
+            if not RemoteSha:
+                self.Logger.warning("Impossible de récupérer le SHA distant")
                 return UpdateInfo(
                     Available=False,
                     Channel=UpdateConfig.CHANNEL_DEV,

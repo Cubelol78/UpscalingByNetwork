@@ -375,6 +375,49 @@ def HandleUpdate(Args):
             print(f"✗ Erreur lors de la mise à jour: {e}")
         return True
 
+    # --install-version : force l'installation d'une version spécifique
+    if Args.install_version:
+        from shared.utils.constants import AppMetadata
+
+        TargetVersion = Args.install_version
+        print(f"\nInstallation forcée de la version: {TargetVersion}")
+
+        try:
+            # Détermine le type de version
+            if TargetVersion.startswith("dev-") or len(TargetVersion) == 7:
+                # Version dev (commit SHA)
+                Sha = TargetVersion.replace("dev-", "")
+                Info = Manager.GetDevVersionInfo(Sha)
+            else:
+                # Version release (tag)
+                VersionClean = TargetVersion.lstrip("v")
+                Info = Manager.GetReleaseVersionInfo(VersionClean)
+
+            if not Info or not Info.DownloadUrl:
+                print(f"✗ Version {TargetVersion} introuvable")
+                return True
+
+            # Demande confirmation sauf si --yes
+            if not Args.auto_accept:
+                print(f"Version actuelle: {AppMetadata.VERSION}")
+                print(f"Version cible: {Info.NewVersion}")
+                Response = input("Confirmer l'installation ? (oui/non): ").strip().lower()
+                if Response not in ["oui", "o", "yes", "y"]:
+                    print("Installation annulée")
+                    return True
+
+            print("Installation en cours...")
+            Manager.ApplyUpdate(Info)
+            print("✓ Installation terminée. Redémarrage...")
+            Manager.RequestRestart()
+            return False
+
+        except Exception as e:
+            print(f"✗ Erreur lors de l'installation: {e}")
+            import traceback
+            traceback.print_exc()
+            return True
+
     # Vérification automatique au démarrage (sauf si --skip-update)
     if Args.skip_update or not AutoCheck:
         return True
@@ -584,6 +627,11 @@ Mise à jour:
         action="store_true",
         dest="skip_update",
         help="Ignore la vérification de mise à jour au démarrage"
+    )
+    UpdateGroup.add_argument(
+        "--install-version",
+        metavar="VERSION",
+        help="Force l'installation d'une version spécifique (ex: 1.5.0, v1.5.0, ou dev-abc1234)"
     )
 
     Args = Parser.parse_args()

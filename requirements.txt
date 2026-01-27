@@ -21,3 +21,6 @@ psutil>=5.9.0
 
 # Interface graphique
 PyQt5>=5.15.0
+
+# RAM disk Windows (optionnel, nécessite ImDisk Toolkit)
+ramdisk; sys_platform == 'win32'
