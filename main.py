@@ -9,6 +9,61 @@ import os
 import subprocess
 import argparse
 
+
+def _FinalizePendingUpdate():
+    """
+    Finalise une mise à jour en attente de main.py
+
+    DOIT être appelé en tout premier, avant tout autre import,
+    pour éviter les conflits de dépendances entre versions.
+    """
+    try:
+        import shutil
+
+        ProjectRoot = os.path.dirname(os.path.abspath(__file__))
+        MainPath = os.path.join(ProjectRoot, "main.py")
+        NewMainPath = MainPath + ".new"
+        BackupPath = MainPath + ".bak"
+
+        # Vérifie si une mise à jour est en attente
+        if not os.path.exists(NewMainPath):
+            return False
+
+        print("Finalisation de la mise à jour de main.py...")
+
+        # Backup de l'ancien main.py
+        if os.path.exists(MainPath):
+            shutil.copy2(MainPath, BackupPath)
+
+        # Remplace main.py par la nouvelle version
+        os.replace(NewMainPath, MainPath)
+
+        print("✓ main.py mis à jour avec succès")
+        print("✓ Redémarrage nécessaire pour charger la nouvelle version...\n")
+
+        # Redémarre immédiatement avec la nouvelle version
+        PythonPath = sys.executable
+        Args = sys.argv
+        os.execv(PythonPath, [PythonPath] + Args)
+
+        return True
+
+    except Exception as e:
+        print(f"✗ Erreur lors de la finalisation de la mise à jour: {e}")
+        # Tente de restaurer le backup
+        try:
+            if os.path.exists(BackupPath):
+                shutil.copy2(BackupPath, MainPath)
+                print("✓ Backup restauré")
+        except Exception:
+            pass
+        return False
+
+
+# Finalise immédiatement toute mise à jour en attente
+# AVANT tous les autres imports pour éviter les conflits de dépendances
+_FinalizePendingUpdate()
+
 # Import conditionnel pour le pare-feu Windows
 try:
     from shared.utils.firewall import (
@@ -374,34 +429,33 @@ def HandleUpdate(Args):
 
     Manager = UpdateManager()
 
-    # Finalise une mise à jour précédente si nécessaire (main.py.new -> main.py)
-    if Manager.FinalizeSelfUpdate():
-        print("✓ Mise à jour précédente finalisée")
+    # Lit toujours les paramètres de mise à jour depuis la DB
+    try:
+        from server.database.db_manager import DatabaseManager
+        Db = DatabaseManager()
+        if Db.Connect():
+            Db.InitializeDefaultParameters()
 
-    # Détermine le canal (argument CLI > DB > défaut)
-    Channel = Args.channel
-    if not Channel:
-        try:
-            from server.database.db_manager import DatabaseManager
-            Db = DatabaseManager()
-            if Db.Connect():
-                Db.InitializeDefaultParameters()
+            # Canal : argument CLI > DB > défaut
+            if not Args.channel:
                 Channel = Db.GetParameter("update_channel", UpdateConfig.DEFAULT_CHANNEL)
-                AutoCheck = Db.GetParameterBool("update_auto_check", True)
-                AutoApply = Db.GetParameterBool("update_auto_apply", False)
-                SkippedVersion = Db.GetParameter("update_skipped_version", "")
-                Db.Close()
             else:
-                Channel = UpdateConfig.DEFAULT_CHANNEL
-                AutoCheck = True
-                AutoApply = False
-                SkippedVersion = ""
-        except Exception:
-            Channel = UpdateConfig.DEFAULT_CHANNEL
+                Channel = Args.channel
+
+            # Paramètres de vérification : toujours depuis la DB
+            AutoCheck = Db.GetParameterBool("update_auto_check", True)
+            AutoApply = Db.GetParameterBool("update_auto_apply", False)
+            SkippedVersion = Db.GetParameter("update_skipped_version", "")
+            Db.Close()
+        else:
+            # Fallback si DB inaccessible
+            Channel = Args.channel or UpdateConfig.DEFAULT_CHANNEL
             AutoCheck = True
             AutoApply = False
             SkippedVersion = ""
-    else:
+    except Exception:
+        # Fallback en cas d'erreur
+        Channel = Args.channel or UpdateConfig.DEFAULT_CHANNEL
         AutoCheck = True
         AutoApply = False
         SkippedVersion = ""

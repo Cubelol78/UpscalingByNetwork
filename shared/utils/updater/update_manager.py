@@ -381,8 +381,9 @@ class UpdateManager:
         """
         self.Logger.info("Redémarrage de l'application...")
 
-        # Finalise d'abord si nécessaire
-        self.FinalizeSelfUpdate()
+        # Note: FinalizeSelfUpdate() n'est plus appelé ici car il est maintenant
+        # exécuté automatiquement au tout début de main.py pour éviter les
+        # conflits de dépendances entre versions
 
         PythonPath = sys.executable
         ScriptPath = os.path.join(self.ProjectRoot, "main.py")
