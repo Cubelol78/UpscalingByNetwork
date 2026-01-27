@@ -80,19 +80,34 @@ def InstallDependencies(VenvPath):
         return False
 
 
-def UpdateDependencies():
-    """Met à jour les dépendances dans l'environnement virtuel actif"""
+def UpdateDependencies(AutoRecreate=False):
+    """
+    Met à jour les dépendances dans l'environnement virtuel actif
+
+    Args:
+        AutoRecreate: Si True, recrée automatiquement le venv en cas d'échec
+
+    Returns:
+        True si succès, False sinon
+    """
     print("Vérification des dépendances...")
 
     RequirementsPath = os.path.join(os.path.dirname(__file__), "requirements.txt")
 
+    # Vérifie que requirements.txt existe
+    if not os.path.exists(RequirementsPath):
+        print(f"✗ Erreur: {RequirementsPath} non trouvé")
+        print("  Le fichier requirements.txt est manquant ou la mise à jour est incomplète")
+        return False
+
     try:
-        # Mise à jour silencieuse des dépendances
+        # Mise à jour des dépendances
         Result = subprocess.run(
             [sys.executable, "-m", "pip", "install", "-r", RequirementsPath, "--upgrade"],
             check=True,
             capture_output=True,
-            text=True
+            text=True,
+            timeout=300  # 5 minutes max
         )
 
         # Vérifie si des paquets ont été mis à jour
@@ -104,10 +119,78 @@ def UpdateDependencies():
 
         return True
 
-    except subprocess.CalledProcessError as e:
-        print(f"⚠ Avertissement: Impossible de mettre à jour les dépendances: {e}")
-        print("Vous pouvez continuer, mais certaines fonctionnalités peuvent ne pas fonctionner")
+    except subprocess.TimeoutExpired:
+        print("✗ Timeout lors de l'installation des dépendances (> 5 min)")
         return False
+
+    except subprocess.CalledProcessError as e:
+        print(f"\n✗ Erreur lors de la mise à jour des dépendances")
+        print(f"Code de retour: {e.returncode}")
+
+        # Affiche le détail de l'erreur
+        if e.stderr:
+            print("\nDétail de l'erreur:")
+            # Limite à 500 caractères pour ne pas polluer
+            ErrorDetail = e.stderr.strip()
+            if len(ErrorDetail) > 500:
+                ErrorDetail = ErrorDetail[-500:]
+                print(f"...\n{ErrorDetail}")
+            else:
+                print(ErrorDetail)
+
+        # Propose de recréer le venv
+        VenvPath = os.path.join(os.path.dirname(__file__), "venv")
+
+        if AutoRecreate:
+            print("\nRecréation automatique de l'environnement virtuel...")
+            return RecreateVenv(VenvPath)
+        else:
+            print("\n⚠ L'environnement virtuel semble corrompu ou incompatible avec les nouvelles dépendances.")
+            Response = input("Voulez-vous recréer l'environnement virtuel ? (oui/non): ").strip().lower()
+
+            if Response in ["oui", "o", "yes", "y"]:
+                return RecreateVenv(VenvPath)
+            else:
+                print("Vous pouvez continuer, mais certaines fonctionnalités peuvent ne pas fonctionner")
+                print("Pour recréer le venv manuellement: supprimez le dossier 'venv' et relancez")
+                return False
+
+def RecreateVenv(VenvPath):
+    """
+    Recrée complètement l'environnement virtuel
+
+    Args:
+        VenvPath: Chemin vers le venv à recréer
+
+    Returns:
+        True si succès
+    """
+    import shutil
+
+    print(f"\nSuppression de l'ancien environnement virtuel...")
+    try:
+        if os.path.exists(VenvPath):
+            shutil.rmtree(VenvPath)
+            print("✓ Ancien venv supprimé")
+    except Exception as e:
+        print(f"✗ Erreur lors de la suppression: {e}")
+        print("  Essayez de supprimer manuellement le dossier 'venv'")
+        return False
+
+    print("\nCréation d'un nouvel environnement virtuel...")
+    if not CreateVirtualEnv(VenvPath):
+        return False
+
+    print("\nInstallation des dépendances...")
+    if not InstallDependencies(VenvPath):
+        return False
+
+    print("\n✓ Environnement virtuel recréé avec succès")
+    print("Redémarrage dans le nouvel environnement...")
+
+    # Redémarre dans le nouveau venv
+    RestartInVenv(VenvPath, sys.argv[1:])
+    return True
 
 
 def AskYesNo(Question, AutoAccept=False):
@@ -571,6 +654,10 @@ Mise à jour:
   python main.py --update --yes     Met à jour sans confirmation
   python main.py --channel=dev      Utilise le canal dev (derniers commits)
   python main.py --skip-update      Ignore la vérification de mise à jour
+  python main.py --install-version=1.5.0  Installe une version spécifique
+
+Environnement virtuel:
+  python main.py --recreate-venv    Recrée l'environnement virtuel (après mise à jour)
         """
     )
     Parser.add_argument(
@@ -634,6 +721,15 @@ Mise à jour:
         help="Force l'installation d'une version spécifique (ex: 1.5.0, v1.5.0, ou dev-abc1234)"
     )
 
+    # Groupe environnement virtuel
+    VenvGroup = Parser.add_argument_group("Environnement virtuel")
+    VenvGroup.add_argument(
+        "--recreate-venv",
+        action="store_true",
+        dest="recreate_venv",
+        help="Force la recréation de l'environnement virtuel (utile après une mise à jour)"
+    )
+
     Args = Parser.parse_args()
 
     # Validation: ne peut pas spécifier à la fois --server et --client
@@ -649,6 +745,20 @@ Mise à jour:
 
     # Vérification environnement virtuel
     VenvPath = os.path.join(os.path.dirname(__file__), "venv")
+
+    # Gestion du flag --recreate-venv
+    if Args.recreate_venv:
+        if CheckVirtualEnv() and VenvExists(VenvPath):
+            print("\n🔄 Recréation de l'environnement virtuel demandée...")
+            if RecreateVenv(VenvPath):
+                # RecreateVenv redémarre automatiquement
+                sys.exit(0)
+            else:
+                print("\n✗ Échec de la recréation du venv")
+                sys.exit(1)
+        else:
+            print("\n⚠ Aucun environnement virtuel à recréer")
+            # Continue normalement pour créer le venv
 
     if not CheckVirtualEnv():
         # Vérifie si un venv valide existe
