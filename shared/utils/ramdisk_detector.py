@@ -429,23 +429,33 @@ class WindowsRamDiskManager:
             # Conversion du système de fichiers
             FsType = "NTFS" if FileSystem.lower() == "ntfs" else "FAT32"
 
-            # Attend un peu plus que le disque soit détecté par Windows
-            self.Logger.info("Attente de la détection du disque par Windows...")
+            # Attend que le disque soit créé par ImDisk
+            self.Logger.info("Attente de la création du disque par ImDisk...")
 
-            # Vérifie plusieurs fois si le disque est détectable
+            # Vérifie via ImDisk que le disque existe (même non formaté)
             MaxRetries = 10
-            DiskPath = f"{DriveLetter}:\\"
+            DiskExists = False
 
             for i in range(MaxRetries):
-                if os.path.exists(DiskPath):
-                    self.Logger.debug(f"Disque {DiskPath} détecté après {i+1} tentatives")
-                    break
-                time.sleep(1)
-            else:
-                self.Logger.error(f"Le disque {DiskPath} n'est pas détectable après {MaxRetries} secondes")
+                try:
+                    ExistingDisks = list_hds()
+                    for DiskInfo in ExistingDisks:
+                        if DiskInfo.get("drive_letter", "").upper() == DriveLetter.upper():
+                            self.Logger.debug(f"Disque {DriveLetter}: détecté par ImDisk après {i+1} tentatives")
+                            DiskExists = True
+                            break
+                    if DiskExists:
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.5)
+
+            if not DiskExists:
+                self.Logger.error(f"Le disque {DriveLetter}: n'est pas créé par ImDisk après {MaxRetries/2} secondes")
                 return False
 
-            # Attend encore un peu pour être sûr
+            # Attend que Windows monte le disque (délai fixe)
+            self.Logger.debug("Attente du montage par Windows...")
             time.sleep(2)
 
             # Méthode directe : format.com avec /FS et /Q (formatage rapide)
