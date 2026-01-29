@@ -367,13 +367,14 @@ class WindowsRamDiskManager:
             return None
 
         try:
-            self.Logger.info(f"Création du RAM disk {DriveLetter}: ({SizeMb} MB, {FileSystem})")
+            self.Logger.info(f"Initialisation du RAM disk {DriveLetter}: ({SizeMb} MB, {FileSystem})")
 
-            # Supprime d'abord si existe déjà
+            # Supprime d'abord si existe déjà (cleanup)
             self.RemoveRamDisk(DriveLetter)
 
             # Crée le nouveau RAM disk SANS formatage automatique
             # (le paramètre fs de create_hd ne fonctionne pas toujours correctement)
+            self.Logger.info(f"Création du disque virtuel {DriveLetter}:...")
             create_hd(
                 size_in_megabyte=SizeMb,
                 drive_letter=DriveLetter
@@ -382,7 +383,7 @@ class WindowsRamDiskManager:
             self.CreatedDriveLetter = DriveLetter
             Path = f"{DriveLetter}:\\"
 
-            self.Logger.info(f"RAM disk {DriveLetter}: créé, formatage en cours...")
+            self.Logger.info(f"Disque virtuel {DriveLetter}: créé, formatage en cours...")
 
             # Formate toujours le disque manuellement pour garantir qu'il soit utilisable
             if not self._FormatDrive(DriveLetter, FileSystem):
@@ -430,13 +431,30 @@ class WindowsRamDiskManager:
 
             # Attend un peu plus que le disque soit détecté par Windows
             self.Logger.info("Attente de la détection du disque par Windows...")
-            time.sleep(3)
+
+            # Vérifie plusieurs fois si le disque est détectable
+            MaxRetries = 10
+            DiskPath = f"{DriveLetter}:\\"
+
+            for i in range(MaxRetries):
+                if os.path.exists(DiskPath):
+                    self.Logger.debug(f"Disque {DiskPath} détecté après {i+1} tentatives")
+                    break
+                time.sleep(1)
+            else:
+                self.Logger.error(f"Le disque {DiskPath} n'est pas détectable après {MaxRetries} secondes")
+                return False
+
+            # Attend encore un peu pour être sûr
+            time.sleep(2)
 
             # Méthode directe : format.com avec /FS et /Q (formatage rapide)
             self.Logger.info(f"Formatage de {DriveLetter}: en {FsType} (rapide)...")
 
             # Utilise format avec echo Y pour auto-confirmer
             Command = f'format {DriveLetter}: /FS:{FsType} /Q /V:RAMDISK /Y'
+
+            self.Logger.debug(f"Commande: {Command}")
 
             Result = subprocess.run(
                 Command,
@@ -447,6 +465,10 @@ class WindowsRamDiskManager:
                 creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
             )
 
+            self.Logger.debug(f"Commande 1 - returncode: {Result.returncode}")
+            self.Logger.debug(f"Commande 1 - stdout: {Result.stdout}")
+            self.Logger.debug(f"Commande 1 - stderr: {Result.stderr}")
+
             if Result.returncode == 0:
                 self.Logger.info(f"Formatage réussi: {DriveLetter}: ({FsType})")
                 time.sleep(1)  # Attend que le formatage soit finalisé
@@ -455,6 +477,7 @@ class WindowsRamDiskManager:
             # Si échec, essaie sans /Y (avec echo Y à la place)
             self.Logger.warning("Tentative avec echo Y...")
             Command2 = f'echo Y|format {DriveLetter}: /FS:{FsType} /Q /V:RAMDISK'
+            self.Logger.debug(f"Commande 2: {Command2}")
 
             Result2 = subprocess.run(
                 Command2,
@@ -465,16 +488,16 @@ class WindowsRamDiskManager:
                 creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
             )
 
+            self.Logger.debug(f"Commande 2 - returncode: {Result2.returncode}")
+            self.Logger.debug(f"Commande 2 - stdout: {Result2.stdout}")
+            self.Logger.debug(f"Commande 2 - stderr: {Result2.stderr}")
+
             if Result2.returncode == 0:
                 self.Logger.info(f"Formatage réussi: {DriveLetter}:")
                 time.sleep(1)
                 return True
             else:
-                self.Logger.error(f"Échec du formatage")
-                self.Logger.debug(f"Commande 1 - stdout: {Result.stdout}")
-                self.Logger.debug(f"Commande 1 - stderr: {Result.stderr}")
-                self.Logger.debug(f"Commande 2 - stdout: {Result2.stdout}")
-                self.Logger.debug(f"Commande 2 - stderr: {Result2.stderr}")
+                self.Logger.error(f"Échec du formatage après 2 tentatives")
                 return False
 
         except subprocess.TimeoutExpired:
