@@ -372,40 +372,36 @@ class WindowsRamDiskManager:
             # Supprime d'abord si existe déjà
             self.RemoveRamDisk(DriveLetter)
 
-            # Crée le nouveau RAM disk
+            # Crée le nouveau RAM disk SANS formatage automatique
+            # (le paramètre fs de create_hd ne fonctionne pas toujours correctement)
             create_hd(
                 size_in_megabyte=SizeMb,
-                drive_letter=DriveLetter,
-                fs=FileSystem
+                drive_letter=DriveLetter
             )
 
             self.CreatedDriveLetter = DriveLetter
             Path = f"{DriveLetter}:\\"
 
-            # Vérifie si le disque est accessible et formaté
+            self.Logger.info(f"RAM disk {DriveLetter}: créé, formatage en cours...")
+
+            # Formate toujours le disque manuellement pour garantir qu'il soit utilisable
+            if not self._FormatDrive(DriveLetter, FileSystem):
+                self.Logger.error("Échec du formatage")
+                self.RemoveRamDisk(DriveLetter)
+                return None
+
+            # Vérifie que le disque est maintenant accessible
             import time
-            time.sleep(1)  # Attendre que le disque soit monté
+            time.sleep(1)
 
-            if not os.path.exists(Path):
-                self.Logger.warning(f"Le disque {Path} n'est pas encore monté, attente...")
-                time.sleep(2)
-
-            # Vérifie si le disque est formaté en tentant d'y accéder
             try:
-                # Tente de lister le contenu (échoue si non formaté)
+                # Tente de lister le contenu
                 os.listdir(Path)
-                self.Logger.info(f"RAM disk {Path} déjà formaté et accessible")
+                self.Logger.info(f"RAM disk {Path} formaté et accessible")
             except (OSError, PermissionError) as e:
-                # Le disque existe mais n'est pas formaté
-                self.Logger.warning(f"Le disque {Path} n'est pas formaté: {e}")
-                self.Logger.info(f"Formatage du disque {DriveLetter}: en {FileSystem.upper()}...")
-
-                if not self._FormatDrive(DriveLetter, FileSystem):
-                    self.Logger.error("Échec du formatage")
-                    self.RemoveRamDisk(DriveLetter)
-                    return None
-
-                self.Logger.info(f"Disque {DriveLetter}: formaté avec succès")
+                self.Logger.error(f"Le disque {Path} n'est toujours pas accessible après formatage: {e}")
+                self.RemoveRamDisk(DriveLetter)
+                return None
 
             self.Logger.info(f"RAM disk créé avec succès: {Path}")
             return Path
@@ -426,22 +422,25 @@ class WindowsRamDiskManager:
             True si succès
         """
         import subprocess
+        import time
 
         try:
             # Conversion du système de fichiers
             FsType = "NTFS" if FileSystem.lower() == "ntfs" else "FAT32"
 
-            # Utilise PowerShell Format-Volume (plus fiable que format.com)
-            Command = [
-                "powershell",
-                "-Command",
-                f"Format-Volume -DriveLetter {DriveLetter} -FileSystem {FsType} -Confirm:$false -Force"
-            ]
+            # Attend un peu plus que le disque soit détecté par Windows
+            self.Logger.info("Attente de la détection du disque par Windows...")
+            time.sleep(3)
 
-            self.Logger.debug(f"Exécution: {' '.join(Command)}")
+            # Méthode directe : format.com avec /FS et /Q (formatage rapide)
+            self.Logger.info(f"Formatage de {DriveLetter}: en {FsType} (rapide)...")
+
+            # Utilise format avec echo Y pour auto-confirmer
+            Command = f'format {DriveLetter}: /FS:{FsType} /Q /V:RAMDISK /Y'
 
             Result = subprocess.run(
                 Command,
+                shell=True,
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -450,35 +449,41 @@ class WindowsRamDiskManager:
 
             if Result.returncode == 0:
                 self.Logger.info(f"Formatage réussi: {DriveLetter}: ({FsType})")
+                time.sleep(1)  # Attend que le formatage soit finalisé
+                return True
+
+            # Si échec, essaie sans /Y (avec echo Y à la place)
+            self.Logger.warning("Tentative avec echo Y...")
+            Command2 = f'echo Y|format {DriveLetter}: /FS:{FsType} /Q /V:RAMDISK'
+
+            Result2 = subprocess.run(
+                Command2,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+            )
+
+            if Result2.returncode == 0:
+                self.Logger.info(f"Formatage réussi: {DriveLetter}:")
+                time.sleep(1)
                 return True
             else:
-                self.Logger.error(f"Échec du formatage: {Result.stderr}")
-
-                # Fallback: Tente avec la commande format.com classique
-                self.Logger.info("Tentative avec format.com...")
-                Command2 = f'echo Y|format {DriveLetter}: /FS:{FsType} /Q /V:RAMDISK'
-
-                Result2 = subprocess.run(
-                    Command2,
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                    creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
-                )
-
-                if Result2.returncode == 0:
-                    self.Logger.info(f"Formatage réussi avec format.com: {DriveLetter}:")
-                    return True
-                else:
-                    self.Logger.error(f"Échec avec format.com: {Result2.stderr}")
-                    return False
+                self.Logger.error(f"Échec du formatage")
+                self.Logger.debug(f"Commande 1 - stdout: {Result.stdout}")
+                self.Logger.debug(f"Commande 1 - stderr: {Result.stderr}")
+                self.Logger.debug(f"Commande 2 - stdout: {Result2.stdout}")
+                self.Logger.debug(f"Commande 2 - stderr: {Result2.stderr}")
+                return False
 
         except subprocess.TimeoutExpired:
             self.Logger.error("Timeout lors du formatage (> 60s)")
             return False
         except Exception as e:
             self.Logger.error(f"Erreur lors du formatage: {e}")
+            import traceback
+            self.Logger.debug(traceback.format_exc())
             return False
 
     def RemoveRamDisk(self, DriveLetter: str = None) -> bool:
