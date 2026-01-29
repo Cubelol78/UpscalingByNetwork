@@ -167,11 +167,8 @@ class GitHubClient:
         Returns:
             SHA du dernier commit ou None si erreur
         """
-        Url = f"{UpdateConfig.GITHUB_API_URL}/commits/{Branch}"
-
         try:
-            Response = self._Request(Url, Timeout=UpdateConfig.API_TIMEOUT)
-            CommitData = Response.json()
+            CommitData = self._MakeApiRequest(f"/commits/{Branch}")
             Sha = CommitData["sha"]
             self.Logger.debug(f"Dernier commit {Branch} (API): {Sha[:8]}")
             return Sha
