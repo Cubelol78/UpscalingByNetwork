@@ -382,12 +382,104 @@ class WindowsRamDiskManager:
             self.CreatedDriveLetter = DriveLetter
             Path = f"{DriveLetter}:\\"
 
+            # Vérifie si le disque est accessible et formaté
+            import time
+            time.sleep(1)  # Attendre que le disque soit monté
+
+            if not os.path.exists(Path):
+                self.Logger.warning(f"Le disque {Path} n'est pas encore monté, attente...")
+                time.sleep(2)
+
+            # Vérifie si le disque est formaté en tentant d'y accéder
+            try:
+                # Tente de lister le contenu (échoue si non formaté)
+                os.listdir(Path)
+                self.Logger.info(f"RAM disk {Path} déjà formaté et accessible")
+            except (OSError, PermissionError) as e:
+                # Le disque existe mais n'est pas formaté
+                self.Logger.warning(f"Le disque {Path} n'est pas formaté: {e}")
+                self.Logger.info(f"Formatage du disque {DriveLetter}: en {FileSystem.upper()}...")
+
+                if not self._FormatDrive(DriveLetter, FileSystem):
+                    self.Logger.error("Échec du formatage")
+                    self.RemoveRamDisk(DriveLetter)
+                    return None
+
+                self.Logger.info(f"Disque {DriveLetter}: formaté avec succès")
+
             self.Logger.info(f"RAM disk créé avec succès: {Path}")
             return Path
 
         except Exception as e:
             self.Logger.error(f"Erreur lors de la création du RAM disk: {e}")
             return None
+
+    def _FormatDrive(self, DriveLetter: str, FileSystem: str) -> bool:
+        """
+        Formate manuellement un lecteur avec le système de fichiers spécifié
+
+        Args:
+            DriveLetter: Lettre du lecteur (sans ':')
+            FileSystem: "ntfs" ou "fat32"
+
+        Returns:
+            True si succès
+        """
+        import subprocess
+
+        try:
+            # Conversion du système de fichiers
+            FsType = "NTFS" if FileSystem.lower() == "ntfs" else "FAT32"
+
+            # Utilise PowerShell Format-Volume (plus fiable que format.com)
+            Command = [
+                "powershell",
+                "-Command",
+                f"Format-Volume -DriveLetter {DriveLetter} -FileSystem {FsType} -Confirm:$false -Force"
+            ]
+
+            self.Logger.debug(f"Exécution: {' '.join(Command)}")
+
+            Result = subprocess.run(
+                Command,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+            )
+
+            if Result.returncode == 0:
+                self.Logger.info(f"Formatage réussi: {DriveLetter}: ({FsType})")
+                return True
+            else:
+                self.Logger.error(f"Échec du formatage: {Result.stderr}")
+
+                # Fallback: Tente avec la commande format.com classique
+                self.Logger.info("Tentative avec format.com...")
+                Command2 = f'echo Y|format {DriveLetter}: /FS:{FsType} /Q /V:RAMDISK'
+
+                Result2 = subprocess.run(
+                    Command2,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+                )
+
+                if Result2.returncode == 0:
+                    self.Logger.info(f"Formatage réussi avec format.com: {DriveLetter}:")
+                    return True
+                else:
+                    self.Logger.error(f"Échec avec format.com: {Result2.stderr}")
+                    return False
+
+        except subprocess.TimeoutExpired:
+            self.Logger.error("Timeout lors du formatage (> 60s)")
+            return False
+        except Exception as e:
+            self.Logger.error(f"Erreur lors du formatage: {e}")
+            return False
 
     def RemoveRamDisk(self, DriveLetter: str = None) -> bool:
         """
