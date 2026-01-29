@@ -407,7 +407,6 @@ class WindowsRamDiskManager:
     def _CreateAndFormatWithImDisk(self, SizeMb: int, DriveLetter: str, FileSystem: str) -> bool:
         """
         Crée et formate un RAM disk en utilisant directement imdisk.exe
-        (ne nécessite pas de privilèges admin contrairement à format.com)
 
         Args:
             SizeMb: Taille en MB
@@ -418,47 +417,84 @@ class WindowsRamDiskManager:
             True si succès
         """
         import subprocess
+        import ctypes
 
         try:
-            # Conversion du système de fichiers pour imdisk
-            FsType = "ntfs" if FileSystem.lower() == "ntfs" else "fat32"
+            # Étape 1 : Créer le disque RAW (ne nécessite pas admin)
+            self.Logger.info(f"Création du disque RAW {DriveLetter}:...")
 
-            # Commande imdisk.exe avec formatage intégré
-            # -a : add/create
-            # -s : size
-            # -m : mount point (drive letter)
-            # -p : format parameters
             Command = [
                 "imdisk",
                 "-a",
                 "-s", f"{SizeMb}M",
-                "-m", f"{DriveLetter}:",
-                "-p", f"/fs:{FsType} /q /y"
+                "-m", f"{DriveLetter}:"
             ]
-
-            self.Logger.info(f"Commande ImDisk: {' '.join(Command)}")
 
             Result = subprocess.run(
                 Command,
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=30,
                 creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
             )
 
-            self.Logger.info(f"ImDisk - returncode: {Result.returncode}")
-            if Result.stdout:
-                self.Logger.info(f"ImDisk - stdout: {Result.stdout[:200]}")
-            if Result.stderr:
-                self.Logger.info(f"ImDisk - stderr: {Result.stderr[:200]}")
+            if Result.returncode != 0:
+                self.Logger.error(f"Échec de la création du disque: {Result.stderr}")
+                return False
 
-            if Result.returncode == 0:
-                self.Logger.info(f"RAM disk {DriveLetter}: créé et formaté avec succès")
-                import time
-                time.sleep(2)  # Attend que le formatage soit finalisé
-                return True
+            self.Logger.info(f"Disque RAW {DriveLetter}: créé, formatage...")
+
+            # Étape 2 : Formater avec élévation UAC si nécessaire
+            # Vérifie si on est déjà admin
+            import ctypes
+            try:
+                IsAdmin = ctypes.windll.shell32.IsUserAnAdmin()
+            except Exception:
+                IsAdmin = False
+
+            FsType = "NTFS" if FileSystem.lower() == "ntfs" else "FAT32"
+
+            if IsAdmin:
+                # On est admin, formatage direct
+                self.Logger.info("Formatage avec privilèges admin...")
+                FormatCmd = f'format {DriveLetter}: /FS:{FsType} /Q /V:RAMDISK /Y'
+
+                Result = subprocess.run(
+                    FormatCmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+                )
             else:
-                self.Logger.error(f"Échec de la création avec ImDisk")
+                # Pas admin, demande élévation UAC via PowerShell
+                self.Logger.info("Demande d'élévation UAC pour le formatage...")
+
+                # Utilise PowerShell Start-Process avec -Verb RunAs pour déclencher UAC
+                PSCommand = f"""
+Start-Process -FilePath "cmd.exe" -ArgumentList '/c format {DriveLetter}: /FS:{FsType} /Q /V:RAMDISK /Y' -Verb RunAs -Wait -WindowStyle Hidden
+"""
+
+                Result = subprocess.run(
+                    ["powershell", "-Command", PSCommand],
+                    capture_output=True,
+                    text=True,
+                    timeout=120  # Plus long car UAC peut prendre du temps
+                )
+
+            # Vérifie le résultat
+            import time
+            time.sleep(2)
+
+            # Vérifie que le disque est formaté en tentant d'y accéder
+            try:
+                Path = f"{DriveLetter}:\\"
+                os.listdir(Path)
+                self.Logger.info(f"RAM disk {DriveLetter}: créé et formaté avec succès")
+                return True
+            except (OSError, PermissionError) as e:
+                self.Logger.error(f"Le disque n'est pas formaté correctement: {e}")
                 return False
 
         except FileNotFoundError:
