@@ -372,24 +372,17 @@ class WindowsRamDiskManager:
             # Supprime d'abord si existe déjà (cleanup)
             self.RemoveRamDisk(DriveLetter)
 
-            # Crée le nouveau RAM disk SANS formatage automatique
-            # (le paramètre fs de create_hd ne fonctionne pas toujours correctement)
-            self.Logger.info(f"Création du disque virtuel {DriveLetter}:...")
-            create_hd(
-                size_in_megabyte=SizeMb,
-                drive_letter=DriveLetter
-            )
+            # Crée le nouveau RAM disk avec formatage via ImDisk (ne nécessite pas admin)
+            # Utilise imdisk.exe en ligne de commande au lieu de la bibliothèque Python
+            self.Logger.info(f"Création et formatage du disque virtuel {DriveLetter}:...")
+
+            if not self._CreateAndFormatWithImDisk(SizeMb, DriveLetter, FileSystem):
+                self.Logger.error("Échec de la création/formatage")
+                self.RemoveRamDisk(DriveLetter)
+                return None
 
             self.CreatedDriveLetter = DriveLetter
             Path = f"{DriveLetter}:\\"
-
-            self.Logger.info(f"Disque virtuel {DriveLetter}: créé, formatage en cours...")
-
-            # Formate toujours le disque manuellement pour garantir qu'il soit utilisable
-            if not self._FormatDrive(DriveLetter, FileSystem):
-                self.Logger.error("Échec du formatage")
-                self.RemoveRamDisk(DriveLetter)
-                return None
 
             # Vérifie que le disque est maintenant accessible
             import time
@@ -410,6 +403,75 @@ class WindowsRamDiskManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la création du RAM disk: {e}")
             return None
+
+    def _CreateAndFormatWithImDisk(self, SizeMb: int, DriveLetter: str, FileSystem: str) -> bool:
+        """
+        Crée et formate un RAM disk en utilisant directement imdisk.exe
+        (ne nécessite pas de privilèges admin contrairement à format.com)
+
+        Args:
+            SizeMb: Taille en MB
+            DriveLetter: Lettre du lecteur (sans ':')
+            FileSystem: "ntfs" ou "fat32"
+
+        Returns:
+            True si succès
+        """
+        import subprocess
+
+        try:
+            # Conversion du système de fichiers pour imdisk
+            FsType = "ntfs" if FileSystem.lower() == "ntfs" else "fat32"
+
+            # Commande imdisk.exe avec formatage intégré
+            # -a : add/create
+            # -s : size
+            # -m : mount point (drive letter)
+            # -p : format parameters
+            Command = [
+                "imdisk",
+                "-a",
+                "-s", f"{SizeMb}M",
+                "-m", f"{DriveLetter}:",
+                "-p", f"/fs:{FsType} /q /y"
+            ]
+
+            self.Logger.info(f"Commande ImDisk: {' '.join(Command)}")
+
+            Result = subprocess.run(
+                Command,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+            )
+
+            self.Logger.info(f"ImDisk - returncode: {Result.returncode}")
+            if Result.stdout:
+                self.Logger.info(f"ImDisk - stdout: {Result.stdout[:200]}")
+            if Result.stderr:
+                self.Logger.info(f"ImDisk - stderr: {Result.stderr[:200]}")
+
+            if Result.returncode == 0:
+                self.Logger.info(f"RAM disk {DriveLetter}: créé et formaté avec succès")
+                import time
+                time.sleep(2)  # Attend que le formatage soit finalisé
+                return True
+            else:
+                self.Logger.error(f"Échec de la création avec ImDisk")
+                return False
+
+        except FileNotFoundError:
+            self.Logger.error("imdisk.exe non trouvé. ImDisk n'est peut-être pas installé ou pas dans le PATH")
+            return False
+        except subprocess.TimeoutExpired:
+            self.Logger.error("Timeout lors de la création (> 60s)")
+            return False
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la création: {e}")
+            import traceback
+            self.Logger.debug(traceback.format_exc())
+            return False
 
     def _FormatDrive(self, DriveLetter: str, FileSystem: str) -> bool:
         """
