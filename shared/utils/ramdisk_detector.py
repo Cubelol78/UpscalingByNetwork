@@ -439,7 +439,7 @@ class WindowsRamDiskManager:
             # Utilise format avec echo Y pour auto-confirmer
             Command = f'format {DriveLetter}: /FS:{FsType} /Q /V:RAMDISK /Y'
 
-            self.Logger.debug(f"Commande: {Command}")
+            self.Logger.info(f"Commande 1: {Command}")
 
             Result = subprocess.run(
                 Command,
@@ -450,9 +450,9 @@ class WindowsRamDiskManager:
                 creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
             )
 
-            self.Logger.debug(f"Commande 1 - returncode: {Result.returncode}")
-            self.Logger.debug(f"Commande 1 - stdout: {Result.stdout}")
-            self.Logger.debug(f"Commande 1 - stderr: {Result.stderr}")
+            self.Logger.info(f"Commande 1 - returncode: {Result.returncode}")
+            self.Logger.info(f"Commande 1 - stdout: {Result.stdout[:200] if Result.stdout else '(vide)'}")
+            self.Logger.info(f"Commande 1 - stderr: {Result.stderr[:200] if Result.stderr else '(vide)'}")
 
             if Result.returncode == 0:
                 self.Logger.info(f"Formatage réussi: {DriveLetter}: ({FsType})")
@@ -462,7 +462,7 @@ class WindowsRamDiskManager:
             # Si échec, essaie sans /Y (avec echo Y à la place)
             self.Logger.warning("Tentative avec echo Y...")
             Command2 = f'echo Y|format {DriveLetter}: /FS:{FsType} /Q /V:RAMDISK'
-            self.Logger.debug(f"Commande 2: {Command2}")
+            self.Logger.info(f"Commande 2: {Command2}")
 
             Result2 = subprocess.run(
                 Command2,
@@ -473,9 +473,9 @@ class WindowsRamDiskManager:
                 creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
             )
 
-            self.Logger.debug(f"Commande 2 - returncode: {Result2.returncode}")
-            self.Logger.debug(f"Commande 2 - stdout: {Result2.stdout}")
-            self.Logger.debug(f"Commande 2 - stderr: {Result2.stderr}")
+            self.Logger.info(f"Commande 2 - returncode: {Result2.returncode}")
+            self.Logger.info(f"Commande 2 - stdout: {Result2.stdout[:200] if Result2.stdout else '(vide)'}")
+            self.Logger.info(f"Commande 2 - stderr: {Result2.stderr[:200] if Result2.stderr else '(vide)'}")
 
             if Result2.returncode == 0:
                 self.Logger.info(f"Formatage réussi: {DriveLetter}:")
