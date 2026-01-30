@@ -10,60 +10,6 @@ import subprocess
 import argparse
 
 
-def _FinalizePendingUpdate():
-    """
-    Finalise une mise à jour en attente de main.py
-
-    DOIT être appelé en tout premier, avant tout autre import,
-    pour éviter les conflits de dépendances entre versions.
-    """
-    try:
-        import shutil
-
-        ProjectRoot = os.path.dirname(os.path.abspath(__file__))
-        MainPath = os.path.join(ProjectRoot, "main.py")
-        NewMainPath = MainPath + ".new"
-        BackupPath = MainPath + ".bak"
-
-        # Vérifie si une mise à jour est en attente
-        if not os.path.exists(NewMainPath):
-            return False
-
-        print("Finalisation de la mise à jour de main.py...")
-
-        # Backup de l'ancien main.py
-        if os.path.exists(MainPath):
-            shutil.copy2(MainPath, BackupPath)
-
-        # Remplace main.py par la nouvelle version
-        os.replace(NewMainPath, MainPath)
-
-        print("✓ main.py mis à jour avec succès")
-        print("✓ Redémarrage nécessaire pour charger la nouvelle version...\n")
-
-        # Redémarre immédiatement avec la nouvelle version
-        PythonPath = sys.executable
-        Args = sys.argv
-        os.execv(PythonPath, [PythonPath] + Args)
-
-        return True
-
-    except Exception as e:
-        print(f"✗ Erreur lors de la finalisation de la mise à jour: {e}")
-        # Tente de restaurer le backup
-        try:
-            if os.path.exists(BackupPath):
-                shutil.copy2(BackupPath, MainPath)
-                print("✓ Backup restauré")
-        except Exception:
-            pass
-        return False
-
-
-# Finalise immédiatement toute mise à jour en attente
-# AVANT tous les autres imports pour éviter les conflits de dépendances
-_FinalizePendingUpdate()
-
 # Import conditionnel pour le pare-feu Windows
 try:
     from shared.utils.firewall import (
@@ -409,211 +355,6 @@ def CheckFirewallPermissions(AppName: str, AutoAccept: bool = False) -> bool:
     return True
 
 
-def HandleUpdate(Args):
-    """
-    Gère la vérification et l'application des mises à jour
-
-    Args:
-        Args: Arguments parsés de argparse
-
-    Returns:
-        True si le programme doit continuer, False si on doit quitter
-    """
-    try:
-        from shared.utils.updater import UpdateManager
-        from shared.utils.updater.github_client import NetworkError, RateLimitError
-        from shared.utils.constants import UpdateConfig
-    except ImportError as e:
-        print(f"⚠ Module de mise à jour non disponible: {e}")
-        return True
-
-    Manager = UpdateManager()
-
-    # Lit toujours les paramètres de mise à jour depuis la DB
-    try:
-        from server.database.db_manager import DatabaseManager
-        Db = DatabaseManager()
-        if Db.Connect():
-            Db.InitializeDefaultParameters()
-
-            # Canal : argument CLI > DB > défaut
-            if not Args.channel:
-                Channel = Db.GetParameter("update_channel", UpdateConfig.DEFAULT_CHANNEL)
-            else:
-                Channel = Args.channel
-
-            # Paramètres de vérification : toujours depuis la DB
-            AutoCheck = Db.GetParameterBool("update_auto_check", True)
-            AutoApply = Db.GetParameterBool("update_auto_apply", False)
-            SkippedVersion = Db.GetParameter("update_skipped_version", "")
-            Db.Close()
-        else:
-            # Fallback si DB inaccessible
-            Channel = Args.channel or UpdateConfig.DEFAULT_CHANNEL
-            AutoCheck = True
-            AutoApply = False
-            SkippedVersion = ""
-    except Exception:
-        # Fallback en cas d'erreur
-        Channel = Args.channel or UpdateConfig.DEFAULT_CHANNEL
-        AutoCheck = True
-        AutoApply = False
-        SkippedVersion = ""
-
-    # --check-update : vérifie et affiche le statut
-    if Args.check_update:
-        print(f"\nVérification des mises à jour (canal: {Channel})...")
-        try:
-            Info = Manager.CheckUpdate(Channel)
-            if Info.Available:
-                print(f"✓ Nouvelle version disponible: {Info.NewVersion}")
-                if Info.Changelog:
-                    print(f"\nNouveautés:\n{Info.Changelog[:500]}...")
-            else:
-                print(f"✓ Vous utilisez la dernière version ({Info.CurrentVersion})")
-        except NetworkError:
-            print("✗ Impossible de vérifier les mises à jour (hors ligne)")
-        except RateLimitError:
-            print("✗ Limite API GitHub atteinte. Réessayez plus tard.")
-        except Exception as e:
-            print(f"✗ Erreur: {e}")
-        return False  # Quitte après --check-update
-
-    # --update : force la mise à jour
-    if Args.update:
-        print(f"\nMise à jour forcée (canal: {Channel})...")
-        try:
-            Info = Manager.CheckUpdate(Channel)
-            if not Info.Available:
-                print(f"✓ Déjà à jour ({Info.CurrentVersion})")
-                return True
-
-            print(f"Mise à jour: {Info.CurrentVersion} → {Info.NewVersion}")
-
-            # Demande confirmation sauf si --yes
-            if not Args.auto_accept:
-                Response = input("Voulez-vous continuer ? (oui/non): ").strip().lower()
-                if Response not in ["oui", "o", "yes", "y"]:
-                    print("Mise à jour annulée")
-                    return True
-
-            print("Application de la mise à jour...")
-            Manager.ApplyUpdate(Info)
-            print("✓ Mise à jour appliquée avec succès")
-            print("Redémarrage...")
-            Manager.RequestRestart()
-            return False  # Ne devrait pas arriver (execv)
-
-        except NetworkError:
-            print("✗ Impossible de télécharger la mise à jour (hors ligne)")
-        except RateLimitError:
-            print("✗ Limite API GitHub atteinte. Réessayez plus tard.")
-        except Exception as e:
-            print(f"✗ Erreur lors de la mise à jour: {e}")
-        return True
-
-    # --install-version : force l'installation d'une version spécifique
-    if Args.install_version:
-        from shared.utils.constants import AppMetadata
-
-        TargetVersion = Args.install_version
-        print(f"\nInstallation forcée de la version: {TargetVersion}")
-
-        try:
-            # Détermine le type de version
-            if TargetVersion.startswith("dev-") or len(TargetVersion) == 7:
-                # Version dev (commit SHA)
-                Sha = TargetVersion.replace("dev-", "")
-                Info = Manager.GetDevVersionInfo(Sha)
-            else:
-                # Version release (tag)
-                VersionClean = TargetVersion.lstrip("v")
-                Info = Manager.GetReleaseVersionInfo(VersionClean)
-
-            if not Info or not Info.DownloadUrl:
-                print(f"✗ Version {TargetVersion} introuvable")
-                return True
-
-            # Demande confirmation sauf si --yes
-            if not Args.auto_accept:
-                print(f"Version actuelle: {AppMetadata.VERSION}")
-                print(f"Version cible: {Info.NewVersion}")
-                Response = input("Confirmer l'installation ? (oui/non): ").strip().lower()
-                if Response not in ["oui", "o", "yes", "y"]:
-                    print("Installation annulée")
-                    return True
-
-            print("Installation en cours...")
-            Manager.ApplyUpdate(Info)
-            print("✓ Installation terminée. Redémarrage...")
-            Manager.RequestRestart()
-            return False
-
-        except Exception as e:
-            print(f"✗ Erreur lors de l'installation: {e}")
-            import traceback
-            traceback.print_exc()
-            return True
-
-    # Vérification automatique au démarrage (sauf si --skip-update)
-    if Args.skip_update or not AutoCheck:
-        return True
-
-    try:
-        Info = Manager.CheckUpdate(Channel)
-
-        if not Info.Available:
-            return True
-
-        # Ignore si c'est une version déjà ignorée
-        if SkippedVersion and Info.NewVersion == SkippedVersion:
-            return True
-
-        print(f"\n✓ Nouvelle version disponible: {Info.NewVersion}")
-
-        # Auto-apply si configuré ou --yes
-        if AutoApply or Args.auto_accept:
-            print("Application automatique de la mise à jour...")
-            Manager.ApplyUpdate(Info)
-            print("✓ Mise à jour appliquée. Redémarrage...")
-            Manager.RequestRestart()
-            return False
-
-        # Demande confirmation
-        print("Voulez-vous mettre à jour maintenant ?")
-        Response = input("(oui/non/ignorer): ").strip().lower()
-
-        if Response in ["oui", "o", "yes", "y"]:
-            print("Application de la mise à jour...")
-            Manager.ApplyUpdate(Info)
-            print("✓ Mise à jour appliquée. Redémarrage...")
-            Manager.RequestRestart()
-            return False
-        elif Response in ["ignorer", "ignore", "i"]:
-            # Enregistre la version ignorée
-            try:
-                from server.database.db_manager import DatabaseManager
-                Db = DatabaseManager()
-                if Db.Connect():
-                    Db.SetParameter("update_skipped_version", Info.NewVersion)
-                    Db.Close()
-            except Exception:
-                pass
-            print(f"Version {Info.NewVersion} ignorée")
-
-        return True
-
-    except NetworkError:
-        # Silencieux si hors ligne au démarrage auto
-        return True
-    except RateLimitError:
-        print("⚠ Limite API GitHub atteinte pour la vérification des mises à jour")
-        return True
-    except Exception as e:
-        print(f"⚠ Erreur lors de la vérification des mises à jour: {e}")
-        return True
-
-
 def LaunchServer(CliMode, AutoAccept=False):
     """
     Lance le serveur
@@ -699,19 +440,11 @@ Exemples d'utilisation:
   python main.py --server --cli     Lancement direct du serveur (CLI)
   python main.py --client           Lancement direct du client (GUI)
   python main.py --client --cli     Lancement direct du client (CLI)
-  python main.py --server --yes     Serveur avec auto-acceptation (venv, pare-feu, MAJ)
+  python main.py --server --yes     Serveur avec auto-acceptation (venv, pare-feu)
   python main.py --client -y        Client avec auto-acceptation (raccourci)
 
-Mise à jour:
-  python main.py --check-update     Vérifie si une mise à jour est disponible
-  python main.py --update           Force la mise à jour
-  python main.py --update --yes     Met à jour sans confirmation
-  python main.py --channel=dev      Utilise le canal dev (derniers commits)
-  python main.py --skip-update      Ignore la vérification de mise à jour
-  python main.py --install-version=1.5.0  Installe une version spécifique
-
 Environnement virtuel:
-  python main.py --recreate-venv    Recrée l'environnement virtuel (après mise à jour)
+  python main.py --recreate-venv    Recrée l'environnement virtuel
         """
     )
     Parser.add_argument(
@@ -745,43 +478,13 @@ Environnement virtuel:
         help="Alias pour --yes"
     )
 
-    # Groupe mise à jour
-    UpdateGroup = Parser.add_argument_group("Mise à jour")
-    UpdateGroup.add_argument(
-        "--update",
-        action="store_true",
-        help="Force la mise à jour immédiatement"
-    )
-    UpdateGroup.add_argument(
-        "--check-update",
-        action="store_true",
-        dest="check_update",
-        help="Vérifie si une mise à jour est disponible (sans installer)"
-    )
-    UpdateGroup.add_argument(
-        "--channel",
-        choices=["dev", "release"],
-        help="Canal de mise à jour (surcharge la valeur en DB)"
-    )
-    UpdateGroup.add_argument(
-        "--skip-update",
-        action="store_true",
-        dest="skip_update",
-        help="Ignore la vérification de mise à jour au démarrage"
-    )
-    UpdateGroup.add_argument(
-        "--install-version",
-        metavar="VERSION",
-        help="Force l'installation d'une version spécifique (ex: 1.5.0, v1.5.0, ou dev-abc1234)"
-    )
-
     # Groupe environnement virtuel
     VenvGroup = Parser.add_argument_group("Environnement virtuel")
     VenvGroup.add_argument(
         "--recreate-venv",
         action="store_true",
         dest="recreate_venv",
-        help="Force la recréation de l'environnement virtuel (utile après une mise à jour)"
+        help="Force la recréation de l'environnement virtuel"
     )
 
     Args = Parser.parse_args()
@@ -850,11 +553,6 @@ Environnement virtuel:
 
         # Mise à jour automatique des dépendances
         UpdateDependencies()
-
-    # Gestion des mises à jour
-    if not HandleUpdate(Args):
-        # HandleUpdate a demandé de quitter (--check-update ou redémarrage)
-        sys.exit(0)
 
     # Choix du mode
     Mode = ChooseMode(Args.cli, PresetMode)

@@ -15,7 +15,6 @@ from .connection_tab import ConnectionTab
 from .monitoring_tab import MonitoringTab
 from .servers_tab import ServersTab
 from .performance_tab import PerformanceTab
-from .update_tab import UpdateTab
 from .webhook_tab import WebhookTab
 
 from client.core.client import UpscalingClient
@@ -116,7 +115,6 @@ class ClientWindow(QMainWindow):
         self.MonitoringTab = MonitoringTab(self)
         self.ServersTab = ServersTab(self)
         self.PerformanceTab = PerformanceTab(self)
-        self.UpdateTab = UpdateTab(self)
         self.WebhookTab = WebhookTab(self)
 
         self.Tabs.addTab(self.ConnectionTab, "🔌 Connexion")
@@ -124,7 +122,6 @@ class ClientWindow(QMainWindow):
         self.Tabs.addTab(self.ServersTab, "💾 Serveurs")
         self.Tabs.addTab(self.PerformanceTab, "⚙️ Configuration")
         self.Tabs.addTab(self.WebhookTab, "🔔 Webhooks")
-        self.Tabs.addTab(self.UpdateTab, "🔄 Mise a jour")
 
         MainLayout.addWidget(self.Tabs)
 

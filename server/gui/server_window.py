@@ -16,7 +16,6 @@ from .dashboard_tab import DashboardTab
 from .clients_tab import ClientsTab
 from .jobs_tab import JobsTab
 from .config_tab import ConfigTab
-from .update_tab import UpdateTab
 from .webhook_tab import WebhookTab
 
 from server.core.server import UpscalingServer
@@ -86,7 +85,6 @@ class ServerWindow(QMainWindow):
         self.ClientsTab = ClientsTab(self)
         self.JobsTab = JobsTab(self)
         self.ConfigTab = ConfigTab(self)
-        self.UpdateTab = UpdateTab(self)
         self.WebhookTab = WebhookTab(self)
 
         self.Tabs.addTab(self.DashboardTab, "📊 Dashboard")
@@ -94,7 +92,6 @@ class ServerWindow(QMainWindow):
         self.Tabs.addTab(self.JobsTab, "🎬 Jobs")
         self.Tabs.addTab(self.ConfigTab, "⚙️ Configuration")
         self.Tabs.addTab(self.WebhookTab, "🔔 Webhooks")
-        self.Tabs.addTab(self.UpdateTab, "🔄 Mise a jour")
 
         MainLayout.addWidget(self.Tabs)
 
