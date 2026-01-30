@@ -453,13 +453,18 @@ class UpscalingServer:
 
         while self.Running:
             try:
-                # Reçoit un message via le canal Data
-                # Pas de timeout fixe - on attend tant que le client est connecté
-                MessageData = await self.ClientManager.ReceiveDataMessage(
-                    ClientId,
-                    Decrypt=True,
-                    Timeout=None  # Pas de timeout - le heartbeat Control détectera les déconnexions
-                )
+                # Reçoit un message via le canal Data avec timeout pour éviter les blocages
+                # Timeout raisonnable pour les transferts Data (images volumineuses)
+                DataTimeout = NetworkConfig.BATCH_TIMEOUT
+                try:
+                    MessageData = await asyncio.wait_for(
+                        self.ClientManager.ReceiveDataMessage(ClientId, Decrypt=True),
+                        timeout=DataTimeout
+                    )
+                except asyncio.TimeoutError:
+                    self.Logger.warning(f"Timeout réception Data pour client {ClientId} ({DataTimeout}s)")
+                    await self.ClientManager.DisconnectClient(ClientId, "Timeout Data")
+                    break
 
                 if not MessageData:
                     # Client déconnecté proprement (connexion fermée)
@@ -480,10 +485,6 @@ class UpscalingServer:
                         self.Logger.error("BatchDistributor non configuré - résultat ignoré")
                 else:
                     self.Logger.warning(f"Message inattendu sur canal Data: {Message.MessageType}")
-
-            except asyncio.TimeoutError:
-                # Ne devrait jamais arriver avec Timeout=None
-                continue
 
             except Exception as e:
                 self.Logger.error(f"Erreur dans la boucle Data du client {ClientId}: {e}")

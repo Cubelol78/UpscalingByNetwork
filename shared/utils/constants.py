@@ -142,11 +142,11 @@ class NetworkConfig:
     DEFAULT_HOST = "0.0.0.0"
     MAX_MESSAGE_SIZE = 10 * 1024 * 1024 * 1024  # 10 GB - Les batches d'images upscalées peuvent être très lourds
     HEARTBEAT_INTERVAL = 10  # secondes
-    HEARTBEAT_TIMEOUT = 30  # secondes
+    HEARTBEAT_TIMEOUT = 20  # secondes - Réduit pour détection plus rapide des clients défaillants
     CONNECTION_TIMEOUT = 15  # secondes - Réduit de 60s pour feedback rapide
     HANDSHAKE_TIMEOUT = 10  # secondes - Timeout spécifique pour handshake
     AUTH_TIMEOUT = 10  # secondes - Timeout spécifique pour authentification
-    BATCH_TIMEOUT = 120  # 2 minutes - Timeout avec vérification heartbeat sur Control
+    BATCH_TIMEOUT = 60  # 1 minute - Raisonnable pour upscaling, évite blocage prolongé sur clients défaillants
 
     # Reconnexion automatique
     RECONNECT_ENABLED = True  # Active la reconnexion automatique

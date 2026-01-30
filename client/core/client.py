@@ -388,6 +388,13 @@ class UpscalingClient:
         # Déconnecte du serveur
         await self.ConnectionManager.Disconnect()
 
+        # Attend quelques secondes pour que les processus externes (Real-ESRGAN, etc.)
+        # se terminent avant de nettoyer les dossiers temporaires
+        # Cela évite la race condition où les processus essaient d'écrire dans des dossiers supprimés
+        if self.ProcessingTasks or self.ActiveBatches:
+            self.Logger.info("Attente de la terminaison des processus externes...")
+            await asyncio.sleep(3)
+
         # Nettoie les fichiers temporaires
         self.LocalProcessor.CleanupAll()
 

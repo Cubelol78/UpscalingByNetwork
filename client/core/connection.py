@@ -1034,7 +1034,7 @@ class DualConnectionManager:
         Returns:
             True si reconnexion réussie
         """
-        if not self.ServerAddress or not self.ControlPort or not self.Password:
+        if self.ServerAddress is None or self.ControlPort is None or self.Password is None:
             self.Logger.error("Informations de connexion manquantes pour la reconnexion")
             return False
 

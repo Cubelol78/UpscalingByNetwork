@@ -87,6 +87,10 @@ class ClientInfo:
         """Vérifie si la connexion Data est établie"""
         return self.DataConnected and self.DataWriter is not None
 
+    def IsControlConnected(self) -> bool:
+        """Vérifie si la connexion Control est établie"""
+        return self.ControlConnected and self.Writer is not None
+
 
 class ClientManager:
     """Gestionnaire de clients connectés"""
@@ -154,6 +158,8 @@ class ClientManager:
             # Client connecté avec succès
             ClientInfo_obj.Status = ClientStatus.IDLE
             ClientInfo_obj.Authenticated = True
+            ClientInfo_obj.HeartbeatEnabled = True  # Active le heartbeat dès l'authentification réussie
+            ClientInfo_obj.LastHeartbeat = time.time()
 
             self.Logger.info(f"Client {ClientId} connecté et authentifié depuis {IpAddress}")
 
@@ -564,8 +570,13 @@ class ClientManager:
     async def _ReceiveMessage(self, ClientInfo: ClientInfo) -> Optional[str]:
         """Reçoit un message (interne)"""
         try:
-            # Lit la taille (4 bytes)
-            SizeBytes = await ClientInfo.Reader.readexactly(4)
+            # Lit la taille (4 bytes) avec timeout
+            # Timeout généreux pour canal Control (heartbeat) et Data (réception batch)
+            # Utilise BATCH_TIMEOUT pour laisser le temps au client de traiter
+            SizeBytes = await asyncio.wait_for(
+                ClientInfo.Reader.readexactly(4),
+                timeout=NetworkConfig.BATCH_TIMEOUT
+            )
             MessageSize = int.from_bytes(SizeBytes, byteorder='big')
 
             # Validation de la taille
@@ -578,10 +589,18 @@ class ClientManager:
                 self.Logger.error(f"Message trop grand du client {ClientInfo.ClientId}: {MessageSize} bytes (max: {NetworkConfig.MAX_MESSAGE_SIZE})")
                 return None
 
-            # Lit le message
-            MessageBytes = await ClientInfo.Reader.readexactly(MessageSize)
+            # Lit le message avec timeout adaptatif
+            # Timeout adaptatif : 1s par MB, minimum 10s
+            ReadTimeout = max(10, MessageSize / (1024 * 1024))
+            MessageBytes = await asyncio.wait_for(
+                ClientInfo.Reader.readexactly(MessageSize),
+                timeout=ReadTimeout
+            )
             return MessageBytes.decode('utf-8')
 
+        except asyncio.TimeoutError:
+            self.Logger.error(f"Timeout lors de la lecture du message pour {ClientInfo.ClientId}")
+            return None
         except asyncio.IncompleteReadError:
             self.Logger.warning(f"Connexion fermée par le client {ClientInfo.ClientId} (lecture incomplète)")
             return None
