@@ -1283,11 +1283,7 @@ class UpscalingClient:
         ServerInfo = self.ConnectionManager.GetServerInfo()
 
         # Calcule la taille de la queue d'envoi
-        # Compte les batchs avec statut "awaiting_send" ou "sending"
-        QueueSize = sum(
-            1 for state in self.ActiveBatches.values()
-            if state.get("status") in ["awaiting_send", "sending"]
-        )
+        QueueSize = self.ResultQueue.qsize() if self.ResultQueue else 0
 
         return {
             "running": self.Running,
