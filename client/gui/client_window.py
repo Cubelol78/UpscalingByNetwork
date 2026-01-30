@@ -169,6 +169,9 @@ class ClientWindow(QMainWindow):
                         # Attend que MainLoop se termine (déconnexion ou erreur)
                         loop.run_until_complete(self.Client.MainLoopTask)
 
+                except asyncio.CancelledError:
+                    # Arrêt normal du client (la tâche a été annulée)
+                    self.Logger.info("Arrêt du client (tâche annulée)")
                 except Exception as e:
                     self.Logger.error(f"Erreur dans la boucle client: {e}")
                     ConnectionResult.set_exception(e)
@@ -224,9 +227,10 @@ class ClientWindow(QMainWindow):
 
             if self.Client and self.IsRunning:
                 # Demande l'arret thread-safe (planifie sur l'event loop du client)
-                StopSuccess = self.Client.RequestStop(Timeout=10.0)
+                # Timeout augmente a 15s pour laisser le temps aux taches de s'arreter proprement
+                StopSuccess = self.Client.RequestStop(Timeout=15.0)
                 if not StopSuccess:
-                    self.Logger.warning("Timeout lors de l'arret du client, arret force")
+                    self.Logger.warning("L'arret du client a pris plus de temps que prevu (continue quand meme)")
 
             self.IsRunning = False
             self.UpdateStatusBar("Deconnecte")

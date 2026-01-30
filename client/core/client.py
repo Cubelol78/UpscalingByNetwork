@@ -208,6 +208,36 @@ class UpscalingClient:
 
         self.Logger.info(f"Client initialisé avec répertoire de travail: {self.WorkDirectory}")
 
+    def _GetCurrentDisplayBatch(self) -> Optional[str]:
+        """
+        Retourne le batch qui devrait être affiché dans le GUI.
+        Priorité : upscaling > converting > waiting_gpu > sending
+
+        Returns:
+            ID du batch à afficher, ou None si aucun batch actif
+        """
+        # Priorité 1 : Batch en GPU upscaling (le plus important)
+        for BatchId, State in self.ActiveBatches.items():
+            if State.get("status") == "upscaling":
+                return BatchId
+
+        # Priorité 2 : Batch en conversion CPU
+        for BatchId, State in self.ActiveBatches.items():
+            if State.get("status") == "converting":
+                return BatchId
+
+        # Priorité 3 : Batch en attente GPU
+        for BatchId, State in self.ActiveBatches.items():
+            if State.get("status") == "waiting_gpu":
+                return BatchId
+
+        # Priorité 4 : Batch en attente d'envoi
+        for BatchId, State in self.ActiveBatches.items():
+            if State.get("status") in ["awaiting_send", "sending"]:
+                return BatchId
+
+        return None
+
     async def Start(self, Host: str, Port: int, Password: str = "",
                     DataPort: int = None) -> bool:
         """
@@ -844,6 +874,13 @@ class UpscalingClient:
             async with self.GpuLock:
                 if BatchId in self.ActiveBatches:
                     self.ActiveBatches[BatchId]["status"] = "upscaling"
+
+                # Met à jour CurrentBatch immédiatement quand le GPU démarre
+                # Cela garantit que le GUI affiche le batch en traitement GPU
+                self.CurrentBatch = BatchId
+                self.CurrentBatchProgress = 0
+                self.CurrentBatchTotal = ImageCount
+
                 self.Logger.info(f"Batch {BatchId}: upscaling GPU en cours...")
 
                 # Phase GPU uniquement (Real-ESRGAN)
@@ -869,9 +906,10 @@ class UpscalingClient:
             else:
                 Result = None
 
-            # Passe à l'envoi
+            # Marque comme "en attente d'envoi" après le traitement
             if BatchId in self.ActiveBatches:
-                self.ActiveBatches[BatchId]["status"] = "sending"
+                self.ActiveBatches[BatchId]["status"] = "awaiting_send"
+                self.ActiveBatches[BatchId]["progress"] = ImageCount  # 100%
 
             if not Result:
                 self.Logger.error(f"Échec du traitement du batch {BatchId}")
@@ -890,6 +928,11 @@ class UpscalingClient:
             CachePath = await self._SaveResultToCache(BatchId, Result)
             if CachePath:
                 await self.ResultQueue.put(CachePath)
+
+                # Marque comme "en attente dans la queue d'envoi"
+                if BatchId in self.ActiveBatches:
+                    self.ActiveBatches[BatchId]["status"] = "sending"
+
                 self.Logger.info(f"Batch {BatchId} traité, sauvegardé dans le cache")
             else:
                 self.Logger.error(f"Échec de la sauvegarde du batch {BatchId}")
@@ -916,18 +959,18 @@ class UpscalingClient:
             if BatchId in self.ProcessingTasks:
                 del self.ProcessingTasks[BatchId]
 
-            # Met à jour CurrentBatch pour pointer vers le prochain batch actif
-            if self.CurrentBatch == BatchId:
-                if self.ActiveBatches:
-                    # Pointe vers le premier batch restant
-                    NextBatch = next(iter(self.ActiveBatches))
-                    self.CurrentBatch = NextBatch
-                    self.CurrentBatchProgress = self.ActiveBatches[NextBatch].get("progress", 0)
-                    self.CurrentBatchTotal = self.ActiveBatches[NextBatch].get("total", 0)
-                else:
-                    self.CurrentBatch = None
-                    self.CurrentBatchProgress = 0
-                    self.CurrentBatchTotal = 0
+            # Met à jour CurrentBatch en utilisant la logique de priorité
+            # Priorité : upscaling > converting > waiting_gpu > sending
+            NextBatch = self._GetCurrentDisplayBatch()
+            if NextBatch:
+                self.CurrentBatch = NextBatch
+                BatchState = self.ActiveBatches.get(NextBatch, {})
+                self.CurrentBatchProgress = BatchState.get("progress", 0)
+                self.CurrentBatchTotal = BatchState.get("total", 0)
+            else:
+                self.CurrentBatch = None
+                self.CurrentBatchProgress = 0
+                self.CurrentBatchTotal = 0
 
             # Passe à IDLE seulement si plus aucun batch actif ET queue vide
             # (le _SenderLoop gère aussi le passage à IDLE après envoi)
@@ -1240,7 +1283,11 @@ class UpscalingClient:
         ServerInfo = self.ConnectionManager.GetServerInfo()
 
         # Calcule la taille de la queue d'envoi
-        QueueSize = self.ResultQueue.qsize() if self.ResultQueue else 0
+        # Compte les batchs avec statut "awaiting_send" ou "sending"
+        QueueSize = sum(
+            1 for state in self.ActiveBatches.values()
+            if state.get("status") in ["awaiting_send", "sending"]
+        )
 
         return {
             "running": self.Running,

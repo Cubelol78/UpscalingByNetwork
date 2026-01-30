@@ -202,10 +202,29 @@ class MonitoringTab(QWidget):
 
                 # Mettre à jour l'activité avec plus de détails
                 if CurrentBatch:
-                    ActivityText = f"⚙️ Traitement du batch {CurrentBatch[:16]}...\n"
-                    ActivityText += f"Statut: {StatusText}\n"
+                    # Récupère le statut du batch actuel depuis ActiveBatches
+                    BatchStatus = None
+                    if hasattr(Client, 'ActiveBatches') and CurrentBatch in Client.ActiveBatches:
+                        BatchStatus = Client.ActiveBatches[CurrentBatch].get("status")
+
+                    ShortBatch = CurrentBatch[:16]
+
+                    # Affichage adapté selon le statut du batch
+                    if BatchStatus == "upscaling":
+                        ActivityText = f"🎨 Upscaling GPU du batch {ShortBatch}..."
+                    elif BatchStatus == "converting":
+                        ActivityText = f"🔄 Conversion AVIF du batch {ShortBatch}..."
+                    elif BatchStatus == "waiting_gpu":
+                        ActivityText = f"⏳ Attente GPU pour batch {ShortBatch}..."
+                    elif BatchStatus in ["awaiting_send", "sending"]:
+                        ActivityText = f"📤 Batch {ShortBatch} en attente d'envoi..."
+                    else:
+                        ActivityText = f"⚙️ Traitement du batch {ShortBatch}..."
+
+                    ActivityText += f"\nStatut: {StatusText}"
                     if QueueSize > 0:
-                        ActivityText += f"📤 {QueueSize} batch(s) en attente d'envoi"
+                        ActivityText += f"\n📤 {QueueSize} batch(s) en attente d'envoi"
+
                     self.ActivityLabel.setText(ActivityText)
 
                     # Affiche la barre de progression si un batch est en cours

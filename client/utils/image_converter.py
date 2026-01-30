@@ -26,6 +26,14 @@ class ImageConverter:
         self.Logger = GetModuleLogger("ImageConverter")
         self._AvifSupported = self._CheckAvifSupport()
 
+        # Calcule le nombre de threads pour la conversion AVIF
+        # On limite à 2-4 threads par conversion pour permettre le parallélisme
+        # entre plusieurs conversions simultanées
+        CpuCount = os.cpu_count() or 1
+        # Formule : minimum entre 4 et (CPU cores / 4), avec minimum 1
+        self.AvifThreads = max(1, min(4, max(1, CpuCount // 4)))
+        self.Logger.info(f"Threads AVIF par conversion: {self.AvifThreads} (CPU cores: {CpuCount})")
+
     def _CheckAvifSupport(self) -> bool:
         """Vérifie si le support AVIF est disponible"""
         try:
@@ -76,7 +84,10 @@ class ImageConverter:
                         self.Logger.debug("AVIF non supporté, fallback PNG")
                         OutputFormat = self.FORMAT_PNG
                     else:
-                        SaveKwargs = {'format': 'AVIF'}
+                        SaveKwargs = {
+                            'format': 'AVIF',
+                            'threads': self.AvifThreads  # Limite les threads (CPU cores - 1)
+                        }
                         if Lossless:
                             SaveKwargs['quality'] = -1
                         else:

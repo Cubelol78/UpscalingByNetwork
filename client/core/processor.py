@@ -427,6 +427,22 @@ class LocalProcessor:
             self.Logger.warning("AVIF non supporté, utilisation de PNG")
             TransferFormat = 'png'
 
+        # Calcule le nombre optimal de workers parallèles
+        # Objectif : utiliser (CPU cores - 1) pour laisser 1 cœur à l'OS
+        CpuCount = os.cpu_count() or 4
+        AvailableCores = CpuCount - 1
+
+        if TransferFormat == 'avif' and hasattr(Converter, 'AvifThreads'):
+            # AVIF multi-threadé : chaque conversion utilise Converter.AvifThreads threads
+            # Formule : Available cores / threads par conversion
+            MaxWorkers = max(1, AvailableCores // Converter.AvifThreads)
+            TotalThreads = MaxWorkers * Converter.AvifThreads
+            self.Logger.info(f"Mode AVIF: {MaxWorkers} conversions parallèles × {Converter.AvifThreads} threads = {TotalThreads} threads max")
+        else:
+            # PNG mono-threadé : on peut utiliser autant de workers que de cœurs disponibles
+            MaxWorkers = max(1, AvailableCores)
+            self.Logger.info(f"Mode PNG: {MaxWorkers} conversions parallèles (1 thread chacune)")
+
         def LoadConvertAndEncodeSingleImage(UpscaledPath: str) -> Optional[Dict]:
             """Charge, convertit et encode une seule image"""
             try:
@@ -461,8 +477,6 @@ class LocalProcessor:
                 return None
 
         try:
-            MaxWorkers = min(32, (os.cpu_count() or 4) * 2)
-
             ResultImages = []
             with concurrent.futures.ThreadPoolExecutor(max_workers=MaxWorkers) as executor:
                 Futures = [executor.submit(LoadConvertAndEncodeSingleImage, Path) for Path in UpscaledPaths]
