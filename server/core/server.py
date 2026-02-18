@@ -84,17 +84,19 @@ class UpscalingServer:
         self.Running = False
 
         # Configuration
-        self.Host = Config.get("server", {}).get("ip", NetworkConfig.DEFAULT_HOST)
-        self.Port = Config.get("server", {}).get("port", NetworkConfig.DEFAULT_PORT)
-        self.DataPort = Config.get("server", {}).get("data_port", NetworkConfig.DEFAULT_DATA_PORT)
-        self.Password = Config.get("server", {}).get("password", "")
-        self.WorkDirectory = Config.get("server", {}).get("work_directory", PathConfig.WORK_DIR)
+        ServerCfg = Config.get("server", {})
+        self.HostV4 = ServerCfg.get("ipv4", NetworkConfig.DEFAULT_HOST)
+        self.HostV6 = ServerCfg.get("ipv6", "")
+        self.Port = ServerCfg.get("port", NetworkConfig.DEFAULT_PORT)
+        self.DataPort = ServerCfg.get("data_port", NetworkConfig.DEFAULT_DATA_PORT)
+        self.Password = ServerCfg.get("password", "")
+        self.WorkDirectory = ServerCfg.get("work_directory", PathConfig.WORK_DIR)
 
         # Base de données - utilise le chemin par défaut (indépendant du work_directory)
         self.Database = DatabaseManager()  # Utilise GetDefaultDbPath()
 
         # Gestionnaire de réseau dual-port (Control + Data)
-        self.NetworkManager = DualNetworkManager(self.Host, self.Port, self.DataPort)
+        self.NetworkManager = DualNetworkManager(self.HostV4, self.Port, self.DataPort, self.HostV6)
 
         # Gestionnaire de clients
         self.ClientManager = None
@@ -186,7 +188,7 @@ class UpscalingServer:
             return False
 
         try:
-            self.Logger.info(f"Démarrage du serveur sur {self.Host}:{self.Port} (Control) / {self.DataPort} (Data)...")
+            self.Logger.info(f"Démarrage du serveur - IPv4={self.HostV4} IPv6={self.HostV6} Control:{self.Port} Data:{self.DataPort}...")
 
             # Démarre les deux listeners TCP via DualNetworkManager
             if not await self.NetworkManager.Start(
@@ -204,13 +206,13 @@ class UpscalingServer:
             # Démarre le monitoring des heartbeats
             await self.ClientManager.StartHeartbeatMonitoring()
 
-            self.Logger.info(f"✓ Serveur démarré - Control: {self.Host}:{self.Port}, Data: {self.Host}:{self.DataPort}")
+            self.Logger.info(f"✓ Serveur démarré - Control:{self.Port}, Data:{self.DataPort}")
 
             # Affiche les informations
             self._PrintServerInfo()
 
             # Webhook: serveur démarré
-            TriggerServerWebhook("server_started", ip=self.Host, port=self.Port)
+            TriggerServerWebhook("server_started", ip=self.HostV4 or self.HostV6, port=self.Port)
 
             return True
 
@@ -232,7 +234,7 @@ class UpscalingServer:
         self.Logger.info(f"Arrêt gracieux du serveur (timeout: {timeout}s)...")
 
         # Webhook: serveur arrêté (avant fermeture DB)
-        TriggerServerWebhook("server_stopped", ip=self.Host, port=self.Port)
+        TriggerServerWebhook("server_stopped", ip=self.HostV4 or self.HostV6, port=self.Port)
 
         self.Running = False
 
@@ -598,13 +600,17 @@ class UpscalingServer:
 
     def _PrintServerInfo(self):
         """Affiche les informations du serveur"""
-        Host, ControlPort = self.NetworkManager.GetControlAddress()
-        _, DataPort = self.NetworkManager.GetDataAddress()
+        HostV4, HostV6, ControlPort = self.NetworkManager.GetControlAddress()
+        _, _, DataPort = self.NetworkManager.GetDataAddress()
         self.Logger.info("="*60)
         self.Logger.info("SERVEUR D'UPSCALING VIDÉO EN RÉSEAU")
         self.Logger.info("="*60)
-        self.Logger.info(f"Port Control: {Host}:{ControlPort} (handshake, heartbeat)")
-        self.Logger.info(f"Port Data:    {Host}:{DataPort} (transferts de batches)")
+        if HostV4:
+            self.Logger.info(f"IPv4 Control: {HostV4}:{ControlPort} (handshake, heartbeat)")
+            self.Logger.info(f"IPv4 Data:    {HostV4}:{DataPort} (transferts de batches)")
+        if HostV6:
+            self.Logger.info(f"IPv6 Control: [{HostV6}]:{ControlPort} (handshake, heartbeat)")
+            self.Logger.info(f"IPv6 Data:    [{HostV6}]:{DataPort} (transferts de batches)")
         self.Logger.info(f"Répertoire de travail: {self.WorkDirectory}")
         self.Logger.info(f"Mot de passe configuré: {'Oui' if self.Password else 'Non'}")
         self.Logger.info(f"Base de données: {self.Database.DbPath}")
@@ -618,16 +624,18 @@ class UpscalingServer:
             Dictionnaire avec le statut
         """
         if self.NetworkManager:
-            Host, ControlPort = self.NetworkManager.GetControlAddress()
-            _, DataPort = self.NetworkManager.GetDataAddress()
+            HostV4, HostV6, ControlPort = self.NetworkManager.GetControlAddress()
+            _, _, DataPort = self.NetworkManager.GetDataAddress()
         else:
-            Host = self.Host
+            HostV4 = self.HostV4
+            HostV6 = self.HostV6
             ControlPort = self.Port
             DataPort = self.DataPort
 
         return {
             "running": self.Running,
-            "host": Host,
+            "ipv4": HostV4,
+            "ipv6": HostV6,
             "port": ControlPort,
             "data_port": DataPort,
             "connected_clients": self.ClientManager.GetClientCount() if self.ClientManager else 0,
@@ -635,14 +643,16 @@ class UpscalingServer:
             "database": self.Database.DbPath if self.Database else None
         }
 
-    async def RebindNetwork(self, NewHost: str, NewControlPort: int, NewDataPort: int = None) -> bool:
+    async def RebindNetwork(self, NewHostV4: str, NewControlPort: int, NewDataPort: int = None,
+                            NewHostV6: str = None) -> bool:
         """
         Change l'adresse IP/Ports du serveur à chaud sans perdre les clients connectés.
 
         Args:
-            NewHost: Nouvelle adresse IP
+            NewHostV4: Nouvelle adresse IPv4 (vide pour désactiver)
             NewControlPort: Nouveau port de contrôle
             NewDataPort: Nouveau port de données (optionnel, garde l'actuel si None)
+            NewHostV6: Nouvelle adresse IPv6 (None = inchangée)
 
         Returns:
             True si succès
@@ -654,18 +664,16 @@ class UpscalingServer:
         if NewDataPort is None:
             NewDataPort = self.DataPort
 
-        self.Logger.info(f"Rebind du serveur vers {NewHost}:{NewControlPort}/{NewDataPort}")
-
-        Success = await self.NetworkManager.Rebind(NewHost, NewControlPort, NewDataPort)
+        Success = await self.NetworkManager.Rebind(NewHostV4, NewControlPort, NewDataPort, NewHostV6)
 
         if Success:
-            # Met à jour les propriétés internes
-            self.Host = NewHost
+            self.HostV4 = NewHostV4
+            if NewHostV6 is not None:
+                self.HostV6 = NewHostV6
             self.Port = NewControlPort
             self.DataPort = NewDataPort
-            self.Logger.info(f"✓ Serveur rebind - Control: {NewHost}:{NewControlPort}, Data: {NewHost}:{NewDataPort}")
         else:
-            self.Logger.error(f"✗ Échec du rebind vers {NewHost}:{NewControlPort}/{NewDataPort}")
+            self.Logger.error(f"✗ Échec du rebind vers v4={NewHostV4} v6={NewHostV6}")
 
         return Success
 
@@ -724,7 +732,8 @@ if __name__ == "__main__":
     # Configuration de test
     TestConfig = {
         "server": {
-            "ip": "0.0.0.0",
+            "ipv4": "0.0.0.0",
+            "ipv6": "",
             "port": 8765,
             "password": "test123",
             "work_directory": "./test_work",

@@ -137,12 +137,13 @@ class ServerWindow(QMainWindow):
             # Récupérer la configuration
             GuiConfig = self.ConfigTab.GetConfiguration()
 
-            self.Logger.info(f"Démarrage du serveur sur {GuiConfig['ip']}:{GuiConfig['port']}")
+            self.Logger.info(f"Démarrage du serveur sur port {GuiConfig['port']}")
 
             # Formater la configuration pour UpscalingServer
             ServerConfig = {
                 "server": {
-                    "ip": GuiConfig['ip'],
+                    "ipv4": GuiConfig['ipv4'],
+                    "ipv6": GuiConfig['ipv6'],
                     "port": GuiConfig['port'],
                     "password": GuiConfig['password'],
                     "work_directory": GuiConfig['work_directory']
@@ -216,7 +217,10 @@ class ServerWindow(QMainWindow):
             self.ToggleServerButton.style().unpolish(self.ToggleServerButton)
             self.ToggleServerButton.style().polish(self.ToggleServerButton)
 
-            self.UpdateStatusBar(f"Serveur démarré sur {GuiConfig['ip']}:{GuiConfig['port']}")
+            V4Part = f"IPv4={GuiConfig['ipv4']}" if GuiConfig['ipv4'] else ""
+            V6Part = f"IPv6={GuiConfig['ipv6']}" if GuiConfig['ipv6'] else ""
+            AddrPart = ", ".join(filter(None, [V4Part, V6Part])) or "dual-stack"
+            self.UpdateStatusBar(f"Serveur démarré - {AddrPart} port {GuiConfig['port']}")
 
             self.Logger.info("Serveur démarré avec succès")
 

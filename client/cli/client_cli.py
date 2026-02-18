@@ -132,7 +132,7 @@ class ClientCLI:
 
     def _PromptServerDetails(self):
         """Demande les détails de connexion"""
-        Host = click.prompt("Adresse du serveur", default="localhost")
+        Host = click.prompt("Adresse du serveur (IPv4 ou IPv6)", default="localhost")
         Port = click.prompt("Port", type=int, default=8765)
         Password = click.prompt("Mot de passe (laisser vide si aucun)", default="", show_default=False)
 

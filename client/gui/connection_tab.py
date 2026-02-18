@@ -61,7 +61,7 @@ class ConnectionTab(QWidget):
 
         # Adresse IP
         self.HostInput = QLineEdit()
-        self.HostInput.setPlaceholderText("localhost ou 192.168.1.100")
+        self.HostInput.setPlaceholderText("localhost, 192.168.1.100 ou 2001:db8::1")
         FormLayout.addRow("Adresse:", self.HostInput)
 
         # Port

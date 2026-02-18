@@ -21,7 +21,8 @@ from shared.utils.constants import JobStatus, BatchStatus
 
 # Paramètres par défaut du serveur
 DEFAULT_PARAMETERS = {
-    "server_ip": ("0.0.0.0", "Adresse IP d'écoute du serveur"),
+    "server_ipv4": ("0.0.0.0", "Adresse IPv4 d'écoute du serveur (vide = désactivé)"),
+    "server_ipv6": ("", "Adresse IPv6 d'écoute du serveur (vide = désactivé, :: = toutes interfaces)"),
     "server_port": ("8765", "Port de contrôle du serveur (handshake, heartbeat)"),
     "server_data_port": ("8766", "Port de données du serveur (transferts de batches)"),
     "server_password": ("", "Mot de passe du serveur (vide = désactivé)"),
@@ -293,8 +294,14 @@ class DatabaseManager:
         Returns:
             Dictionnaire avec les paramètres serveur
         """
+        # Migration : si l'ancien paramètre server_ip existe, le migrer vers server_ipv4
+        LegacyIp = self.GetParameter('server_ip', None)
+        if LegacyIp is not None and self.GetParameter('server_ipv4') is None:
+            self.SetParameter('server_ipv4', LegacyIp, "Adresse IPv4 d'écoute du serveur")
+
         return {
-            'ip': self.GetParameter('server_ip', '0.0.0.0'),
+            'ipv4': self.GetParameter('server_ipv4', '0.0.0.0'),
+            'ipv6': self.GetParameter('server_ipv6', ''),
             'port': self.GetParameterInt('server_port', 8765),
             'data_port': self.GetParameterInt('server_data_port', 8766),
             'password': self.GetParameter('server_password', ''),
@@ -315,8 +322,10 @@ class DatabaseManager:
             True si succès
         """
         try:
-            if 'ip' in Config:
-                self.SetParameter('server_ip', Config['ip'], "Adresse IP d'écoute du serveur")
+            if 'ipv4' in Config:
+                self.SetParameter('server_ipv4', Config['ipv4'], "Adresse IPv4 d'écoute du serveur")
+            if 'ipv6' in Config:
+                self.SetParameter('server_ipv6', Config['ipv6'], "Adresse IPv6 d'écoute du serveur")
             if 'port' in Config:
                 self.SetParameter('server_port', str(Config['port']), "Port de contrôle du serveur")
             if 'data_port' in Config:

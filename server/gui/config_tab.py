@@ -116,10 +116,15 @@ class ConfigTab(QWidget):
         MainLayout = QVBoxLayout()
         FormLayout = QFormLayout()
 
-        # IP
-        self.IpInput = QLineEdit()
-        self.IpInput.setPlaceholderText("0.0.0.0 (toutes les interfaces)")
-        FormLayout.addRow("Adresse IP:", self.IpInput)
+        # IPv4
+        self.IpV4Input = QLineEdit()
+        self.IpV4Input.setPlaceholderText("0.0.0.0 (toutes interfaces) ou adresse spécifique, vide=désactivé")
+        FormLayout.addRow("Adresse IPv4:", self.IpV4Input)
+
+        # IPv6
+        self.IpV6Input = QLineEdit()
+        self.IpV6Input.setPlaceholderText(":: (toutes interfaces) ou adresse spécifique, vide=désactivé")
+        FormLayout.addRow("Adresse IPv6:", self.IpV6Input)
 
         # Port Control (handshake, heartbeat)
         ControlPortLayout = QHBoxLayout()
@@ -345,7 +350,8 @@ class ConfigTab(QWidget):
                 # Charger les valeurs depuis la DB
                 Config = Database.GetServerConfig()
 
-                self.IpInput.setText(Config.get('ip', '0.0.0.0'))
+                self.IpV4Input.setText(Config.get('ipv4', '0.0.0.0'))
+                self.IpV6Input.setText(Config.get('ipv6', ''))
                 self.PortInput.setValue(Config.get('port', 8765))
                 self.DataPortInput.setValue(Config.get('data_port', 8766))
                 self.PasswordInput.setText(Config.get('password', ''))
@@ -363,7 +369,8 @@ class ConfigTab(QWidget):
                 self.ParentWindow.Logger.info("Configuration chargee depuis la base de donnees")
             else:
                 # Valeurs par défaut si pas de DB
-                self.IpInput.setText('0.0.0.0')
+                self.IpV4Input.setText('0.0.0.0')
+                self.IpV6Input.setText('')
                 self.PortInput.setValue(8765)
                 self.DataPortInput.setValue(8766)
                 self.PasswordInput.setText('')
@@ -612,14 +619,16 @@ class ConfigTab(QWidget):
         Applique les changements d'adresse réseau (IP/Ports) au serveur actif.
         Utilise le rebind dynamique sans perdre les clients connectés.
         """
-        NewIp = self.IpInput.text() or '0.0.0.0'
+        NewIpV4 = self.IpV4Input.text().strip()
+        NewIpV6 = self.IpV6Input.text().strip()
         NewControlPort = self.PortInput.value()
         NewDataPort = self.DataPortInput.value()
 
         # Sauvegarde d'abord dans la base de données
         Database = self.ParentWindow.GetDatabase()
         if Database:
-            Database.SetParameter('server_ip', NewIp, "Adresse IP d'écoute du serveur")
+            Database.SetParameter('server_ipv4', NewIpV4, "Adresse IPv4 d'écoute du serveur")
+            Database.SetParameter('server_ipv6', NewIpV6, "Adresse IPv6 d'écoute du serveur")
             Database.SetParameter('server_port', str(NewControlPort), "Port de contrôle du serveur")
             Database.SetParameter('server_data_port', str(NewDataPort), "Port de données du serveur")
 
@@ -638,15 +647,11 @@ class ConfigTab(QWidget):
         Server = self.ParentWindow.Server
 
         # Vérifie si l'adresse a changé
-        CurrentHost, CurrentControlPort = Server.NetworkManager.GetControlAddress()
-        _, CurrentDataPort = Server.NetworkManager.GetDataAddress()
-        if (NewIp == CurrentHost and NewControlPort == CurrentControlPort
-                and NewDataPort == CurrentDataPort):
-            QMessageBox.information(
-                self,
-                "Information",
-                "L'adresse reseau n'a pas change."
-            )
+        CurV4, CurV6, CurControlPort = Server.NetworkManager.GetControlAddress()
+        _, _, CurDataPort = Server.NetworkManager.GetDataAddress()
+        if (NewIpV4 == CurV4 and NewIpV6 == CurV6
+                and NewControlPort == CurControlPort and NewDataPort == CurDataPort):
+            QMessageBox.information(self, "Information", "L'adresse reseau n'a pas change.")
             return
 
         # Effectue le rebind via asyncio
@@ -657,7 +662,7 @@ class ConfigTab(QWidget):
             asyncio.set_event_loop(loop)
             try:
                 return loop.run_until_complete(
-                    Server.RebindNetwork(NewIp, NewControlPort, NewDataPort)
+                    Server.RebindNetwork(NewIpV4, NewControlPort, NewDataPort, NewIpV6)
                 )
             finally:
                 loop.close()
@@ -668,33 +673,35 @@ class ConfigTab(QWidget):
         RebindThread.join(timeout=5)
 
         # Vérifie le résultat
-        NewCurrentHost, NewCurrentControlPort = Server.NetworkManager.GetControlAddress()
-        _, NewCurrentDataPort = Server.NetworkManager.GetDataAddress()
-        if (NewCurrentHost == NewIp and NewCurrentControlPort == NewControlPort
-                and NewCurrentDataPort == NewDataPort):
+        NewV4, NewV6, NewCurControlPort = Server.NetworkManager.GetControlAddress()
+        _, _, NewCurDataPort = Server.NetworkManager.GetDataAddress()
+        if (NewV4 == NewIpV4 and NewV6 == NewIpV6
+                and NewCurControlPort == NewControlPort and NewCurDataPort == NewDataPort):
             self.ShowSavedIndicator()
+            Lines = []
+            if NewIpV4:
+                Lines.append(f"IPv4 Control: {NewIpV4}:{NewControlPort}")
+                Lines.append(f"IPv4 Data:    {NewIpV4}:{NewDataPort}")
+            if NewIpV6:
+                Lines.append(f"IPv6 Control: [{NewIpV6}]:{NewControlPort}")
+                Lines.append(f"IPv6 Data:    [{NewIpV6}]:{NewDataPort}")
             QMessageBox.information(
-                self,
-                "Succes",
-                f"Adresse reseau changee!\n\n"
-                f"Control: {NewIp}:{NewControlPort}\n"
-                f"Data: {NewIp}:{NewDataPort}\n\n"
-                f"Les clients connectes ne sont pas affectes."
+                self, "Succes",
+                "Adresse reseau changee!\n\n" + "\n".join(Lines) +
+                "\n\nLes clients connectes ne sont pas affectes."
             )
             self.ParentWindow.Logger.info(
-                f"Rebind reseau reussi: Control={NewIp}:{NewControlPort}, Data={NewIp}:{NewDataPort}"
+                f"Rebind reussi: v4={NewIpV4} v6={NewIpV6} ports={NewControlPort}/{NewDataPort}"
             )
         else:
             QMessageBox.warning(
-                self,
-                "Echec",
+                self, "Echec",
                 f"Impossible de changer l'adresse reseau.\n\n"
                 f"Un des ports est peut-etre deja utilise.\n"
-                f"Le serveur continue sur Control={NewCurrentHost}:{NewCurrentControlPort}, "
-                f"Data={NewCurrentHost}:{NewCurrentDataPort}."
+                f"Le serveur continue sur v4={NewV4} v6={NewV6} ports={NewCurControlPort}/{NewCurDataPort}."
             )
             self.ParentWindow.Logger.error(
-                f"Echec du rebind vers {NewIp}:{NewControlPort}/{NewDataPort}"
+                f"Echec du rebind vers v4={NewIpV4} v6={NewIpV6} ports={NewControlPort}/{NewDataPort}"
             )
 
     def ShowSavedIndicator(self):
@@ -731,7 +738,8 @@ class ConfigTab(QWidget):
     def GetConfiguration(self) -> dict:
         """Retourne la configuration actuelle"""
         return {
-            'ip': self.IpInput.text() or '0.0.0.0',
+            'ipv4': self.IpV4Input.text().strip(),
+            'ipv6': self.IpV6Input.text().strip(),
             'port': self.PortInput.value(),
             'data_port': self.DataPortInput.value(),
             'password': self.PasswordInput.text(),

@@ -4,8 +4,48 @@ Permet le rebind dynamique du listener TCP sans perdre les clients connectés
 """
 
 import asyncio
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 from shared.utils.logger import GetModuleLogger
+
+
+def _GetListenHosts(Host: str) -> List[str]:
+    """
+    Retourne la liste des adresses d'écoute pour asyncio.start_server (NetworkManager simple).
+
+    - "" ou None → IPv4 uniquement par défaut
+    - adresse spécifique → cette adresse
+    """
+    return [Host] if Host else ["0.0.0.0"]
+
+
+def BuildListenHosts(HostV4: str, HostV6: str) -> List[str]:
+    """
+    Construit la liste des adresses d'écoute à partir des deux champs IPv4 et IPv6.
+
+    - Les deux remplis → dual-stack [IPv4, IPv6]
+    - IPv4 uniquement → [IPv4]
+    - IPv6 uniquement → [IPv6]
+    - Les deux vides → fallback [0.0.0.0]
+    """
+    Hosts = []
+    if HostV4:
+        Hosts.append(HostV4)
+    if HostV6:
+        Hosts.append(HostV6)
+    return Hosts if Hosts else ["0.0.0.0"]
+
+
+def _FormatAddress(PeerName) -> str:
+    """
+    Formate un tuple peername en chaîne lisible.
+    IPv6 retourne un tuple à 4 éléments (host, port, flowinfo, scope_id).
+    IPv4 retourne un tuple à 2 éléments (host, port).
+    """
+    if PeerName and len(PeerName) == 4:
+        return f"[{PeerName[0]}]:{PeerName[1]}"
+    elif PeerName and len(PeerName) >= 2:
+        return f"{PeerName[0]}:{PeerName[1]}"
+    return str(PeerName)
 
 
 class NetworkManager:
@@ -43,14 +83,27 @@ class NetworkManager:
         try:
             self.ConnectionHandler = ConnectionHandler
 
-            self.Server = await asyncio.start_server(
-                self._FilteredHandler,
-                self.Host,
-                self.Port
-            )
+            Hosts = _GetListenHosts(self.Host)
+            try:
+                self.Server = await asyncio.start_server(
+                    self._FilteredHandler,
+                    Hosts,
+                    self.Port
+                )
+            except OSError:
+                if len(Hosts) > 1:
+                    # Fallback : IPv6 indisponible, écoute uniquement IPv4
+                    self.Logger.warning("IPv6 indisponible, demarrage en IPv4 uniquement")
+                    self.Server = await asyncio.start_server(
+                        self._FilteredHandler,
+                        Hosts[0],
+                        self.Port
+                    )
+                else:
+                    raise
 
             self.AcceptingConnections = True
-            self.Logger.info(f"Listener TCP demarr sur {self.Host}:{self.Port}")
+            self.Logger.info(f"Listener TCP demarre sur {Hosts}:{self.Port}")
             return True
 
         except OSError as e:
@@ -72,7 +125,7 @@ class NetworkManager:
         if not self.AcceptingConnections:
             # Refuse la connexion proprement
             PeerName = Writer.get_extra_info('peername')
-            self.Logger.warning(f"Connexion refusee de {PeerName} (rebind en cours)")
+            self.Logger.warning(f"Connexion refusee de {_FormatAddress(PeerName)} (rebind en cours)")
             Writer.close()
             await Writer.wait_closed()
             return
@@ -110,13 +163,25 @@ class NetworkManager:
 
         try:
             # Étape 2: Démarre le nouveau listener
-            NewServer = await asyncio.start_server(
-                self._FilteredHandler,
-                NewHost,
-                NewPort
-            )
+            NewHosts = _GetListenHosts(NewHost)
+            try:
+                NewServer = await asyncio.start_server(
+                    self._FilteredHandler,
+                    NewHosts,
+                    NewPort
+                )
+            except OSError:
+                if len(NewHosts) > 1:
+                    self.Logger.warning("IPv6 indisponible lors du rebind, fallback IPv4")
+                    NewServer = await asyncio.start_server(
+                        self._FilteredHandler,
+                        NewHosts[0],
+                        NewPort
+                    )
+                else:
+                    raise
 
-            self.Logger.info(f"Nouveau listener demarre sur {NewHost}:{NewPort}")
+            self.Logger.info(f"Nouveau listener demarre sur {NewHosts}:{NewPort}")
 
             # Étape 3: Ferme l'ancien listener
             # Note: Cela ne ferme PAS les sockets des clients déjà connectés
@@ -189,18 +254,21 @@ class DualNetworkManager:
     """
     Gère deux listeners TCP: Control (handshake/heartbeat) et Data (transferts de batches).
     Permet de changer l'IP/Ports à chaud sans déconnecter les clients existants.
+    Supporte IPv4 seul, IPv6 seul, ou dual-stack selon les adresses configurées.
     """
 
-    def __init__(self, Host: str, ControlPort: int, DataPort: int):
+    def __init__(self, HostV4: str, ControlPort: int, DataPort: int, HostV6: str = ""):
         """
         Initialise le gestionnaire de réseau dual-port
 
         Args:
-            Host: Adresse IP d'écoute
+            HostV4: Adresse IPv4 d'écoute (ex: "0.0.0.0"), vide pour désactiver
             ControlPort: Port de contrôle (handshake, heartbeat, status)
             DataPort: Port de données (transferts de batches)
+            HostV6: Adresse IPv6 d'écoute (ex: "::"), vide pour désactiver
         """
-        self.Host = Host
+        self.HostV4 = HostV4
+        self.HostV6 = HostV6
         self.ControlPort = ControlPort
         self.DataPort = DataPort
 
@@ -230,30 +298,55 @@ class DualNetworkManager:
             self.ControlHandler = ControlHandler
             self.DataHandler = DataHandler
 
+            Hosts = BuildListenHosts(self.HostV4, self.HostV6)
+
             # Démarre le listener Control
-            self.ControlServer = await asyncio.start_server(
-                self._FilteredControlHandler,
-                self.Host,
-                self.ControlPort,
-                backlog=128  # Support 128 connexions simultanées
-            )
-            self.Logger.info(f"Control listener démarré sur {self.Host}:{self.ControlPort}")
+            try:
+                self.ControlServer = await asyncio.start_server(
+                    self._FilteredControlHandler,
+                    Hosts,
+                    self.ControlPort,
+                    backlog=128
+                )
+            except OSError:
+                if len(Hosts) > 1:
+                    self.Logger.warning("IPv6 indisponible pour Control, fallback IPv4 uniquement")
+                    self.ControlServer = await asyncio.start_server(
+                        self._FilteredControlHandler,
+                        [self.HostV4],
+                        self.ControlPort,
+                        backlog=128
+                    )
+                else:
+                    raise
+            self.Logger.info(f"Control listener démarré sur {Hosts}:{self.ControlPort}")
 
             # Démarre le listener Data
-            self.DataServer = await asyncio.start_server(
-                self._FilteredDataHandler,
-                self.Host,
-                self.DataPort,
-                backlog=128  # Support 128 connexions simultanées
-            )
-            self.Logger.info(f"Data listener démarré sur {self.Host}:{self.DataPort}")
+            try:
+                self.DataServer = await asyncio.start_server(
+                    self._FilteredDataHandler,
+                    Hosts,
+                    self.DataPort,
+                    backlog=128
+                )
+            except OSError:
+                if len(Hosts) > 1:
+                    self.Logger.warning("IPv6 indisponible pour Data, fallback IPv4 uniquement")
+                    self.DataServer = await asyncio.start_server(
+                        self._FilteredDataHandler,
+                        [self.HostV4],
+                        self.DataPort,
+                        backlog=128
+                    )
+                else:
+                    raise
+            self.Logger.info(f"Data listener démarré sur {Hosts}:{self.DataPort}")
 
             self.AcceptingConnections = True
             return True
 
         except OSError as e:
             self.Logger.error(f"Impossible de bind: {e}")
-            # Nettoie si un des deux a démarré
             await self._Cleanup()
             return False
         except Exception as e:
@@ -277,7 +370,7 @@ class DualNetworkManager:
         """Handler filtré pour le port Control"""
         if not self.AcceptingConnections:
             PeerName = Writer.get_extra_info('peername')
-            self.Logger.warning(f"Connexion Control refusée de {PeerName} (rebind en cours)")
+            self.Logger.warning(f"Connexion Control refusée de {_FormatAddress(PeerName)} (rebind en cours)")
             Writer.close()
             await Writer.wait_closed()
             return
@@ -290,7 +383,7 @@ class DualNetworkManager:
         """Handler filtré pour le port Data"""
         if not self.AcceptingConnections:
             PeerName = Writer.get_extra_info('peername')
-            self.Logger.warning(f"Connexion Data refusée de {PeerName} (rebind en cours)")
+            self.Logger.warning(f"Connexion Data refusée de {_FormatAddress(PeerName)} (rebind en cours)")
             Writer.close()
             await Writer.wait_closed()
             return
@@ -298,14 +391,15 @@ class DualNetworkManager:
         if self.DataHandler:
             await self.DataHandler(Reader, Writer)
 
-    async def Rebind(self, NewHost: str, NewControlPort: int, NewDataPort: int) -> bool:
+    async def Rebind(self, NewHostV4: str, NewControlPort: int, NewDataPort: int, NewHostV6: str = None) -> bool:
         """
         Rebind les deux listeners sur de nouvelles adresses.
 
         Args:
-            NewHost: Nouvelle adresse IP
+            NewHostV4: Nouvelle adresse IPv4 (vide pour désactiver)
             NewControlPort: Nouveau port de contrôle
             NewDataPort: Nouveau port de données
+            NewHostV6: Nouvelle adresse IPv6 (None = inchangée, "" = désactiver)
 
         Returns:
             True si succès, False sinon (anciens listeners restent actifs)
@@ -314,27 +408,57 @@ class DualNetworkManager:
             self.Logger.error("Aucun listener actif pour rebind")
             return False
 
-        self.Logger.info(f"Rebind: {self.Host}:{self.ControlPort}/{self.DataPort} -> {NewHost}:{NewControlPort}/{NewDataPort}")
+        if NewHostV6 is None:
+            NewHostV6 = self.HostV6
+
+        self.Logger.info(
+            f"Rebind: v4={self.HostV4} v6={self.HostV6} ports={self.ControlPort}/{self.DataPort}"
+            f" -> v4={NewHostV4} v6={NewHostV6} ports={NewControlPort}/{NewDataPort}"
+        )
 
         # Refuse temporairement les nouvelles connexions
         self.AcceptingConnections = False
         self.Logger.info("Nouvelles connexions temporairement refusées")
 
         try:
-            # Démarre les nouveaux listeners
-            NewControlServer = await asyncio.start_server(
-                self._FilteredControlHandler,
-                NewHost,
-                NewControlPort
-            )
-            self.Logger.info(f"Nouveau Control listener démarré sur {NewHost}:{NewControlPort}")
+            NewHosts = BuildListenHosts(NewHostV4, NewHostV6)
 
-            NewDataServer = await asyncio.start_server(
-                self._FilteredDataHandler,
-                NewHost,
-                NewDataPort
-            )
-            self.Logger.info(f"Nouveau Data listener démarré sur {NewHost}:{NewDataPort}")
+            # Démarre les nouveaux listeners
+            try:
+                NewControlServer = await asyncio.start_server(
+                    self._FilteredControlHandler,
+                    NewHosts,
+                    NewControlPort
+                )
+            except OSError:
+                if len(NewHosts) > 1:
+                    self.Logger.warning("IPv6 indisponible lors du rebind Control, fallback IPv4")
+                    NewControlServer = await asyncio.start_server(
+                        self._FilteredControlHandler,
+                        [NewHostV4],
+                        NewControlPort
+                    )
+                else:
+                    raise
+            self.Logger.info(f"Nouveau Control listener démarré sur {NewHosts}:{NewControlPort}")
+
+            try:
+                NewDataServer = await asyncio.start_server(
+                    self._FilteredDataHandler,
+                    NewHosts,
+                    NewDataPort
+                )
+            except OSError:
+                if len(NewHosts) > 1:
+                    self.Logger.warning("IPv6 indisponible lors du rebind Data, fallback IPv4")
+                    NewDataServer = await asyncio.start_server(
+                        self._FilteredDataHandler,
+                        [NewHostV4],
+                        NewDataPort
+                    )
+                else:
+                    raise
+            self.Logger.info(f"Nouveau Data listener démarré sur {NewHosts}:{NewDataPort}")
 
             # Ferme les anciens listeners
             OldControlServer = self.ControlServer
@@ -349,12 +473,15 @@ class DualNetworkManager:
             # Active les nouveaux listeners
             self.ControlServer = NewControlServer
             self.DataServer = NewDataServer
-            self.Host = NewHost
+            self.HostV4 = NewHostV4
+            self.HostV6 = NewHostV6
             self.ControlPort = NewControlPort
             self.DataPort = NewDataPort
             self.AcceptingConnections = True
 
-            self.Logger.info(f"Rebind réussi! Control: {NewHost}:{NewControlPort}, Data: {NewHost}:{NewDataPort}")
+            self.Logger.info(
+                f"Rebind réussi! Control: {NewHosts}:{NewControlPort}, Data: {NewHosts}:{NewDataPort}"
+            )
             return True
 
         except OSError as e:
@@ -383,12 +510,12 @@ class DualNetworkManager:
             self.DataServer = None
 
     def GetControlAddress(self) -> tuple:
-        """Retourne l'adresse du port Control"""
-        return (self.Host, self.ControlPort)
+        """Retourne (HostV4, HostV6, ControlPort)"""
+        return (self.HostV4, self.HostV6, self.ControlPort)
 
     def GetDataAddress(self) -> tuple:
-        """Retourne l'adresse du port Data"""
-        return (self.Host, self.DataPort)
+        """Retourne (HostV4, HostV6, DataPort)"""
+        return (self.HostV4, self.HostV6, self.DataPort)
 
     def IsRunning(self) -> bool:
         """Vérifie si les deux listeners sont actifs"""

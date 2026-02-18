@@ -36,7 +36,8 @@ class ServerCLI:
         DbConfig = self.Database.GetServerConfig()
         self.Config = {
             "server": {
-                "ip": DbConfig['ip'],
+                "ipv4": DbConfig['ipv4'],
+                "ipv6": DbConfig['ipv6'],
                 "port": DbConfig['port'],
                 "password": DbConfig['password'],
                 "work_directory": DbConfig['work_directory'],
@@ -342,7 +343,8 @@ class ServerCLI:
         DbConfig = self.Database.GetServerConfig()
 
         click.echo("\n📡 SERVEUR:")
-        click.echo(f"  IP: {DbConfig.get('ip', 'N/A')}")
+        click.echo(f"  IPv4: {DbConfig.get('ipv4', 'N/A') or '(désactivé)'}")
+        click.echo(f"  IPv6: {DbConfig.get('ipv6', '') or '(désactivé)'}")
         click.echo(f"  Port: {DbConfig.get('port', 'N/A')}")
         click.echo(f"  Mot de passe: {'Defini' if DbConfig.get('password') else 'Non defini'}")
         click.echo(f"  Repertoire de travail: {DbConfig.get('work_directory', 'N/A')}")
