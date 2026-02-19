@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Client Upscaling — Web UI</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ── HEADER ── -->
+<header>
+  <h1>🖥️ Upscaling Client</h1>
+  <span id="conn-badge" class="disconnected">● Déconnecté</span>
+  <div id="ws-status">
+    <div class="ws-dot" id="ws-dot"></div>
+    <span id="ws-label">Déconnecté</span>
+  </div>
+</header>
+
+<!-- ── TABS BAR ── -->
+<nav class="tabs-bar">
+  <button class="tab-btn active" onclick="switchTab('connection', this)">🔌 Connexion</button>
+  <button class="tab-btn" onclick="switchTab('monitoring', this)">📈 Monitoring</button>
+  <button class="tab-btn" onclick="switchTab('servers', this)">🗄️ Serveurs</button>
+  <button class="tab-btn" onclick="switchTab('performance', this)">⚡ Performance</button>
+  <button class="tab-btn" onclick="switchTab('webhooks', this)">🔔 Webhooks</button>
+</nav>
+
+<!-- ════════════════════════════════════════════
+     TAB: CONNEXION
+════════════════════════════════════════════ -->
+<div id="tab-connection" class="tab-panel active">
+  <div class="card">
+    <div class="card-title">État de la connexion</div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+      <span id="conn-status-big" style="font-size:18px;font-weight:700">● Déconnecté</span>
+      <span id="conn-server-addr" style="color:var(--text2);font-size:13px"></span>
+    </div>
+    <button class="btn btn-danger" id="btn-disconnect" onclick="doDisconnect()" style="display:none">
+      ⏹ Déconnecter
+    </button>
+  </div>
+
+  <div id="connect-form-card" class="card">
+    <div class="card-title">Se connecter à un serveur</div>
+
+    <div class="form-group">
+      <label>Serveur sauvegardé (optionnel)</label>
+      <select id="saved-server-select" onchange="loadSavedServer()">
+        <option value="">— Choisir un serveur sauvegardé —</option>
+      </select>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Adresse IP / Hostname</label>
+        <input type="text" id="conn-host" placeholder="192.168.1.100">
+      </div>
+      <div class="form-group">
+        <label>Port</label>
+        <input type="number" id="conn-port" placeholder="8765" value="8765">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Mot de passe (si requis)</label>
+      <input type="password" id="conn-password" placeholder="Mot de passe...">
+    </div>
+    <div id="conn-error" style="color:var(--danger);font-size:13px;margin-bottom:12px;display:none;"></div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn btn-primary" onclick="doConnect()">▶ Connecter</button>
+      <div class="form-group" style="margin:0;display:flex;align-items:center;gap:8px">
+        <label class="checkbox-group" style="color:var(--text2);font-size:12px">
+          <input type="checkbox" id="conn-save">
+          Sauvegarder ce serveur
+        </label>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════
+     TAB: MONITORING
+════════════════════════════════════════════ -->
+<div id="tab-monitoring" class="tab-panel">
+  <div class="stat-grid">
+    <div class="stat-card">
+      <div class="stat-value" id="stat-batches-ok">0</div>
+      <div class="stat-label">Batches traités</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="stat-batches-fail">0</div>
+      <div class="stat-label">Batches échoués</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="stat-images">0</div>
+      <div class="stat-label">Images traitées</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="stat-queue">0</div>
+      <div class="stat-label">En attente d'envoi</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Batch en cours</div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+      <span id="current-status-badge" class="badge badge-disconnected">Déconnecté</span>
+      <span id="current-batch-id" style="font-family:monospace;font-size:12px;color:var(--text2)"></span>
+    </div>
+    <progress id="batch-progress" value="0" max="100"></progress>
+    <div style="font-size:12px;color:var(--text2);margin-top:6px">
+      <span id="batch-progress-label">0 / 0 images</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Logs récents</div>
+    <div class="log-container" id="log-container">
+      <div class="log-entry" style="color:var(--text2)">En attente de connexion...</div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════
+     TAB: SERVEURS
+════════════════════════════════════════════ -->
+<div id="tab-servers" class="tab-panel">
+  <div class="toolbar">
+    <button class="btn btn-primary" onclick="showAddServerModal()">+ Ajouter un serveur</button>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table id="servers-table">
+        <thead>
+          <tr>
+            <th>Nom</th>
+            <th>Adresse</th>
+            <th>Port</th>
+            <th>Mot de passe</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="servers-tbody">
+          <tr><td colspan="5" class="no-data">Aucun serveur sauvegardé</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════
+     TAB: PERFORMANCE
+════════════════════════════════════════════ -->
+<div id="tab-performance" class="tab-panel">
+  <div class="card">
+    <div class="card-title">Configuration</div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Tile size (pixels)</label>
+        <input type="number" id="cfg-tile-size" min="32" max="2048" oninput="schedulePerfSave()">
+      </div>
+      <div class="form-group">
+        <label>Threads de chargement</label>
+        <input type="number" id="cfg-load-threads" min="1" max="16" oninput="schedulePerfSave()">
+      </div>
+      <div class="form-group">
+        <label>Threads de traitement</label>
+        <input type="number" id="cfg-process-threads" min="1" max="16" oninput="schedulePerfSave()">
+      </div>
+      <div class="form-group">
+        <label>Threads de sauvegarde</label>
+        <input type="number" id="cfg-save-threads" min="1" max="16" oninput="schedulePerfSave()">
+      </div>
+    </div>
+    <span class="save-indicator" id="perf-save-indicator">✓ Sauvegardé</span>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Mode de stockage temporaire</div>
+    <div class="form-group">
+      <label>Répertoire de travail</label>
+      <input type="text" id="cfg-work-dir" placeholder="./work" oninput="schedulePerfSave()">
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════
+     TAB: WEBHOOKS
+════════════════════════════════════════════ -->
+<div id="tab-webhooks" class="tab-panel">
+  <div class="card">
+    <div class="card-title">Configuration Webhook</div>
+    <div class="form-group">
+      <label class="checkbox-group">
+        <input type="checkbox" id="wh-enabled" onchange="scheduleWebhookSave()">
+        Activer les webhooks
+      </label>
+    </div>
+    <div class="form-group">
+      <label>URL du webhook Discord</label>
+      <input type="url" id="wh-url" placeholder="https://discord.com/api/webhooks/..." oninput="scheduleWebhookSave()">
+    </div>
+    <div style="margin-top:16px">
+      <button class="btn btn-secondary" onclick="testWebhook()">🔔 Tester</button>
+      <span id="wh-test-result" style="margin-left:12px;font-size:13px;"></span>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL: AJOUTER SERVEUR ── -->
+<div id="add-server-modal" style="display:none" class="modal-backdrop">
+  <div class="modal">
+    <h3>🗄️ Ajouter un serveur</h3>
+    <div class="form-group">
+      <label>Nom du serveur</label>
+      <input type="text" id="srv-name" placeholder="Mon serveur">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Adresse IP / Hostname</label>
+        <input type="text" id="srv-host" placeholder="192.168.1.100">
+      </div>
+      <div class="form-group">
+        <label>Port</label>
+        <input type="number" id="srv-port" value="8765">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Mot de passe (optionnel)</label>
+      <input type="password" id="srv-password" placeholder="Mot de passe...">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeAddServerModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="addServer()">Ajouter</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

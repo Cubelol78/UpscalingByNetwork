@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Serveur Upscaling — Web UI</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ── LOGIN OVERLAY ── -->
+<div id="login-overlay">
+  <div class="login-card">
+    <h2>🔐 Connexion</h2>
+    <div class="form-group">
+      <label for="login-password">Mot de passe du serveur</label>
+      <input type="password" id="login-password" placeholder="Mot de passe..." autocomplete="current-password">
+    </div>
+    <div id="login-error" style="color:var(--danger);font-size:13px;margin-bottom:12px;display:none;"></div>
+    <button class="btn btn-primary" style="width:100%" onclick="doLogin()">Se connecter</button>
+  </div>
+</div>
+
+<!-- ── HEADER ── -->
+<header>
+  <h1>⚙️ Upscaling Server</h1>
+  <span id="server-status-badge" class="stopped">● Arrêté</span>
+  <div id="ws-status">
+    <div class="ws-dot" id="ws-dot"></div>
+    <span id="ws-label">Déconnecté</span>
+  </div>
+</header>
+
+<!-- ── TABS BAR ── -->
+<nav class="tabs-bar">
+  <button class="tab-btn active" onclick="switchTab('dashboard', this)">📊 Dashboard</button>
+  <button class="tab-btn" onclick="switchTab('clients', this)">💻 Clients</button>
+  <button class="tab-btn" onclick="switchTab('jobs', this)">🎬 Jobs</button>
+  <button class="tab-btn" onclick="switchTab('config', this)">⚙️ Configuration</button>
+  <button class="tab-btn" onclick="switchTab('webhooks', this)">🔔 Webhooks</button>
+</nav>
+
+<!-- ════════════════════════════════════════════
+     TAB: DASHBOARD
+════════════════════════════════════════════ -->
+<div id="tab-dashboard" class="tab-panel active">
+  <div class="stat-grid">
+    <div class="stat-card">
+      <div class="stat-value" id="stat-clients">0</div>
+      <div class="stat-label">Clients actifs</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="stat-queued">0</div>
+      <div class="stat-label">Vidéos en queue</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="stat-processing">0</div>
+      <div class="stat-label">En traitement</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="stat-batches-pending">0</div>
+      <div class="stat-label">Batches en attente</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="stat-batches-done">0</div>
+      <div class="stat-label">Batches complétés</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value" id="stat-uptime">—</div>
+      <div class="stat-label">Uptime serveur</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Activité récente</div>
+    <ul class="activity-list" id="activity-list">
+      <li><span style="color:var(--text2)">Aucune activité récente</span></li>
+    </ul>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════
+     TAB: CLIENTS
+════════════════════════════════════════════ -->
+<div id="tab-clients" class="tab-panel">
+  <div class="card">
+    <div class="table-wrap">
+      <table id="clients-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Adresse IP</th>
+            <th>Statut</th>
+            <th>Batches actifs</th>
+            <th>Dernier HB</th>
+            <th>Uptime</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="clients-tbody">
+          <tr><td colspan="7" class="no-data">Aucun client connecté</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════
+     TAB: JOBS
+════════════════════════════════════════════ -->
+<div id="tab-jobs" class="tab-panel">
+  <div class="toolbar">
+    <button class="btn btn-primary" onclick="showAddJobModal()">+ Ajouter une vidéo</button>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table id="jobs-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Fichier</th>
+            <th>Statut</th>
+            <th>Progression</th>
+            <th>Batches</th>
+            <th>Facteur</th>
+            <th>Modèle</th>
+            <th>TTA</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="jobs-tbody">
+          <tr><td colspan="9" class="no-data">Aucun job</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════
+     TAB: CONFIGURATION
+════════════════════════════════════════════ -->
+<div id="tab-config" class="tab-panel">
+  <div class="card">
+    <div class="card-title">Réseau</div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Adresse IPv4</label>
+        <input type="text" id="cfg-ipv4" placeholder="0.0.0.0" oninput="scheduleConfigSave()">
+      </div>
+      <div class="form-group">
+        <label>Adresse IPv6</label>
+        <input type="text" id="cfg-ipv6" placeholder="::" oninput="scheduleConfigSave()">
+      </div>
+      <div class="form-group">
+        <label>Port contrôle</label>
+        <input type="number" id="cfg-port" min="1024" max="65535" oninput="scheduleConfigSave()">
+      </div>
+      <div class="form-group">
+        <label>Port données</label>
+        <input type="number" id="cfg-data-port" min="1024" max="65535" oninput="scheduleConfigSave()">
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Sécurité</div>
+    <div class="form-group">
+      <label>Mot de passe serveur (vide = désactivé)</label>
+      <input type="password" id="cfg-password" placeholder="Mot de passe..." oninput="scheduleConfigSave()">
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Traitement</div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Taille des batches (images)</label>
+        <input type="number" id="cfg-batch-size" min="10" max="1000" oninput="scheduleConfigSave()">
+      </div>
+      <div class="form-group">
+        <label>Batches simultanés max</label>
+        <input type="number" id="cfg-max-batches" min="1" max="999" oninput="scheduleConfigSave()">
+      </div>
+      <div class="form-group">
+        <label>Niveau de compression (1-10)</label>
+        <input type="number" id="cfg-compression" min="1" max="10" oninput="scheduleConfigSave()">
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Répertoire de travail</div>
+    <div class="form-group">
+      <label>Chemin (redémarrage requis)</label>
+      <input type="text" id="cfg-work-dir" placeholder="./work" oninput="scheduleConfigSave()">
+    </div>
+  </div>
+
+  <span class="save-indicator" id="save-indicator">✓ Sauvegardé</span>
+</div>
+
+<!-- ════════════════════════════════════════════
+     TAB: WEBHOOKS
+════════════════════════════════════════════ -->
+<div id="tab-webhooks" class="tab-panel">
+  <div class="card">
+    <div class="card-title">Configuration Discord Webhook</div>
+    <div class="form-group">
+      <label class="checkbox-group">
+        <input type="checkbox" id="wh-enabled" onchange="scheduleWebhookSave()">
+        Activer les webhooks Discord
+      </label>
+    </div>
+    <div class="form-group">
+      <label>URL du webhook Discord</label>
+      <input type="url" id="wh-url" placeholder="https://discord.com/api/webhooks/..." oninput="scheduleWebhookSave()">
+    </div>
+    <div style="margin-top:16px">
+      <button class="btn btn-secondary" onclick="testWebhook()">🔔 Tester le webhook</button>
+      <span id="wh-test-result" style="margin-left:12px;font-size:13px;"></span>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════
+     MODAL: AJOUTER JOB
+════════════════════════════════════════════ -->
+<div id="add-job-modal" style="display:none" class="modal-backdrop">
+  <div class="modal">
+    <h3>🎬 Ajouter une vidéo</h3>
+    <div class="form-group">
+      <label>Chemin du fichier vidéo (sur le serveur)</label>
+      <input type="text" id="job-path" placeholder="/chemin/vers/video.mp4">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Engine</label>
+        <select id="job-engine" onchange="updateJobModels()">
+          <option value="realesrgan">Real-ESRGAN</option>
+          <option value="realcugan">Real-CUGAN</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Facteur d'upscaling</label>
+        <select id="job-scale">
+          <option value="2">x2</option>
+          <option value="3">x3</option>
+          <option value="4" selected>x4</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Modèle</label>
+      <select id="job-model">
+        <option value="realesr-animevideov3">realesr-animevideov3 (recommandé)</option>
+        <option value="realesrgan-x4plus-anime">realesrgan-x4plus-anime</option>
+        <option value="realesrgan-x4plus">realesrgan-x4plus</option>
+      </select>
+    </div>
+    <div class="form-group" id="job-denoise-group" style="display:none">
+      <label>Niveau de débruitage (Real-CUGAN)</label>
+      <select id="job-denoise">
+        <option value="-1">-1 (conservatif)</option>
+        <option value="0">0 (désactivé)</option>
+        <option value="1">1</option>
+        <option value="2">2</option>
+        <option value="3">3</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="checkbox-group">
+        <input type="checkbox" id="job-tta">
+        Mode TTA (meilleure qualité, plus lent)
+      </label>
+    </div>
+    <div id="job-error" style="color:var(--danger);font-size:13px;margin-bottom:8px;display:none;"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeJobModal()">Annuler</button>
+      <button class="btn btn-primary" onclick="submitJob()">Ajouter</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

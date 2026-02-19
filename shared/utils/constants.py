@@ -140,6 +140,8 @@ class NetworkConfig:
     DEFAULT_PORT = 8765
     DEFAULT_DATA_PORT = 8766  # Port dédié aux transferts de données (batches)
     DEFAULT_HOST = "0.0.0.0"
+    SERVER_WEB_PORT = 8780   # Port de l'interface web du serveur
+    CLIENT_WEB_PORT = 8781   # Port de l'interface web du client
     MAX_MESSAGE_SIZE = 10 * 1024 * 1024 * 1024  # 10 GB - Les batches d'images upscalées peuvent être très lourds
     HEARTBEAT_INTERVAL = 10  # secondes
     HEARTBEAT_TIMEOUT = 20  # secondes - Réduit pour détection plus rapide des clients défaillants

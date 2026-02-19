@@ -23,7 +23,9 @@ from server.core.job_manager import JobManager
 from server.core.video_processor import VideoProcessor
 from server.core.batch_distributor import BatchDistributor
 from server.database.db_manager import DatabaseManager
+from server.web.server_web import ServerWebInterface
 from shared.utils.logger import GetServerLogger
+from shared.utils.constants import NetworkConfig
 from shared.utils.firewall import (
     IsWindows, RequestFirewallPermission, ShowFirewallDialog, RunAsAdmin
 )
@@ -52,6 +54,16 @@ class ServerWindow(QMainWindow):
         self.JobManager = None
         self.IsRunning = False
         self.ServerLoop = None  # Référence à la boucle asyncio du serveur
+
+        # Interface web (démarrée au lancement, avant le serveur upscaling)
+        try:
+            WebPort = self.Database.GetParameterInt("web_port", NetworkConfig.SERVER_WEB_PORT)
+            self.WebInterface = ServerWebInterface(self.Database)
+            self.WebInterface.Start(Host="0.0.0.0", Port=WebPort)
+            self.Logger.info(f"Web UI démarrée sur http://localhost:{WebPort}")
+        except Exception as WebErr:
+            self.Logger.warning(f"Impossible de démarrer la Web UI: {WebErr}")
+            self.WebInterface = None
 
         # Configuration de l'interface
         self.SetupUI()
@@ -193,8 +205,18 @@ class ServerWindow(QMainWindow):
                 loop.run_until_complete(self.JobManager.Start())
                 loop.run_until_complete(self.Server.Start())
 
+                # Connecter la web UI aux composants upscaling (passer aussi la boucle asyncio)
+                if self.WebInterface:
+                    self.WebInterface.SetServerComponents(
+                        self.Server, self.JobManager, Distributor, ServerLoop=loop
+                    )
+
                 # Garder la boucle active
                 loop.run_forever()
+
+                # Nettoyage: déconnecter la web UI
+                if self.WebInterface:
+                    self.WebInterface.ClearServerComponents()
 
                 # Nettoyage après arrêt de la boucle
                 loop.close()
@@ -220,7 +242,8 @@ class ServerWindow(QMainWindow):
             V4Part = f"IPv4={GuiConfig['ipv4']}" if GuiConfig['ipv4'] else ""
             V6Part = f"IPv6={GuiConfig['ipv6']}" if GuiConfig['ipv6'] else ""
             AddrPart = ", ".join(filter(None, [V4Part, V6Part])) or "dual-stack"
-            self.UpdateStatusBar(f"Serveur démarré - {AddrPart} port {GuiConfig['port']}")
+            WebPort = self.Database.GetParameterInt("web_port", NetworkConfig.SERVER_WEB_PORT)
+            self.UpdateStatusBar(f"Serveur démarré - {AddrPart} port {GuiConfig['port']} | Web UI: http://localhost:{WebPort}")
 
             self.Logger.info("Serveur démarré avec succès")
 
@@ -331,10 +354,14 @@ class ServerWindow(QMainWindow):
 
             if Reply == QMessageBox.Yes:
                 self.StopServer()
+                if self.WebInterface:
+                    self.WebInterface.Stop()
                 event.accept()
             else:
                 event.ignore()
         else:
+            if self.WebInterface:
+                self.WebInterface.Stop()
             event.accept()
 
 

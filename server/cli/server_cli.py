@@ -17,6 +17,8 @@ from server.core.batch_distributor import BatchDistributor
 from server.core.job_manager import JobManager
 from server.core.video_processor import VideoProcessor
 from server.database.db_manager import DatabaseManager
+from server.web.server_web import ServerWebInterface
+from shared.utils.constants import NetworkConfig
 
 
 class ServerCLI:
@@ -53,12 +55,23 @@ class ServerCLI:
         self.Server = None
         self.JobManager = None
         self.Running = False
+        self.WebInterface = None
 
     async def StartServer(self):
         """Démarre le serveur"""
         if self.Running:
             click.echo("✗ Le serveur est déjà en cours d'exécution")
             return
+
+        # Démarrer la web UI avant le serveur upscaling
+        try:
+            WebPort = self.Database.GetParameterInt("web_port", NetworkConfig.SERVER_WEB_PORT)
+            self.WebInterface = ServerWebInterface(self.Database)
+            self.WebInterface.Start(Host="0.0.0.0", Port=WebPort)
+            click.echo(f"✓ Web UI démarrée → http://localhost:{WebPort}")
+        except Exception as WebErr:
+            click.echo(f"⚠ Web UI non disponible: {WebErr}")
+            self.WebInterface = None
 
         click.echo("Démarrage du serveur...")
 
@@ -104,6 +117,13 @@ class ServerCLI:
         self.Running = True
         click.echo("✓ Serveur démarré avec succès")
 
+        # Connecter la web UI aux composants upscaling (boucle asyncio courante)
+        if self.WebInterface:
+            self.WebInterface.SetServerComponents(
+                self.Server, self.JobManager, BatchDistributor_obj,
+                ServerLoop=asyncio.get_event_loop()
+            )
+
         # Menu interactif
         await self.InteractiveMenu()
 
@@ -122,6 +142,10 @@ class ServerCLI:
             await self.Server.Stop()
 
         self.Running = False
+        if self.WebInterface:
+            self.WebInterface.ClearServerComponents()
+            self.WebInterface.Stop()
+            self.WebInterface = None
         click.echo("✓ Serveur arrêté")
 
     async def InteractiveMenu(self):

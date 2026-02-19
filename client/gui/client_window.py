@@ -21,7 +21,9 @@ from client.core.client import UpscalingClient
 from client.core.connection import ConnectionManager
 from client.core.processor import LocalProcessor
 from client.utils.hardware_detector import HardwareDetector
+from client.web.client_web import ClientWebInterface
 from shared.utils.logger import GetClientLogger
+from shared.utils.constants import NetworkConfig
 from shared.utils.firewall import (
     IsWindows, RequestFirewallPermission, ShowFirewallDialog, RunAsAdmin
 )
@@ -74,6 +76,16 @@ class ClientWindow(QMainWindow):
         # Cache matériel (pré-chargé au démarrage)
         self.CachedHardware = None
         self.HardwareDetectionThread = None
+
+        # Interface web (démarrée au lancement)
+        try:
+            self.WebInterface = ClientWebInterface()
+            self.WebInterface.SetClient(self.Client)
+            self.WebInterface.Start(Host="127.0.0.1", Port=NetworkConfig.CLIENT_WEB_PORT)
+            self.Logger.info(f"Web UI client démarrée sur http://localhost:{NetworkConfig.CLIENT_WEB_PORT}")
+        except Exception as WebErr:
+            self.Logger.warning(f"Impossible de démarrer la Web UI client: {WebErr}")
+            self.WebInterface = None
 
         # Configuration de l'interface
         self.SetupUI()
@@ -128,7 +140,8 @@ class ClientWindow(QMainWindow):
         # Barre de statut
         self.StatusBar = QStatusBar()
         self.setStatusBar(self.StatusBar)
-        self.UpdateStatusBar("Déconnecté")
+        WebInfo = f" | Web UI: http://localhost:{NetworkConfig.CLIENT_WEB_PORT}" if hasattr(self, 'WebInterface') and self.WebInterface else ""
+        self.UpdateStatusBar(f"Déconnecté{WebInfo}")
 
     def ConnectToServer(self, Host: str, Port: int, Password: str = ""):
         """Se connecte à un serveur"""
@@ -398,10 +411,14 @@ class ClientWindow(QMainWindow):
 
             if Reply == QMessageBox.Yes:
                 self.DisconnectFromServer()
+                if self.WebInterface:
+                    self.WebInterface.Stop()
                 event.accept()
             else:
                 event.ignore()
         else:
+            if self.WebInterface:
+                self.WebInterface.Stop()
             event.accept()
 
 

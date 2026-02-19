@@ -15,7 +15,8 @@ from client.core.client import UpscalingClient
 from client.core.connection import SavedServersManager
 from client.utils.hardware_detector import HardwareDetector
 from client.utils.performance_config import PerformanceConfigManager, PerformancePresets
-from shared.utils.constants import ClientStatus, CompressionConfig
+from client.web.client_web import ClientWebInterface
+from shared.utils.constants import ClientStatus, CompressionConfig, NetworkConfig
 
 
 class ClientCLI:
@@ -28,6 +29,7 @@ class ClientCLI:
         self.PerformanceManager = PerformanceConfigManager()
         self.Running = False
         self.MonitoringTask = None
+        self.WebInterface = None
 
     async def Start(self):
         """Démarre l'interface CLI"""
@@ -35,6 +37,15 @@ class ClientCLI:
         click.echo("  CLIENT D'UPSCALING VIDÉO EN RÉSEAU")
         click.echo("  Real-ESRGAN Distributed Processing")
         click.echo("="*60)
+
+        # Démarrer la web UI
+        try:
+            self.WebInterface = ClientWebInterface()
+            self.WebInterface.Start(Host="127.0.0.1", Port=NetworkConfig.CLIENT_WEB_PORT)
+            click.echo(f"✓ Web UI client → http://localhost:{NetworkConfig.CLIENT_WEB_PORT}")
+        except Exception as WebErr:
+            click.echo(f"⚠ Web UI non disponible: {WebErr}")
+            self.WebInterface = None
 
         await self.MainMenu()
 
@@ -105,6 +116,10 @@ class ClientCLI:
         # Crée le client
         self.Client = UpscalingClient()
 
+        # Connecter la web UI au client
+        if self.WebInterface:
+            self.WebInterface.SetClient(self.Client)
+
         # Lance la connexion dans une tâche
         try:
             # Démarre le monitoring du statut
@@ -129,6 +144,10 @@ class ClientCLI:
 
             if self.Client:
                 await self.Client.Stop()
+
+            # Déconnecter la web UI
+            if self.WebInterface:
+                self.WebInterface.ClearClient()
 
     def _PromptServerDetails(self):
         """Demande les détails de connexion"""
