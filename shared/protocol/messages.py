@@ -5,7 +5,9 @@ Tous les messages sont sérialisables en JSON
 
 import json
 import base64
-from typing import Dict, Any, Optional, List
+import io
+import tarfile
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 from shared.utils.constants import MessageType, ErrorCode, ClientStatus, JobStatus, BatchStatus
 
@@ -267,6 +269,83 @@ class BatchAssignment(BaseMessage):
         """Récupère la liste des images"""
         return self.Payload.get("images", [])
 
+    @staticmethod
+    def BuildBinary(BatchId: str, VideoId: str, UpscaleFactor: int, Engine: str,
+                    Model: str, DenoiseLevel: int, TtaMode: bool,
+                    ImageInfos: List[Dict], ImageBytesDict: Dict[str, bytes]) -> bytes:
+        """
+        Sérialise un BatchAssignment en archive tar binaire (sans base64).
+
+        Args:
+            BatchId: ID du batch
+            VideoId: ID de la vidéo
+            UpscaleFactor: Facteur d'upscaling
+            Engine: Engine d'upscaling
+            Model: Modèle à utiliser
+            DenoiseLevel: Niveau de débruitage
+            TtaMode: Mode TTA
+            ImageInfos: [{id, number, filename}] — métadonnées des images
+            ImageBytesDict: {filename: bytes} — bytes bruts des images PNG
+
+        Returns:
+            Archive tar en bytes
+        """
+        Buffer = io.BytesIO()
+        with tarfile.open(fileobj=Buffer, mode='w') as Tar:
+            Meta = {
+                "batch_id": BatchId,
+                "video_id": VideoId,
+                "upscale_factor": UpscaleFactor,
+                "engine": Engine,
+                "model": Model,
+                "denoise_level": DenoiseLevel,
+                "tta_mode": TtaMode,
+                "images": ImageInfos,
+                "image_count": len(ImageInfos)
+            }
+            MetaBytes = json.dumps(Meta).encode('utf-8')
+            MetaInfo = tarfile.TarInfo(name='metadata.json')
+            MetaInfo.size = len(MetaBytes)
+            Tar.addfile(MetaInfo, io.BytesIO(MetaBytes))
+
+            for Filename, ImageBytes in ImageBytesDict.items():
+                ImgInfo = tarfile.TarInfo(name=f'images/{Filename}')
+                ImgInfo.size = len(ImageBytes)
+                Tar.addfile(ImgInfo, io.BytesIO(ImageBytes))
+
+        return Buffer.getvalue()
+
+    @staticmethod
+    def ParseBinary(Data: bytes) -> Tuple[dict, Dict[str, bytes]]:
+        """
+        Désérialise un BatchAssignment depuis une archive tar binaire.
+
+        Args:
+            Data: Archive tar en bytes
+
+        Returns:
+            Tuple (meta_dict, {filename: bytes})
+        """
+        Buffer = io.BytesIO(Data)
+        MetaDict = {}
+        ImagesBytesDict = {}
+
+        with tarfile.open(fileobj=Buffer, mode='r') as Tar:
+            for Member in Tar.getmembers():
+                FileObj = Tar.extractfile(Member)
+                if FileObj is None:
+                    continue
+                Content = FileObj.read()
+
+                if Member.name == 'metadata.json':
+                    MetaDict = json.loads(Content.decode('utf-8'))
+                elif Member.name.startswith('images/'):
+                    Filename = Member.name[len('images/'):]
+                    if Filename:
+                        ImagesBytesDict[Filename] = Content
+
+        return MetaDict, ImagesBytesDict
+
 
 class BatchResult(BaseMessage):
     """Résultat d'un paquet traité par le client"""
@@ -297,6 +376,74 @@ class BatchResult(BaseMessage):
     def GetUpscaledImages(self) -> List[Dict[str, Any]]:
         """Récupère les images upscalées"""
         return self.Payload.get("upscaled_images", [])
+
+    @staticmethod
+    def BuildBinary(BatchId: str, Success: bool, ImageInfos: List[Dict],
+                    ImageBytesDict: Dict[str, bytes], ErrorMessage: str = "") -> bytes:
+        """
+        Sérialise un BatchResult en archive tar binaire (sans base64).
+
+        Args:
+            BatchId: ID du batch
+            Success: Traitement réussi
+            ImageInfos: [{id, number, filename, format}] — métadonnées des images upscalées
+            ImageBytesDict: {filename: bytes} — bytes bruts des images AVIF
+            ErrorMessage: Message d'erreur si échec
+
+        Returns:
+            Archive tar en bytes
+        """
+        Buffer = io.BytesIO()
+        with tarfile.open(fileobj=Buffer, mode='w') as Tar:
+            Meta = {
+                "batch_id": BatchId,
+                "success": Success,
+                "error_message": ErrorMessage,
+                "images": ImageInfos,
+                "image_count": len(ImageInfos)
+            }
+            MetaBytes = json.dumps(Meta).encode('utf-8')
+            MetaInfo = tarfile.TarInfo(name='metadata.json')
+            MetaInfo.size = len(MetaBytes)
+            Tar.addfile(MetaInfo, io.BytesIO(MetaBytes))
+
+            for Filename, ImageBytes in ImageBytesDict.items():
+                ImgInfo = tarfile.TarInfo(name=f'images/{Filename}')
+                ImgInfo.size = len(ImageBytes)
+                Tar.addfile(ImgInfo, io.BytesIO(ImageBytes))
+
+        return Buffer.getvalue()
+
+    @staticmethod
+    def ParseBinary(Data: bytes) -> Tuple[dict, Dict[str, bytes]]:
+        """
+        Désérialise un BatchResult depuis une archive tar binaire.
+
+        Args:
+            Data: Archive tar en bytes
+
+        Returns:
+            Tuple (meta_dict, {filename: bytes})
+        """
+        Buffer = io.BytesIO(Data)
+        MetaDict = {}
+        ImagesBytesDict = {}
+
+        with tarfile.open(fileobj=Buffer, mode='r') as Tar:
+            for Member in Tar.getmembers():
+                FileObj = Tar.extractfile(Member)
+                if FileObj is None:
+                    continue
+                Content = FileObj.read()
+
+                if Member.name == 'metadata.json':
+                    MetaDict = json.loads(Content.decode('utf-8'))
+                elif Member.name.startswith('images/'):
+                    Filename = Member.name[len('images/'):]
+                    if Filename:
+                        ImagesBytesDict[Filename] = Content
+
+        return MetaDict, ImagesBytesDict
 
 
 class BatchRequest(BaseMessage):

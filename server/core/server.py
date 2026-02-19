@@ -455,12 +455,12 @@ class UpscalingServer:
 
         while self.Running:
             try:
-                # Reçoit un message via le canal Data avec timeout pour éviter les blocages
+                # Reçoit un résultat binaire tar via le canal Data
                 # Timeout raisonnable pour les transferts Data (images volumineuses)
                 DataTimeout = NetworkConfig.BATCH_TIMEOUT
                 try:
-                    MessageData = await asyncio.wait_for(
-                        self.ClientManager.ReceiveDataMessage(ClientId, Decrypt=True),
+                    TarBytes = await asyncio.wait_for(
+                        self.ClientManager.ReceiveDataBinary(ClientId),
                         timeout=DataTimeout
                     )
                 except asyncio.TimeoutError:
@@ -468,25 +468,31 @@ class UpscalingServer:
                     await self.ClientManager.DisconnectClient(ClientId, "Timeout Data")
                     break
 
-                if not MessageData:
+                if not TarBytes:
                     # Client déconnecté proprement (connexion fermée)
                     self.Logger.info(f"Connexion Data fermée par le client {ClientId}")
                     break
 
-                # Parse le message
-                Message = MessageFactory.CreateFromJson(MessageData)
+                # Désérialise le tar binaire (BatchResult)
+                try:
+                    MetaDict, ImagesBytesDict = BatchResult.ParseBinary(TarBytes)
+                except Exception as ParseErr:
+                    self.Logger.error(f"Erreur désérialisation BatchResult tar du client {ClientId}: {ParseErr}")
+                    continue
 
-                # On s'attend à des BatchResult sur le canal Data
-                if isinstance(Message, BatchResult):
-                    self.Logger.info(f"BatchResult reçu via Data du client {ClientId}")
-                    if self.BatchDistributor:
-                        # Traite le BatchResult dans une tâche séparée pour ne pas bloquer la lecture
-                        # Cela permet de continuer à lire d'autres messages pendant le traitement
-                        asyncio.create_task(self.BatchDistributor.ReceiveBatchResult(ClientId, Message))
-                    else:
-                        self.Logger.error("BatchDistributor non configuré - résultat ignoré")
+                BatchId = MetaDict.get("batch_id", "inconnu")
+                self.Logger.info(
+                    f"BatchResult binaire reçu du client {ClientId}: "
+                    f"batch {BatchId}, {len(ImagesBytesDict)} images, {len(TarBytes)/1024:.1f} KB"
+                )
+
+                if self.BatchDistributor:
+                    # Traite dans une tâche séparée pour ne pas bloquer la lecture
+                    asyncio.create_task(
+                        self.BatchDistributor.ReceiveBatchResultBinary(ClientId, MetaDict, ImagesBytesDict)
+                    )
                 else:
-                    self.Logger.warning(f"Message inattendu sur canal Data: {Message.MessageType}")
+                    self.Logger.error("BatchDistributor non configuré - résultat binaire ignoré")
 
             except Exception as e:
                 self.Logger.error(f"Erreur dans la boucle Data du client {ClientId}: {e}")

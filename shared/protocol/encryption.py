@@ -210,6 +210,32 @@ class EncryptionHandler:
             self.Logger.error(f"Erreur lors du déchiffrement: {e}")
             return None
 
+    def EncryptBinary(self, Data: bytes) -> bytes:
+        """
+        Chiffre des bytes bruts avec AES-256-GCM (sans compression ni base64).
+        Utilisé pour les transferts binaires tar (batches d'images).
+
+        Args:
+            Data: Bytes bruts à chiffrer
+
+        Returns:
+            Bytes chiffrés (IV + ciphertext + tag)
+        """
+        return self.Encrypt(Data)
+
+    def DecryptBinary(self, Data: bytes) -> Optional[bytes]:
+        """
+        Déchiffre des bytes bruts avec AES-256-GCM (sans compression ni base64).
+        Utilisé pour les transferts binaires tar (batches d'images).
+
+        Args:
+            Data: Bytes chiffrés (IV + ciphertext + tag)
+
+        Returns:
+            Bytes déchiffrés ou None si erreur
+        """
+        return self.Decrypt(Data)
+
     def EncryptMessage(self, Message: str) -> str:
         """
         Chiffre un message texte (avec compression si activée)

@@ -4,6 +4,8 @@ Connecte au serveur, reçoit et traite les batches d'images
 """
 
 import asyncio
+import io
+import tarfile
 import threading
 import time
 import os
@@ -566,34 +568,42 @@ class UpscalingClient:
     async def _DataReceiveLoop(self):
         """
         Boucle de reception sur le canal Data.
-        Recoit les BatchAssignment du serveur.
+        Recoit les BatchAssignment du serveur en format binaire tar (sans base64).
         """
-        self.Logger.info("DataReceiveLoop démarrée - Écoute canal Data pour batches")
+        self.Logger.info("DataReceiveLoop démarrée - Écoute canal Data pour batches (binaire tar)")
         try:
             while self.Running and not self._StopRequested:
-                # Recoit un batch via le canal Data (timeout court pour reagir vite)
-                MessageData = await self.ConnectionManager.ReceiveDataMessage(
-                    Decrypt=True,
-                    Timeout=5.0  # Timeout court pour verifier self.Running regulierement
+                # Reçoit un batch binaire via le canal Data
+                TarBytes = await self.ConnectionManager.ReceiveDataBinary(
+                    Timeout=5.0  # Timeout court pour vérifier self.Running régulièrement
                 )
 
-                if not MessageData:
+                if not TarBytes:
                     # Timeout ou erreur de connexion
                     if self._StopRequested:
                         break
                     if not self.ConnectionManager.IsDataConnected():
-                        self.Logger.warning("Canal Data deconnecte")
+                        self.Logger.warning("Canal Data déconnecté")
                         break
                     continue
 
-                # Parse le message
-                Message = MessageFactory.CreateFromJson(MessageData)
+                # Désérialise l'archive tar
+                try:
+                    MetaDict, ImagesBytesDict = BatchAssignment.ParseBinary(TarBytes)
+                except Exception as e:
+                    self.Logger.error(f"Erreur désérialisation tar: {e}")
+                    continue
 
-                # On s'attend à recevoir des BatchAssignment sur le canal Data
-                if isinstance(Message, BatchAssignment):
-                    await self._HandleBatchAssignment(Message)
-                else:
-                    self.Logger.warning(f"Message inattendu sur canal Data: {Message.MessageType}")
+                if not MetaDict.get("batch_id"):
+                    self.Logger.warning("Tar reçu sans batch_id, ignoré")
+                    continue
+
+                self.Logger.debug(
+                    f"BatchAssignment tar reçu: {MetaDict.get('batch_id')} "
+                    f"({len(ImagesBytesDict)} images, {len(TarBytes) / 1024:.1f} KB)"
+                )
+
+                await self._HandleBatchBinary(MetaDict, ImagesBytesDict)
 
         except asyncio.CancelledError:
             self.Logger.info("DataReceiveLoop annulé")
@@ -839,6 +849,196 @@ class UpscalingClient:
                 self.Status = ClientStatus.IDLE
                 self.CurrentBatch = None
 
+    async def _HandleBatchBinary(self, MetaDict: dict, ImagesBytesDict: dict):
+        """
+        Traite un batch reçu en format binaire tar (sans base64).
+        Équivalent de _HandleBatchAssignment mais pour le format binaire.
+
+        Args:
+            MetaDict: Métadonnées du batch (batch_id, image_count, images, ...)
+            ImagesBytesDict: {filename: bytes} — bytes bruts des images PNG
+        """
+        BatchId = MetaDict.get("batch_id", "")
+        try:
+            ImageCount = MetaDict.get("image_count", len(MetaDict.get("images", [])))
+
+            if len(self.ActiveBatches) >= self.MaxConcurrentBatches:
+                self.Logger.warning(
+                    f"Limite de batches atteinte ({self.MaxConcurrentBatches}), batch {BatchId} refusé"
+                )
+                return
+
+            self.Logger.info(
+                f"Nouveau batch binaire reçu: {BatchId} "
+                f"({len(ImagesBytesDict)} images, "
+                f"actifs: {len(self.ActiveBatches) + 1}/{self.MaxConcurrentBatches})"
+            )
+
+            self.ActiveBatches[BatchId] = {
+                "status": "received",
+                "progress": 0,
+                "total": ImageCount
+            }
+
+            if self.CurrentBatch is None:
+                self.CurrentBatch = BatchId
+                self.CurrentBatchTotal = ImageCount
+                self.CurrentBatchProgress = 0
+
+            self.Status = ClientStatus.PROCESSING
+
+            Task = asyncio.create_task(
+                self._ProcessBatchBinaryAsync(BatchId, MetaDict, ImagesBytesDict)
+            )
+            self.ProcessingTasks[BatchId] = Task
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors du traitement du batch binaire: {e}")
+            if BatchId in self.ActiveBatches:
+                del self.ActiveBatches[BatchId]
+            if BatchId in self.ProcessingTasks:
+                del self.ProcessingTasks[BatchId]
+            if not self.ActiveBatches:
+                self.Status = ClientStatus.IDLE
+                self.CurrentBatch = None
+
+    async def _ProcessBatchBinaryAsync(self, BatchId: str, MetaDict: dict, ImagesBytesDict: dict):
+        """
+        Traite un batch de manière asynchrone avec pipeline multi-batch (format binaire tar).
+        Phase GPU (Real-ESRGAN) puis phase CPU (conversion AVIF → bytes bruts → tar).
+        Sauvegarde le résultat sur disque et ajoute le chemin à la queue.
+
+        Args:
+            BatchId: ID du batch
+            MetaDict: Métadonnées du batch
+            ImagesBytesDict: {filename: bytes} — bytes bruts des images PNG
+        """
+        try:
+            ImageInfos = MetaDict.get("images", [])
+            ImageCount = len(ImageInfos)
+
+            if BatchId in self.ActiveBatches:
+                self.ActiveBatches[BatchId]["status"] = "waiting_gpu"
+                self.ActiveBatches[BatchId]["total"] = ImageCount
+
+            if self.CurrentBatch == BatchId:
+                self.CurrentBatchTotal = ImageCount
+                self.CurrentBatchProgress = 0
+
+            def ProgressCallback(Current, Total):
+                if BatchId in self.ActiveBatches:
+                    self.ActiveBatches[BatchId]["progress"] = Current
+                if self.CurrentBatch == BatchId:
+                    self.CurrentBatchProgress = Current
+                    self.CurrentBatchTotal = Total
+
+            self.Logger.debug(f"Batch {BatchId}: attente du GPU (binaire)...")
+            UpscaledPaths = None
+
+            async with self.GpuLock:
+                if BatchId in self.ActiveBatches:
+                    self.ActiveBatches[BatchId]["status"] = "upscaling"
+
+                self.CurrentBatch = BatchId
+                self.CurrentBatchProgress = 0
+                self.CurrentBatchTotal = ImageCount
+
+                self.Logger.info(f"Batch {BatchId}: upscaling GPU en cours (binaire)...")
+
+                # Phase GPU : écrit PNGs depuis bytes bruts et upscale
+                UpscaledPaths = await asyncio.to_thread(
+                    self.LocalProcessor.ProcessBatchGpuOnlyBinary,
+                    MetaDict,
+                    ImagesBytesDict,
+                    ProgressCallback
+                )
+
+            # GPU libéré — phase CPU : conversion AVIF → bytes bruts
+            if BatchId in self.ActiveBatches:
+                self.ActiveBatches[BatchId]["status"] = "converting"
+
+            Success = False
+            ResultTarBytes = None
+
+            if UpscaledPaths:
+                self.Logger.info(f"Batch {BatchId}: conversion CPU (binaire)...")
+                ConvResult = await asyncio.to_thread(
+                    self.LocalProcessor.ConvertAndEncodeBinary,
+                    BatchId,
+                    UpscaledPaths,
+                    ImageInfos
+                )
+
+                if ConvResult:
+                    ResultInfos, ResultBytesDict = ConvResult
+                    # Construit l'archive tar binaire du résultat
+                    ResultTarBytes = BatchResult.BuildBinary(
+                        BatchId=BatchId,
+                        Success=True,
+                        ImageInfos=ResultInfos,
+                        ImageBytesDict=ResultBytesDict
+                    )
+                    Success = True
+
+            if BatchId in self.ActiveBatches:
+                self.ActiveBatches[BatchId]["status"] = "awaiting_send"
+                self.ActiveBatches[BatchId]["progress"] = ImageCount
+
+            if not Success:
+                self.Logger.error(f"Échec du traitement binaire du batch {BatchId}")
+                ResultTarBytes = BatchResult.BuildBinary(
+                    BatchId=BatchId,
+                    Success=False,
+                    ImageInfos=[],
+                    ImageBytesDict={},
+                    ErrorMessage="Erreur interne du processeur"
+                )
+                await self._HandleBatchError("Erreur interne du processeur")
+
+            # Sauvegarde le tar résultat sur disque (évite de remplir la RAM)
+            CachePath = await self._SaveResultToCacheBinary(BatchId, ResultTarBytes)
+            if CachePath:
+                await self.ResultQueue.put(CachePath)
+                if BatchId in self.ActiveBatches:
+                    self.ActiveBatches[BatchId]["status"] = "sending"
+                self.Logger.info(f"Batch {BatchId} traité (binaire), sauvegardé dans le cache")
+            else:
+                self.Logger.error(f"Échec sauvegarde cache binaire du batch {BatchId}")
+
+        except Exception as e:
+            self.Logger.error(f"Erreur traitement async binaire du batch: {e}")
+            await self._HandleBatchError(str(e))
+            try:
+                ErrTarBytes = BatchResult.BuildBinary(
+                    BatchId=BatchId,
+                    Success=False,
+                    ImageInfos=[],
+                    ImageBytesDict={},
+                    ErrorMessage=str(e)
+                )
+                CachePath = await self._SaveResultToCacheBinary(BatchId, ErrTarBytes)
+                if CachePath:
+                    await self.ResultQueue.put(CachePath)
+            except Exception:
+                pass
+
+        finally:
+            if BatchId in self.ActiveBatches:
+                del self.ActiveBatches[BatchId]
+            if BatchId in self.ProcessingTasks:
+                del self.ProcessingTasks[BatchId]
+
+            NextBatch = self._GetCurrentDisplayBatch()
+            if NextBatch:
+                self.CurrentBatch = NextBatch
+                BatchState = self.ActiveBatches.get(NextBatch, {})
+                self.CurrentBatchProgress = BatchState.get("progress", 0)
+                self.CurrentBatchTotal = BatchState.get("total", 0)
+            else:
+                self.CurrentBatch = None
+                self.CurrentBatchProgress = 0
+                self.CurrentBatchTotal = 0
+
     async def _ProcessBatchAsync(self, BatchId: str, Payload: dict):
         """
         Traite un batch de manière asynchrone avec pipeline multi-batch.
@@ -1044,37 +1244,71 @@ class UpscalingClient:
                         break
                     continue
 
-                # Charge le résultat depuis le disque
-                Result = await self._LoadResultFromCache(CachePath)
+                # Détecte le format du cache (binaire tar ou JSON)
+                IsBinary = CachePath.endswith('.tar.bin')
 
-                if not Result:
-                    self.Logger.error(f"Impossible de charger le résultat depuis {CachePath}")
-                    self.ResultQueue.task_done()
-                    continue
+                if IsBinary:
+                    # Format binaire tar (.tar.bin)
+                    TarBytes = await self._LoadResultFromCacheBinary(CachePath)
 
-                BatchId = Result.Payload.get("batch_id", "unknown")
-                self.Logger.info(f"Envoi du résultat batch {BatchId}...")
+                    if not TarBytes:
+                        self.Logger.error(f"Impossible de charger le résultat binaire depuis {CachePath}")
+                        self.ResultQueue.task_done()
+                        continue
 
-                # Envoie via le canal Data (gros transferts)
-                async def SendResult():
-                    return await self.ConnectionManager.SendDataMessage(
-                        Result.ToJson(),
-                        Encrypted=True
-                    )
+                    # Extrait le batch_id et les statistiques depuis le tar pour les logs
+                    try:
+                        MetaBuf = io.BytesIO(TarBytes)
+                        with tarfile.open(fileobj=MetaBuf, mode='r') as _Tar:
+                            _MetaFile = _Tar.extractfile('metadata.json')
+                            _Meta = json.loads(_MetaFile.read().decode('utf-8')) if _MetaFile else {}
+                        BatchId = _Meta.get("batch_id", "unknown")
+                        ResultSuccess = _Meta.get("success", False)
+                        ImageCount = _Meta.get("image_count", 0)
+                        ErrorMsg = _Meta.get("error_message", "")
+                    except Exception:
+                        BatchId = "unknown"
+                        ResultSuccess = False
+                        ImageCount = 0
+                        ErrorMsg = ""
 
-                Success = await self._RetryWithBackoff(SendResult)
+                    self.Logger.info(f"Envoi du résultat binaire batch {BatchId} ({len(TarBytes)/1024:.1f} KB)...")
+
+                    async def SendResultBinary():
+                        return await self.ConnectionManager.SendDataBinary(TarBytes)
+
+                    Success = await self._RetryWithBackoff(SendResultBinary)
+
+                else:
+                    # Format JSON legacy (.json)
+                    Result = await self._LoadResultFromCache(CachePath)
+
+                    if not Result:
+                        self.Logger.error(f"Impossible de charger le résultat depuis {CachePath}")
+                        self.ResultQueue.task_done()
+                        continue
+
+                    BatchId = Result.Payload.get("batch_id", "unknown")
+                    ResultSuccess = Result.IsSuccess()
+                    ImageCount = Result.Payload.get("image_count", 0)
+                    ErrorMsg = Result.Payload.get("error_message", "Erreur inconnue")
+
+                    self.Logger.info(f"Envoi du résultat batch {BatchId} (JSON legacy)...")
+
+                    async def SendResult():
+                        return await self.ConnectionManager.SendDataMessage(
+                            Result.ToJson(), Encrypted=True
+                        )
+
+                    Success = await self._RetryWithBackoff(SendResult)
 
                 if Success:
-                    if Result.IsSuccess():
+                    if ResultSuccess:
                         self.Logger.info(f"✓ Résultat batch {BatchId} envoyé avec succès")
-                        # Incrémente les statistiques
                         self.BatchesProcessed += 1
-                        # Utilise image_count du Payload (déjà calculé dans BatchResult)
-                        ImageCount = Result.Payload.get("image_count", 0)
                         self.ImagesProcessed += ImageCount
                         self.Logger.debug(f"Images traitées: +{ImageCount} (total: {self.ImagesProcessed})")
 
-                        # Webhook: batch traité avec succès
                         TriggerClientWebhook(
                             "batch_completed",
                             batch_id=BatchId,
@@ -1083,32 +1317,19 @@ class UpscalingClient:
                     else:
                         self.Logger.warning(f"✗ Résultat batch {BatchId} (échec) envoyé")
                         self.BatchesFailed += 1
+                        TriggerClientWebhook("batch_error", batch_id=BatchId, error=ErrorMsg)
 
-                        # Webhook: batch échoué
-                        ErrorMsg = Result.Payload.get("error_message", "Erreur inconnue")
-                        TriggerClientWebhook(
-                            "batch_error",
-                            batch_id=BatchId,
-                            error=ErrorMsg
-                        )
-
-                    # Supprime le fichier cache après envoi réussi
                     self._DeleteCacheFile(CachePath)
 
-                    # Passe à IDLE et notifie le serveur APRÈS l'envoi réussi
-                    # Cela garantit que le serveur ne timeout pas pendant l'envoi
-                    # Multi-batch: ne passe à IDLE que si plus aucun batch actif
                     if self.ResultQueue.empty() and not self.ActiveBatches:
                         self.Status = ClientStatus.IDLE
                         await self._SendStatusUpdate()
                         self.Logger.debug("Queue vide et plus de batches actifs, passage à IDLE")
                 else:
-                    # Échec définitif après tous les retries - conserver le cache pour diagnostic
                     self.Logger.error(
                         f"Échec définitif envoi batch {BatchId} après {self.RETRY_MAX_ATTEMPTS} tentatives. "
                         f"Cache conservé: {CachePath}"
                     )
-                    # Ne pas supprimer le fichier cache pour permettre un diagnostic ou retry manuel
 
                 # Marque la tâche comme terminée dans la queue
                 self.ResultQueue.task_done()
@@ -1182,6 +1403,52 @@ class UpscalingClient:
         except Exception as e:
             self.Logger.error(f"Erreur envoi StatusUpdate: {e}")
             return False
+
+    async def _SaveResultToCacheBinary(self, BatchId: str, TarBytes: bytes) -> Optional[str]:
+        """
+        Sauvegarde un résultat tar binaire sur disque pour éviter de remplir la RAM.
+
+        Args:
+            BatchId: ID du batch
+            TarBytes: Archive tar en bytes (metadata.json + images AVIF)
+
+        Returns:
+            Chemin du fichier cache ou None si erreur
+        """
+        try:
+            CachePath = os.path.join(self.ResultCacheDir, f"{BatchId}.tar.bin")
+
+            def SaveToFile():
+                with open(CachePath, 'wb') as f:
+                    f.write(TarBytes)
+                return CachePath
+
+            return await asyncio.to_thread(SaveToFile)
+
+        except Exception as e:
+            self.Logger.error(f"Erreur sauvegarde cache binaire: {e}")
+            return None
+
+    async def _LoadResultFromCacheBinary(self, CachePath: str) -> Optional[bytes]:
+        """
+        Charge un résultat tar binaire depuis le cache disque.
+
+        Args:
+            CachePath: Chemin du fichier cache
+
+        Returns:
+            Archive tar en bytes ou None si erreur
+        """
+        try:
+            def LoadFromFile():
+                with open(CachePath, 'rb') as f:
+                    return f.read()
+
+            return await asyncio.to_thread(LoadFromFile)
+
+        except Exception as e:
+            self.Logger.error(f"Erreur chargement cache binaire: {e}")
+            return None
 
     async def _SaveResultToCache(self, BatchId: str, Result: BatchResult) -> Optional[str]:
         """

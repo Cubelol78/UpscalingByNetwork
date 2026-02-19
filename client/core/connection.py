@@ -905,6 +905,85 @@ class DualConnectionManager:
             self.ControlConnected = False
             return None
 
+    async def SendDataBinary(self, Data: bytes) -> bool:
+        """
+        Envoie des bytes bruts via le canal Data (chiffrement AES-GCM, sans base64 ni compression).
+        Utilisé pour les archives tar de BatchResult.
+
+        Args:
+            Data: Bytes bruts à envoyer (tar archive)
+
+        Returns:
+            True si succès
+        """
+        if not self.DataConnected:
+            self.Logger.error("Canal Data non connecté")
+            return False
+
+        try:
+            if self.DataEncryption.IsReady():
+                EncryptedData = self.DataEncryption.EncryptBinary(Data)
+            else:
+                EncryptedData = Data
+
+            DataSize = len(EncryptedData)
+            SizeBytes = DataSize.to_bytes(4, byteorder='big')
+
+            self.DataWriter.write(SizeBytes + EncryptedData)
+            await self.DataWriter.drain()
+            return True
+
+        except Exception as e:
+            self.Logger.error(f"Erreur envoi Data binaire: {e}")
+            self.DataConnected = False
+            return False
+
+    async def ReceiveDataBinary(self, Timeout: float = None) -> Optional[bytes]:
+        """
+        Reçoit des bytes bruts via le canal Data (déchiffrement AES-GCM, sans base64 ni compression).
+        Utilisé pour les archives tar de BatchAssignment.
+
+        Args:
+            Timeout: Timeout optionnel en secondes
+
+        Returns:
+            Bytes déchiffrés ou None
+        """
+        if not self.DataConnected:
+            return None
+
+        try:
+            if Timeout:
+                SizeBytes = await asyncio.wait_for(
+                    self.DataReader.readexactly(4),
+                    timeout=Timeout
+                )
+            else:
+                SizeBytes = await self.DataReader.readexactly(4)
+
+            DataSize = int.from_bytes(SizeBytes, byteorder='big')
+
+            if DataSize <= 0 or DataSize > NetworkConfig.MAX_MESSAGE_SIZE:
+                self.Logger.error(f"ReceiveDataBinary: taille invalide ({DataSize})")
+                return None
+
+            RawData = await self.DataReader.readexactly(DataSize)
+
+            if self.DataEncryption.IsReady():
+                return self.DataEncryption.DecryptBinary(RawData)
+            return RawData
+
+        except asyncio.TimeoutError:
+            return None
+        except asyncio.IncompleteReadError as e:
+            self.Logger.error(f"ReceiveDataBinary: lecture incomplete - {len(e.partial)} bytes reçus")
+            self.DataConnected = False
+            return None
+        except Exception as e:
+            self.Logger.error(f"Erreur réception Data binaire: {e}")
+            self.DataConnected = False
+            return None
+
     async def SendDataMessage(self, Message: str, Encrypted: bool = True) -> bool:
         """Envoie un message via le canal Data"""
         if not self.DataConnected:

@@ -243,6 +243,217 @@ class LocalProcessor:
                 self._Cleanup(BatchId)
             return None
 
+    def ProcessBatchGpuOnlyBinary(self, MetaDict: Dict[str, Any],
+                                   ImagesBytesDict: Dict[str, bytes],
+                                   ProgressCallback=None) -> Optional[List[str]]:
+        """
+        Phase GPU uniquement (version binaire tar) : écrit les images directement depuis bytes
+        sans décodage base64, puis upscale avec Real-ESRGAN/Real-CUGAN.
+
+        Args:
+            MetaDict: Métadonnées du batch (batch_id, video_id, upscale_factor, model, ...)
+            ImagesBytesDict: {filename: bytes} — bytes bruts des images PNG
+            ProgressCallback: Callback (current, total)
+
+        Returns:
+            Liste des chemins des images upscalées, ou None si erreur
+        """
+        BatchId: str = ""
+        try:
+            BatchId = MetaDict.get("batch_id", "")
+            if not BatchId:
+                self.Logger.error("BatchId manquant dans les métadonnées")
+                return None
+
+            VideoId = MetaDict.get("video_id", "")
+            UpscaleFactor = MetaDict.get("upscale_factor", 4)
+            Model = MetaDict.get("model", "realesr-animevideov3")
+            TtaMode = MetaDict.get("tta_mode", False)
+            Engine = MetaDict.get("engine", ProcessingConfig.ENGINE_REALESRGAN)
+            DenoiseLevel = MetaDict.get("denoise_level", ProcessingConfig.DEFAULT_REALCUGAN_DENOISE)
+            ImageInfos = MetaDict.get("images", [])
+
+            self.Logger.info(f"[GPU] Traitement binaire du batch {BatchId}")
+            self.Logger.info(f"  Vidéo: {VideoId}, Images: {len(ImageInfos)}, Engine: {Engine}")
+            self.Logger.info(f"  Facteur: x{UpscaleFactor}, Modèle: {Model}")
+
+            self._ApplyServerTtaMode(TtaMode)
+
+            InputDir = os.path.join(self.TempDir, BatchId, 'input')
+            OutputDir = os.path.join(self.TempDir, BatchId, 'output')
+            os.makedirs(InputDir, exist_ok=True)
+            os.makedirs(OutputDir, exist_ok=True)
+
+            # Écrit les images directement depuis bytes (sans décodage base64)
+            SavedImages = self._SaveImagesBinary(ImageInfos, ImagesBytesDict, InputDir)
+
+            if not SavedImages:
+                self.Logger.error("Aucune image sauvegardée (binaire)")
+                if BatchId:
+                    self._Cleanup(BatchId)
+                return None
+
+            UpscaledImages, UpscaleError = self._UpscaleImages(
+                SavedImages, OutputDir, UpscaleFactor, Model, ProgressCallback,
+                Engine=Engine, DenoiseLevel=DenoiseLevel
+            )
+
+            if not UpscaledImages:
+                self.Logger.error(f"Échec de l'upscaling: {UpscaleError}")
+                EmitError(
+                    Exception(UpscaleError or "Échec de l'upscaling"),
+                    ErrorCategory.PROCESSING, ErrorSeverity.ERROR, "LocalProcessor",
+                    context={"batch_id": BatchId, "engine": Engine},
+                    recoverable=True, suggested_action="reassign"
+                )
+                if BatchId:
+                    self._Cleanup(BatchId)
+                return None
+
+            self.Logger.info(f"✓ [GPU] Batch {BatchId} upscalé ({len(UpscaledImages)} images)")
+            return UpscaledImages
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de l'upscaling GPU binaire: {e}")
+            if BatchId:
+                self._Cleanup(BatchId)
+            return None
+
+    def _SaveImagesBinary(self, ImageInfos: List[Dict], ImagesBytesDict: Dict[str, bytes],
+                           OutputDir: str) -> List[str]:
+        """
+        Sauvegarde les images depuis bytes bruts (sans décodage base64).
+
+        Args:
+            ImageInfos: [{id, number, filename}]
+            ImagesBytesDict: {filename: bytes}
+            OutputDir: Répertoire de sortie
+
+        Returns:
+            Liste des chemins sauvegardés
+        """
+        def SaveSingleImage(ImageInfo: Dict) -> Optional[str]:
+            try:
+                Filename = ImageInfo.get("filename")
+                if not Filename:
+                    return None
+
+                ImageBytes = ImagesBytesDict.get(Filename)
+                if not ImageBytes:
+                    self.Logger.warning(f"Bytes manquants pour {Filename}")
+                    return None
+
+                OutputPath = os.path.join(OutputDir, Filename)
+                with open(OutputPath, 'wb') as f:
+                    f.write(ImageBytes)
+                return OutputPath
+
+            except Exception as e:
+                self.Logger.error(f"Erreur sauvegarde binaire {ImageInfo.get('filename')}: {e}")
+                return None
+
+        try:
+            MaxWorkers = min(32, (os.cpu_count() or 4) * 2)
+            SavedPaths = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=MaxWorkers) as executor:
+                Futures = [executor.submit(SaveSingleImage, Info) for Info in ImageInfos]
+                for Future in concurrent.futures.as_completed(Futures):
+                    Result = Future.result()
+                    if Result:
+                        SavedPaths.append(Result)
+
+            self.Logger.info(f"✓ {len(SavedPaths)} images sauvegardées (binaire, {MaxWorkers} threads)")
+            return SavedPaths
+
+        except Exception as e:
+            self.Logger.error(f"Erreur sauvegarde binaire: {e}")
+            return []
+
+    def ConvertAndEncodeBinary(self, BatchId: str, UpscaledPaths: List[str],
+                                OriginalImageInfos: List[Dict]) -> Optional[tuple]:
+        """
+        Phase CPU : convertit les images upscalées en AVIF et retourne les bytes bruts
+        sans encodage base64 (version binaire tar).
+
+        Args:
+            BatchId: ID du batch
+            UpscaledPaths: Chemins des images upscalées (sortie de ProcessBatchGpuOnlyBinary)
+            OriginalImageInfos: [{id, number, filename}] depuis MetaDict
+
+        Returns:
+            Tuple (image_infos: List[Dict], images_bytes_dict: Dict[str, bytes]) ou None si erreur
+        """
+        from client.utils.image_converter import ImageConverter
+
+        FilenameMap = {info.get("filename"): info for info in OriginalImageInfos}
+
+        TransferFormat = 'avif'
+        TransferQuality = 95
+        TransferLossless = False
+
+        Converter = ImageConverter()
+        if not Converter.IsAvifSupported():
+            self.Logger.warning("AVIF non supporté, utilisation de PNG")
+            TransferFormat = 'png'
+
+        CpuCount = os.cpu_count() or 4
+        AvailableCores = CpuCount - 1
+
+        if TransferFormat == 'avif' and hasattr(Converter, 'AvifThreads'):
+            MaxWorkers = max(1, AvailableCores // Converter.AvifThreads)
+        else:
+            MaxWorkers = max(1, AvailableCores)
+
+        def ConvertSingleImage(UpscaledPath: str) -> Optional[tuple]:
+            try:
+                OriginalFilename = os.path.basename(UpscaledPath)
+                OriginalData = FilenameMap.get(OriginalFilename, {})
+
+                ImageBytes, NewExt = Converter.ConvertToFormat(
+                    UpscaledPath, TransferFormat, TransferQuality, TransferLossless
+                )
+
+                BaseName = os.path.splitext(OriginalFilename)[0]
+                NewFilename = f"{BaseName}{NewExt}"
+
+                Info = {
+                    "id": OriginalData.get("id"),
+                    "number": OriginalData.get("number"),
+                    "filename": NewFilename,
+                    "format": TransferFormat
+                }
+                return Info, NewFilename, ImageBytes
+
+            except Exception as e:
+                self.Logger.error(f"Erreur conversion binaire {UpscaledPath}: {e}")
+                return None
+
+        try:
+            self.Logger.info(f"[CPU] Conversion binaire du batch {BatchId}...")
+
+            ResultInfos = []
+            ResultBytesDict = {}
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=MaxWorkers) as executor:
+                Futures = [executor.submit(ConvertSingleImage, Path) for Path in UpscaledPaths]
+                for Future in concurrent.futures.as_completed(Futures):
+                    Result = Future.result()
+                    if Result:
+                        Info, Filename, ImageBytes = Result
+                        ResultInfos.append(Info)
+                        ResultBytesDict[Filename] = ImageBytes
+
+            self._Cleanup(BatchId)
+
+            self.Logger.info(
+                f"✓ [CPU] Batch {BatchId}: {len(ResultInfos)} images converties en {TransferFormat.upper()} (binaire)"
+            )
+            return ResultInfos, ResultBytesDict
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de la conversion binaire du batch {BatchId}: {e}")
+            return None
+
     def ConvertAndEncode(self, BatchId: str, UpscaledPaths: List[str],
                         OriginalImages: List[Dict]) -> Optional[BatchResult]:
         """

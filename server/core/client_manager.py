@@ -430,6 +430,135 @@ class ClientManager:
             self.Logger.error(f"Erreur d'envoi Data au client {ClientInfo.ClientId}: {e}")
             return False
 
+    async def SendDataBinary(self, ClientId: str, Data: bytes) -> bool:
+        """
+        Envoie des bytes bruts à un client via le canal Data (AES-GCM, sans base64 ni compression).
+        Utilisé pour les archives tar de BatchAssignment.
+
+        Args:
+            ClientId: ID du client
+            Data: Bytes bruts à envoyer (tar archive)
+
+        Returns:
+            True si succès
+        """
+        if ClientId not in self.Clients:
+            self.Logger.error(f"Client {ClientId} non trouvé")
+            return False
+
+        ClientInfo = self.Clients[ClientId]
+
+        if not ClientInfo.IsDataConnected():
+            self.Logger.error(f"Canal Data non connecté pour le client {ClientId}")
+            return False
+
+        try:
+            if ClientInfo.EncryptionHandler.IsReady():
+                EncryptedData = ClientInfo.EncryptionHandler.EncryptBinary(Data)
+            else:
+                EncryptedData = Data
+
+            return await self._SendDataRaw(ClientInfo, EncryptedData)
+
+        except Exception as e:
+            self.Logger.error(f"Erreur lors de l'envoi Data binaire au client {ClientId}: {e}")
+            return False
+
+    async def _SendDataRaw(self, ClientInfo: 'ClientInfo', Data: bytes) -> bool:
+        """Envoie des bytes bruts via le canal Data (interne)"""
+        try:
+            if not ClientInfo.DataWriter:
+                return False
+
+            DataSize = len(Data)
+            SizeBytes = DataSize.to_bytes(4, byteorder='big')
+
+            self.Logger.debug(f"SendDataBinary: envoi de {DataSize} bytes au client {ClientInfo.ClientId[:8]}...")
+            ClientInfo.DataWriter.write(SizeBytes + Data)
+            await ClientInfo.DataWriter.drain()
+            self.Logger.debug(f"SendDataBinary: {DataSize} bytes envoyés avec succès")
+            return True
+
+        except (ConnectionResetError, BrokenPipeError) as e:
+            self.Logger.error(f"Connexion Data perdue avec {ClientInfo.ClientId}: {e}")
+            return False
+        except Exception as e:
+            self.Logger.error(f"Erreur envoi Data binaire au client {ClientInfo.ClientId}: {e}")
+            return False
+
+    async def ReceiveDataBinary(self, ClientId: str, Timeout: float = None) -> Optional[bytes]:
+        """
+        Reçoit des bytes bruts d'un client via le canal Data (déchiffrement AES-GCM).
+        Utilisé pour les archives tar de BatchResult.
+
+        Args:
+            ClientId: ID du client
+            Timeout: Timeout optionnel en secondes
+
+        Returns:
+            Bytes déchiffrés ou None
+        """
+        if ClientId not in self.Clients:
+            return None
+
+        ClientInfo = self.Clients[ClientId]
+
+        if not ClientInfo.IsDataConnected():
+            return None
+
+        try:
+            if Timeout:
+                RawEncrypted = await asyncio.wait_for(
+                    self._ReceiveDataRaw(ClientInfo),
+                    timeout=Timeout
+                )
+            else:
+                RawEncrypted = await self._ReceiveDataRaw(ClientInfo)
+
+            if not RawEncrypted:
+                return None
+
+            if ClientInfo.EncryptionHandler.IsReady():
+                return ClientInfo.EncryptionHandler.DecryptBinary(RawEncrypted)
+
+            return RawEncrypted
+
+        except asyncio.TimeoutError:
+            self.Logger.warning(f"Timeout réception Data binaire du client {ClientId}")
+            return None
+        except Exception as e:
+            self.Logger.error(f"Erreur réception Data binaire du client {ClientId}: {e}")
+            return None
+
+    async def _ReceiveDataRaw(self, ClientInfo: 'ClientInfo') -> Optional[bytes]:
+        """Reçoit des bytes bruts via le canal Data (interne)"""
+        try:
+            if not ClientInfo.DataReader:
+                return None
+
+            SizeBytes = await ClientInfo.DataReader.readexactly(4)
+            DataSize = int.from_bytes(SizeBytes, byteorder='big')
+
+            if DataSize <= 0:
+                self.Logger.error(f"Taille Data invalide: {DataSize}")
+                return None
+
+            if DataSize > NetworkConfig.MAX_MESSAGE_SIZE:
+                self.Logger.error(f"Message Data trop grand: {DataSize} bytes")
+                return None
+
+            return await ClientInfo.DataReader.readexactly(DataSize)
+
+        except asyncio.IncompleteReadError:
+            self.Logger.warning(f"Connexion Data fermée par le client {ClientInfo.ClientId}")
+            return None
+        except (ConnectionResetError, BrokenPipeError) as e:
+            self.Logger.error(f"Connexion Data perdue avec {ClientInfo.ClientId}: {e}")
+            return None
+        except Exception as e:
+            self.Logger.error(f"Erreur réception Data brute: {e}")
+            return None
+
     async def ReceiveDataMessage(self, ClientId: str, Decrypt: bool = True, Timeout: float = None) -> Optional[str]:
         """
         Reçoit un message d'un client via le canal Data

@@ -472,68 +472,65 @@ class BatchDistributor:
                 self.Logger.error(f"Aucune image trouvée pour le batch {BatchObj.BatchId}")
                 return False
 
-            self.Logger.info(f"Envoi de {len(FramePaths)} images au client {ClientId} via Data...")
+            self.Logger.info(f"Envoi de {len(FramePaths)} images au client {ClientId} via Data (tar binaire)...")
 
-            # Charge et encode les images en base64 (parallélisé)
-            def LoadAndEncodeImage(Index: int, FramePath: str) -> Optional[Dict]:
-                """Charge et encode une seule image"""
+            # Charge les images en bytes bruts (sans base64, parallélisé)
+            def LoadImage(Index: int, FramePath: str) -> Optional[tuple]:
+                """Charge une image et retourne (info, filename, bytes)"""
                 try:
-                    # Lit l'image
                     with open(FramePath, 'rb') as f:
                         ImageData = f.read()
 
-                    # Encode en base64
-                    ImageB64 = base64.b64encode(ImageData).decode('utf-8')
-
-                    # Numéro de frame absolu
                     FrameNumber = BatchObj.StartFrame + Index
+                    Filename = os.path.basename(FramePath)
 
-                    return {
+                    Info = {
                         "id": str(FrameNumber),
                         "number": FrameNumber,
-                        "data": ImageB64,
-                        "filename": os.path.basename(FramePath)
+                        "filename": Filename
                     }
+                    return Info, Filename, ImageData
 
                 except Exception as e:
                     self.Logger.error(f"Erreur lors du chargement de {FramePath}: {e}")
                     return None
 
-            # Parallélise le chargement et l'encodage
+            # Parallélise le chargement
             MaxWorkers = min(32, (os.cpu_count() or 4) * 2)
-            Images = []
+            ImageInfos = []
+            ImageBytesDict = {}
 
             Loop = asyncio.get_event_loop()
             with concurrent.futures.ThreadPoolExecutor(max_workers=MaxWorkers) as executor:
-                # Soumet toutes les tâches
                 Tasks = [
-                    Loop.run_in_executor(executor, LoadAndEncodeImage, Index, FramePath)
+                    Loop.run_in_executor(executor, LoadImage, Index, FramePath)
                     for Index, FramePath in enumerate(FramePaths)
                 ]
-
-                # Attend tous les résultats
                 Results = await asyncio.gather(*Tasks)
 
-                # Filtre les None (erreurs)
-                Images = [img for img in Results if img is not None]
+                for Result in Results:
+                    if Result is not None:
+                        Info, Filename, ImageBytes = Result
+                        ImageInfos.append(Info)
+                        ImageBytesDict[Filename] = ImageBytes
 
-            self.Logger.debug(f"✓ {len(Images)} images encodées (parallèle avec {MaxWorkers} threads)")
+            self.Logger.debug(f"✓ {len(ImageInfos)} images chargées (parallèle avec {MaxWorkers} threads)")
 
-            # Crée le message BatchAssignment
-            Message = BatchAssignment(
+            # Construit l'archive tar binaire
+            TarBytes = BatchAssignment.BuildBinary(
                 BatchId=BatchObj.BatchId,
                 VideoId=VideoObj.VideoId,
-                Images=Images,
                 UpscaleFactor=VideoObj.UpscaleFactor,
                 Engine=VideoObj.Engine,
                 Model=VideoObj.Model,
                 DenoiseLevel=VideoObj.DenoiseLevel,
-                TtaMode=VideoObj.TtaMode
+                TtaMode=VideoObj.TtaMode,
+                ImageInfos=ImageInfos,
+                ImageBytesDict=ImageBytesDict
             )
+            self.Logger.debug(f"Archive tar BatchAssignment: {len(TarBytes) / 1024:.1f} KB")
 
-            # Envoie via le canal Data avec retry
-            MessageJson = Message.ToJson()
-
+            # Envoie via le canal Data avec retry (bytes bruts chiffrés)
             def OnRetry(Attempt: int, Error: Exception):
                 self.Logger.warning(
                     f"Retry {Attempt}/{RetryConfig.BATCH_SEND_MAX_RETRIES} "
@@ -542,11 +539,7 @@ class BatchDistributor:
 
             try:
                 Success = await RetryAsync(
-                    lambda: self.ClientManager.SendDataMessage(
-                        ClientId,
-                        MessageJson,
-                        Encrypted=True
-                    ),
+                    lambda: self.ClientManager.SendDataBinary(ClientId, TarBytes),
                     max_retries=RetryConfig.BATCH_SEND_MAX_RETRIES,
                     delay=RetryConfig.BATCH_SEND_RETRY_DELAY,
                     exceptions=(ConnectionError, BrokenPipeError, OSError),
@@ -905,6 +898,202 @@ class BatchDistributor:
             if ClientId:
                 self._SetClientIdleIfNoOtherBatches(ClientId)
 
+            return False
+
+    async def ReceiveBatchResultBinary(self, ClientId: str, MetaDict: dict,
+                                        ImagesBytesDict: Dict[str, bytes]) -> bool:
+        """
+        Reçoit un résultat de batch en format binaire tar (sans base64).
+
+        Args:
+            ClientId: ID du client
+            MetaDict: Métadonnées du résultat (batch_id, success, images [])
+            ImagesBytesDict: {filename: bytes} — bytes bruts des images AVIF
+
+        Returns:
+            True si succès
+        """
+        BatchId = MetaDict.get("batch_id")
+
+        try:
+            if not BatchId:
+                self.Logger.error("BatchId manquant dans le résultat binaire")
+                return False
+
+            self.Logger.info(f"Réception du résultat binaire du batch {BatchId} depuis {ClientId}")
+
+            BatchObj = self.Database.GetBatch(BatchId)
+            if not BatchObj:
+                self.Logger.error(f"Batch {BatchId} non trouvé")
+                return False
+
+            Success = MetaDict.get("success", False)
+            ErrorMsg = MetaDict.get("error_message", "")
+
+            if not Success:
+                self.Logger.error(f"Batch {BatchId} échoué: {ErrorMsg}")
+                TriggerServerWebhook("batch_failed", batch_id=BatchId, error=ErrorMsg, client_id=ClientId)
+
+                BatchObj.RetryCount += 1
+                BatchObj.ErrorMessage = ErrorMsg
+
+                if BatchId in self.ActiveBatches:
+                    del self.ActiveBatches[BatchId]
+
+                self.Logger.warning(f"⟳ Batch {BatchId} remis en file d'attente (tentative #{BatchObj.RetryCount})")
+                BatchObj.Status = BatchStatus.PENDING
+                BatchObj.AssignedClientId = None
+                self.Database.UpdateBatch(BatchObj)
+                self._SetClientIdleIfNoOtherBatches(ClientId)
+                return False
+
+            # ImageInfos: [{id, number, filename, format}]
+            ImageInfos = MetaDict.get("images", [])
+
+            if not ImageInfos:
+                self.Logger.error(f"Batch {BatchId}: Aucune image upscalée reçue (binaire)")
+                BatchObj.RetryCount += 1
+                BatchObj.ErrorMessage = "Aucune image reçue du client"
+
+                if BatchId in self.ActiveBatches:
+                    del self.ActiveBatches[BatchId]
+
+                BatchObj.Status = BatchStatus.PENDING
+                BatchObj.AssignedClientId = None
+                self.Database.UpdateBatch(BatchObj)
+                self._SetClientIdleIfNoOtherBatches(ClientId)
+                return False
+
+            # Validation continuité des frames
+            ExpectedCount = BatchObj.EndFrame - BatchObj.StartFrame + 1
+            ReceivedCount = len(ImageInfos)
+            self.Logger.info(f"Batch {BatchId}: {ReceivedCount}/{ExpectedCount} images reçues (binaire)")
+
+            ExpectedFrames = set(range(BatchObj.StartFrame, BatchObj.EndFrame + 1))
+            ReceivedFrames = {img.get("number") for img in ImageInfos}
+
+            if ExpectedFrames != ReceivedFrames:
+                Missing = ExpectedFrames - ReceivedFrames
+                Extra = ReceivedFrames - ExpectedFrames
+                self.Logger.error(
+                    f"Batch {BatchId}: Frames discontinues - "
+                    f"Manquantes: {sorted(Missing) if Missing else 'aucune'}, "
+                    f"Extra: {sorted(Extra) if Extra else 'aucune'}"
+                )
+                BatchObj.Status = BatchStatus.FAILED
+                BatchObj.RetryCount += 1
+                BatchObj.ErrorMessage = (
+                    f"Frames discontinues - "
+                    f"Manquantes: {sorted(Missing) if Missing else 'aucune'}, "
+                    f"Extra: {sorted(Extra) if Extra else 'aucune'}"
+                )
+                self.Database.UpdateBatch(BatchObj)
+                if BatchId in self.ActiveBatches:
+                    del self.ActiveBatches[BatchId]
+                self._SetClientIdleIfNoOtherBatches(ClientId)
+                return False
+
+            # Sauvegarde les images (bytes bruts, sans décodage base64)
+            VideoId = BatchObj.VideoId
+            UpscaledDir = self.VideoProcessor.GetUpscaledDir(VideoId)
+
+            try:
+                async with AtomicImageSave(UpscaledDir, logger=self.Logger) as atomic:
+                    for ImageInfo in ImageInfos:
+                        FrameNumber = ImageInfo.get("number")
+                        OrigFilename = ImageInfo.get("filename")
+                        ReceivedFormat = ImageInfo.get("format", "avif")
+
+                        ImageBytes = ImagesBytesDict.get(OrigFilename)
+                        if not ImageBytes:
+                            raise ValueError(f"Données manquantes pour frame {FrameNumber} ({OrigFilename})")
+
+                        # Convertit en PNG si nécessaire (FFmpeg compatibility)
+                        if ReceivedFormat != "png":
+                            try:
+                                Buffer = io.BytesIO(ImageBytes)
+                                with Image.open(Buffer) as Img:
+                                    OutputBuffer = io.BytesIO()
+                                    Img.save(OutputBuffer, format='PNG')
+                                    ImageBytes = OutputBuffer.getvalue()
+                            except Exception as ConvErr:
+                                raise ValueError(
+                                    f"Échec conversion {ReceivedFormat}->PNG frame {FrameNumber}: {ConvErr}"
+                                )
+
+                        Filename = f"frame_{FrameNumber:08d}.png"
+                        await atomic.SaveImage(Filename, ImageBytes)
+
+                self.Logger.info(
+                    f"✓ Batch {BatchId}: {len(ImageInfos)} images sauvegardées (binaire, transaction atomique)"
+                )
+
+            except Exception as e:
+                self.Logger.error(f"Batch {BatchId}: Échec sauvegarde atomique - {e}", exc_info=True)
+                BatchObj.RetryCount += 1
+                BatchObj.ErrorMessage = f"Échec sauvegarde images: {str(e)}"
+                BatchObj.Status = BatchStatus.PENDING
+                BatchObj.AssignedClientId = None
+                self.Database.UpdateBatch(BatchObj)
+
+                if BatchId in self.ActiveBatches:
+                    del self.ActiveBatches[BatchId]
+                self._SetClientIdleIfNoOtherBatches(ClientId)
+                return False
+
+            # Marque le batch comme complété
+            BatchObj.Status = BatchStatus.COMPLETED
+            BatchObj.CompletedAt = datetime.now()
+            self.Database.UpdateBatch(BatchObj)
+
+            TriggerServerWebhook(
+                "batch_received",
+                batch_id=BatchId,
+                frame_count=len(ImageInfos),
+                client_id=ClientId
+            )
+
+            VideoObj = self.Database.GetVideo(VideoId)
+            if VideoObj:
+                VideoObj.CompletedBatches += 1
+                VideoObj.UpdateProgress()
+                try:
+                    self.Database.UpdateVideo(VideoObj)
+                    self.Logger.info(
+                        f"Progression vidéo: {VideoObj.CompletedBatches}/{VideoObj.TotalBatches} "
+                        f"({VideoObj.Progress*100:.1f}%)"
+                    )
+                except Exception as DbError:
+                    self.Logger.error(f"Erreur mise à jour progression vidéo {VideoId}: {DbError}")
+            else:
+                self.Logger.error(f"ERREUR: Vidéo {VideoId} introuvable dans la DB pour batch {BatchId}!")
+
+            if BatchId in self.ActiveBatches:
+                del self.ActiveBatches[BatchId]
+            self._SetClientIdleIfNoOtherBatches(ClientId)
+            return True
+
+        except Exception as e:
+            self.Logger.error(
+                f"Erreur critique lors de la réception du résultat binaire batch {BatchId}: {e}",
+                exc_info=True
+            )
+            if BatchId:
+                try:
+                    BatchObj = self.Database.GetBatch(BatchId)
+                    if BatchObj:
+                        BatchObj.Status = BatchStatus.PENDING
+                        BatchObj.AssignedClientId = None
+                        BatchObj.RetryCount += 1
+                        self.Database.UpdateBatch(BatchObj)
+                except Exception as DbError:
+                    self.Logger.error(f"Impossible de mettre à jour le batch après erreur: {DbError}")
+
+                if BatchId in self.ActiveBatches:
+                    del self.ActiveBatches[BatchId]
+
+            if ClientId:
+                self._SetClientIdleIfNoOtherBatches(ClientId)
             return False
 
     async def _SaveUpscaledImage(self, ImageData: dict, UpscaledDir: str) -> bool:
