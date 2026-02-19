@@ -456,17 +456,11 @@ class UpscalingServer:
         while self.Running:
             try:
                 # Reçoit un résultat binaire tar via le canal Data
-                # Timeout raisonnable pour les transferts Data (images volumineuses)
-                DataTimeout = NetworkConfig.BATCH_TIMEOUT
-                try:
-                    TarBytes = await asyncio.wait_for(
-                        self.ClientManager.ReceiveDataBinary(ClientId),
-                        timeout=DataTimeout
-                    )
-                except asyncio.TimeoutError:
-                    self.Logger.warning(f"Timeout réception Data pour client {ClientId} ({DataTimeout}s)")
-                    await self.ClientManager.DisconnectClient(ClientId, "Timeout Data")
-                    break
+                # PAS de timeout ici : le canal Data peut rester silencieux longtemps
+                # (client idle, batch qui prend du temps...).
+                # La détection de client mort est gérée par le heartbeat sur le canal Control.
+                # Si le client se déconnecte, IncompleteReadError → retourne None → on sort.
+                TarBytes = await self.ClientManager.ReceiveDataBinary(ClientId)
 
                 if not TarBytes:
                     # Client déconnecté proprement (connexion fermée)
