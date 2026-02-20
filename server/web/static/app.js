@@ -16,6 +16,11 @@ let _webhookSaveTimeout = null;
 // ── INIT ─────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
   restoreTab();
+  restoreCollapsedSections();
+  // Listeners pour le toggle upload/chemin serveur
+  document.querySelectorAll('input[name="job-mode"]').forEach(r => {
+    r.addEventListener('change', toggleJobMode);
+  });
   await checkAuth();
 });
 
@@ -130,15 +135,30 @@ function updateWsDot(connected) {
 }
 
 // ── RENDER STATE (depuis WebSocket) ──────────────────────────
+async function toggleServerPower() {
+  const btn = document.getElementById('server-power-btn');
+  const isRunning = btn.dataset.running === '1';
+  btn.disabled = true;
+  const res = await apiFetch(isRunning ? '/api/server/stop' : '/api/server/start', { method: 'POST' });
+  btn.disabled = false;
+  if (!res || !res.ok) {
+    const data = res ? await res.json().catch(() => ({})) : {};
+    showToast(data.detail || 'Erreur', true);
+  }
+}
+
 function renderState(state) {
-  // Header badge
+  // Header badge + bouton power
   const badge = document.getElementById('server-status-badge');
+  const btn   = document.getElementById('server-power-btn');
   if (state.server_running) {
     badge.className = 'running';
     badge.textContent = `● En cours (${state.uptime_str || ''})`;
+    if (btn) { btn.textContent = '⏹ Arrêter'; btn.className = 'btn btn-danger btn-sm'; btn.dataset.running = '1'; }
   } else {
     badge.className = 'stopped';
     badge.textContent = '● Arrêté';
+    if (btn) { btn.textContent = '▶ Démarrer'; btn.className = 'btn btn-primary btn-sm'; btn.dataset.running = '0'; }
   }
 
   // Dashboard
@@ -243,13 +263,31 @@ async function deleteJob(videoId) {
 
 // ── ADD JOB MODAL ─────────────────────────────────────────────
 function showAddJobModal() {
+  // Réinitialise le mode upload (radio "upload" coché par défaut)
+  const uploadRadio = document.querySelector('input[name="job-mode"][value="upload"]');
+  if (uploadRadio) { uploadRadio.checked = true; toggleJobMode(); }
+  // Vide le file input et cache la progression
+  const fileInput = document.getElementById('job-file');
+  if (fileInput) fileInput.value = '';
+  const progressWrap = document.getElementById('job-upload-progress');
+  if (progressWrap) progressWrap.style.display = 'none';
+  // Vide aussi le champ chemin serveur
+  const pathInput = document.getElementById('job-path');
+  if (pathInput) pathInput.value = '';
   document.getElementById('add-job-modal').style.display = 'flex';
-  document.getElementById('job-path').focus();
 }
 
 function closeJobModal() {
   document.getElementById('add-job-modal').style.display = 'none';
   document.getElementById('job-error').style.display = 'none';
+  const progressWrap = document.getElementById('job-upload-progress');
+  if (progressWrap) progressWrap.style.display = 'none';
+}
+
+function toggleJobMode() {
+  const mode = document.querySelector('input[name="job-mode"]:checked')?.value || 'upload';
+  document.getElementById('job-upload-section').style.display = mode === 'upload' ? '' : 'none';
+  document.getElementById('job-path-section').style.display  = mode === 'path'   ? '' : 'none';
 }
 
 function updateJobModels() {
@@ -272,38 +310,112 @@ function updateJobModels() {
   }
 }
 
-async function submitJob() {
-  const errEl = document.getElementById('job-error');
-  errEl.style.display = 'none';
-
-  const body = {
-    path: document.getElementById('job-path').value.trim(),
+function _getJobParams() {
+  return {
     upscale_factor: parseInt(document.getElementById('job-scale').value),
     engine: document.getElementById('job-engine').value,
     model: document.getElementById('job-model').value,
     tta_mode: document.getElementById('job-tta').checked,
     denoise_level: parseInt(document.getElementById('job-denoise')?.value ?? '-1')
   };
+}
 
-  if (!body.path) {
-    errEl.textContent = 'Veuillez saisir un chemin de fichier.';
-    errEl.style.display = 'block';
-    return;
-  }
-
-  const res = await apiFetch('/api/jobs', {
-    method: 'POST',
-    body: JSON.stringify(body)
-  });
-
+async function _createJobWithPath(path) {
+  const body = { path, ..._getJobParams() };
+  const res = await apiFetch('/api/jobs', { method: 'POST', body: JSON.stringify(body) });
   if (res && res.ok) {
     closeJobModal();
     showToast('Vidéo ajoutée à la queue');
   } else {
     const data = res ? await res.json().catch(() => ({})) : {};
+    const errEl = document.getElementById('job-error');
     errEl.textContent = data.detail || 'Erreur lors de l\'ajout.';
     errEl.style.display = 'block';
   }
+}
+
+async function submitJob() {
+  const errEl = document.getElementById('job-error');
+  errEl.style.display = 'none';
+
+  const mode = document.querySelector('input[name="job-mode"]:checked')?.value || 'upload';
+
+  if (mode === 'upload') {
+    await uploadAndSubmit();
+  } else {
+    const path = document.getElementById('job-path').value.trim();
+    if (!path) {
+      errEl.textContent = 'Veuillez saisir un chemin de fichier.';
+      errEl.style.display = 'block';
+      return;
+    }
+    await _createJobWithPath(path);
+  }
+}
+
+async function uploadAndSubmit() {
+  const errEl = document.getElementById('job-error');
+  const file = document.getElementById('job-file').files[0];
+  if (!file) {
+    errEl.textContent = 'Veuillez sélectionner un fichier vidéo.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  const progressWrap  = document.getElementById('job-upload-progress');
+  const progressBar   = document.getElementById('job-progress-bar');
+  const progressLabel = document.getElementById('job-progress-label');
+  const submitBtn = document.querySelector('#add-job-modal .btn-primary');
+
+  progressWrap.style.display = '';
+  progressBar.value = 0;
+  progressLabel.textContent = '0%';
+  if (submitBtn) submitBtn.disabled = true;
+
+  return new Promise((resolve) => {
+    const fd = new FormData();
+    fd.append('file', file);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload');
+    if (_token && _token !== 'no-auth') {
+      xhr.setRequestHeader('Authorization', 'Bearer ' + _token);
+    }
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const pct = Math.round(e.loaded / e.total * 100);
+        progressBar.value = pct;
+        progressLabel.textContent = pct + '%';
+      }
+    };
+
+    xhr.onload = async () => {
+      progressWrap.style.display = 'none';
+      if (submitBtn) submitBtn.disabled = false;
+      if (xhr.status === 200) {
+        let data = {};
+        try { data = JSON.parse(xhr.responseText); } catch (e) {}
+        await _createJobWithPath(data.path);
+      } else {
+        let data = {};
+        try { data = JSON.parse(xhr.responseText); } catch (e) {}
+        errEl.textContent = data.detail || 'Erreur lors de l\'upload.';
+        errEl.style.display = 'block';
+      }
+      resolve();
+    };
+
+    xhr.onerror = () => {
+      progressWrap.style.display = 'none';
+      if (submitBtn) submitBtn.disabled = false;
+      errEl.textContent = 'Erreur réseau pendant l\'upload.';
+      errEl.style.display = 'block';
+      resolve();
+    };
+
+    xhr.send(fd);
+  });
 }
 
 // ── CONFIGURATION ─────────────────────────────────────────────
@@ -321,6 +433,8 @@ async function loadConfig() {
   setVal('cfg-max-batches', cfg.max_concurrent_batches || 3);
   setVal('cfg-compression', cfg.compression_level || 5);
   setVal('cfg-work-dir', cfg.work_directory || './work');
+  setVal('cfg-web-host', cfg.web_host || '0.0.0.0');
+  setVal('cfg-web-port', cfg.web_port || 8780);
 }
 
 function scheduleConfigSave() {
@@ -338,7 +452,9 @@ async function saveConfig() {
     batch_size: getVal('cfg-batch-size'),
     max_concurrent_batches: getVal('cfg-max-batches'),
     compression_level: getVal('cfg-compression'),
-    work_directory: getVal('cfg-work-dir')
+    work_directory: getVal('cfg-work-dir'),
+    web_host: getVal('cfg-web-host'),
+    web_port: getVal('cfg-web-port')
   };
 
   const res = await apiFetch('/api/config', {
@@ -405,6 +521,29 @@ function restoreTab() {
   const btn = [...document.querySelectorAll('.tab-btn')].find(b =>
     b.getAttribute('onclick') && b.getAttribute('onclick').includes(`'${tab}'`));
   if (btn) btn.click();
+}
+
+// ── SECTIONS REPLIABLES ───────────────────────────────────────
+function toggleSection(cardId) {
+  const card = document.getElementById(cardId);
+  if (!card) return;
+  card.classList.toggle('collapsed');
+  const collapsed = card.classList.contains('collapsed');
+  try {
+    const states = JSON.parse(localStorage.getItem('cfg_collapsed') || '{}');
+    states[cardId] = collapsed;
+    localStorage.setItem('cfg_collapsed', JSON.stringify(states));
+  } catch (e) {}
+}
+
+function restoreCollapsedSections() {
+  try {
+    const states = JSON.parse(localStorage.getItem('cfg_collapsed') || '{}');
+    for (const [id, collapsed] of Object.entries(states)) {
+      const card = document.getElementById(id);
+      if (card && collapsed) card.classList.add('collapsed');
+    }
+  } catch (e) {}
 }
 
 // ── UTILITAIRES ───────────────────────────────────────────────

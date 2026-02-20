@@ -89,7 +89,10 @@ class PerformanceConfigManager:
         "ram_disk_drive_letter": "R", # Lettre du lecteur ImDisk (Windows)
         "ram_disk_size_mb": 2048,     # Taille du RAM disk ImDisk en MB (Windows)
         "ram_disk_auto_create": True, # Creer automatiquement au demarrage (Windows)
-        "ram_disk_auto_remove": True  # Supprimer a l'arret du client (Windows)
+        "ram_disk_auto_remove": True, # Supprimer a l'arret du client (Windows)
+        # Interface web client
+        "web_host": "127.0.0.1",      # Adresse d'ecoute de la web UI client
+        "web_port": 8781              # Port de la web UI client
     }
 
     def __init__(self, ConfigDir: Optional[str] = None):

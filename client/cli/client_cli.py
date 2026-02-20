@@ -40,9 +40,12 @@ class ClientCLI:
 
         # Démarrer la web UI
         try:
+            PerfConfig = self.PerformanceManager.Load()
+            WebHost = PerfConfig.get("web_host", "127.0.0.1")
+            WebPort = int(PerfConfig.get("web_port", NetworkConfig.CLIENT_WEB_PORT))
             self.WebInterface = ClientWebInterface()
-            self.WebInterface.Start(Host="127.0.0.1", Port=NetworkConfig.CLIENT_WEB_PORT)
-            click.echo(f"✓ Web UI client → http://localhost:{NetworkConfig.CLIENT_WEB_PORT}")
+            self.WebInterface.Start(Host=WebHost, Port=WebPort)
+            click.echo(f"✓ Web UI client → http://{WebHost}:{WebPort}")
         except Exception as WebErr:
             click.echo(f"⚠ Web UI non disponible: {WebErr}")
             self.WebInterface = None

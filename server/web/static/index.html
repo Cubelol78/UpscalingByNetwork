@@ -25,6 +25,7 @@
 <header>
   <h1>⚙️ Upscaling Server</h1>
   <span id="server-status-badge" class="stopped">● Arrêté</span>
+  <button id="server-power-btn" class="btn btn-primary btn-sm" onclick="toggleServerPower()" style="margin-left:4px">▶ Démarrer</button>
   <div id="ws-status">
     <div class="ws-dot" id="ws-dot"></div>
     <span id="ws-label">Déconnecté</span>
@@ -141,59 +142,102 @@
      TAB: CONFIGURATION
 ════════════════════════════════════════════ -->
 <div id="tab-config" class="tab-panel">
-  <div class="card">
-    <div class="card-title">Réseau</div>
-    <div class="form-row">
-      <div class="form-group">
-        <label>Adresse IPv4</label>
-        <input type="text" id="cfg-ipv4" placeholder="0.0.0.0" oninput="scheduleConfigSave()">
-      </div>
-      <div class="form-group">
-        <label>Adresse IPv6</label>
-        <input type="text" id="cfg-ipv6" placeholder="::" oninput="scheduleConfigSave()">
-      </div>
-      <div class="form-group">
-        <label>Port contrôle</label>
-        <input type="number" id="cfg-port" min="1024" max="65535" oninput="scheduleConfigSave()">
-      </div>
-      <div class="form-group">
-        <label>Port données</label>
-        <input type="number" id="cfg-data-port" min="1024" max="65535" oninput="scheduleConfigSave()">
+
+  <div class="card collapsible" id="cfg-card-network">
+    <div class="card-header" onclick="toggleSection('cfg-card-network')">
+      <div class="card-title">Réseau</div>
+      <span class="card-arrow">▼</span>
+    </div>
+    <div class="card-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Adresse IPv4</label>
+          <input type="text" id="cfg-ipv4" placeholder="0.0.0.0" oninput="scheduleConfigSave()">
+        </div>
+        <div class="form-group">
+          <label>Adresse IPv6</label>
+          <input type="text" id="cfg-ipv6" placeholder="::" oninput="scheduleConfigSave()">
+        </div>
+        <div class="form-group">
+          <label>Port contrôle</label>
+          <input type="number" id="cfg-port" min="1024" max="65535" oninput="scheduleConfigSave()">
+        </div>
+        <div class="form-group">
+          <label>Port données</label>
+          <input type="number" id="cfg-data-port" min="1024" max="65535" oninput="scheduleConfigSave()">
+        </div>
       </div>
     </div>
   </div>
 
-  <div class="card">
-    <div class="card-title">Sécurité</div>
-    <div class="form-group">
-      <label>Mot de passe serveur (vide = désactivé)</label>
-      <input type="password" id="cfg-password" placeholder="Mot de passe..." oninput="scheduleConfigSave()">
+  <div class="card collapsible" id="cfg-card-security">
+    <div class="card-header" onclick="toggleSection('cfg-card-security')">
+      <div class="card-title">Sécurité</div>
+      <span class="card-arrow">▼</span>
     </div>
-  </div>
-
-  <div class="card">
-    <div class="card-title">Traitement</div>
-    <div class="form-row">
+    <div class="card-body">
       <div class="form-group">
-        <label>Taille des batches (images)</label>
-        <input type="number" id="cfg-batch-size" min="10" max="1000" oninput="scheduleConfigSave()">
-      </div>
-      <div class="form-group">
-        <label>Batches simultanés max</label>
-        <input type="number" id="cfg-max-batches" min="1" max="999" oninput="scheduleConfigSave()">
-      </div>
-      <div class="form-group">
-        <label>Niveau de compression (1-10)</label>
-        <input type="number" id="cfg-compression" min="1" max="10" oninput="scheduleConfigSave()">
+        <label>Mot de passe serveur (vide = désactivé)</label>
+        <input type="password" id="cfg-password" placeholder="Mot de passe..." oninput="scheduleConfigSave()">
       </div>
     </div>
   </div>
 
-  <div class="card">
-    <div class="card-title">Répertoire de travail</div>
-    <div class="form-group">
-      <label>Chemin (redémarrage requis)</label>
-      <input type="text" id="cfg-work-dir" placeholder="./work" oninput="scheduleConfigSave()">
+  <div class="card collapsible" id="cfg-card-processing">
+    <div class="card-header" onclick="toggleSection('cfg-card-processing')">
+      <div class="card-title">Traitement</div>
+      <span class="card-arrow">▼</span>
+    </div>
+    <div class="card-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Taille des batches (images)</label>
+          <input type="number" id="cfg-batch-size" min="10" max="1000" oninput="scheduleConfigSave()">
+        </div>
+        <div class="form-group">
+          <label>Batches simultanés max</label>
+          <input type="number" id="cfg-max-batches" min="1" max="999" oninput="scheduleConfigSave()">
+        </div>
+        <div class="form-group">
+          <label>Niveau de compression (1-10)</label>
+          <input type="number" id="cfg-compression" min="1" max="10" oninput="scheduleConfigSave()">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card collapsible" id="cfg-card-workdir">
+    <div class="card-header" onclick="toggleSection('cfg-card-workdir')">
+      <div class="card-title">Répertoire de travail</div>
+      <span class="card-arrow">▼</span>
+    </div>
+    <div class="card-body">
+      <div class="form-group">
+        <label>Chemin (redémarrage requis)</label>
+        <input type="text" id="cfg-work-dir" placeholder="./work" oninput="scheduleConfigSave()">
+      </div>
+    </div>
+  </div>
+
+  <div class="card collapsible" id="cfg-card-webui">
+    <div class="card-header" onclick="toggleSection('cfg-card-webui')">
+      <div class="card-title">
+        Interface Web
+        <span style="color:var(--warning);font-size:11px;font-weight:normal;margin-left:8px;text-transform:none;letter-spacing:0">redémarrage requis</span>
+      </div>
+      <span class="card-arrow">▼</span>
+    </div>
+    <div class="card-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Adresse d'écoute</label>
+          <input type="text" id="cfg-web-host" placeholder="0.0.0.0" oninput="scheduleConfigSave()">
+        </div>
+        <div class="form-group">
+          <label>Port</label>
+          <input type="number" id="cfg-web-port" min="1024" max="65535" oninput="scheduleConfigSave()">
+        </div>
+      </div>
     </div>
   </div>
 
@@ -229,10 +273,38 @@
 <div id="add-job-modal" style="display:none" class="modal-backdrop">
   <div class="modal">
     <h3>🎬 Ajouter une vidéo</h3>
+
+    <!-- Mode toggle -->
     <div class="form-group">
+      <label>Mode d'ajout</label>
+      <div class="mode-toggle">
+        <label class="mode-option">
+          <input type="radio" name="job-mode" value="upload" checked>
+          ⬆️ Upload depuis mon PC
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="job-mode" value="path">
+          📂 Chemin serveur
+        </label>
+      </div>
+    </div>
+
+    <!-- Section upload -->
+    <div class="form-group" id="job-upload-section">
+      <label>Fichier vidéo</label>
+      <input type="file" id="job-file" accept="video/*">
+      <div class="upload-progress-wrap" id="job-upload-progress" style="display:none">
+        <progress id="job-progress-bar" value="0" max="100"></progress>
+        <span id="job-progress-label" style="font-size:12px;color:var(--text2);white-space:nowrap">0%</span>
+      </div>
+    </div>
+
+    <!-- Section chemin serveur -->
+    <div class="form-group" id="job-path-section" style="display:none">
       <label>Chemin du fichier vidéo (sur le serveur)</label>
       <input type="text" id="job-path" placeholder="/chemin/vers/video.mp4">
     </div>
+
     <div class="form-row">
       <div class="form-group">
         <label>Engine</label>

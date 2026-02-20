@@ -155,6 +155,50 @@ header h1 {
   margin-bottom: 12px;
 }
 
+/* ── COLLAPSIBLE CARDS ── */
+.card.collapsible { padding: 0; }
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  cursor: pointer;
+  user-select: none;
+  border-radius: var(--radius);
+  transition: background var(--transition);
+}
+
+.card-header:hover { background: var(--surface2); }
+.card.collapsed .card-header { border-radius: var(--radius); }
+
+.card-header .card-title { margin-bottom: 0; }
+
+.card-arrow {
+  font-size: 14px;
+  color: var(--text2);
+  transition: transform 0.25s ease;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
+.card.collapsed .card-arrow { transform: rotate(-90deg); }
+
+.card-body {
+  padding: 0 20px 20px;
+  overflow: hidden;
+  max-height: 800px;
+  transition: max-height 0.3s ease, padding 0.25s ease, opacity 0.2s ease;
+  opacity: 1;
+}
+
+.card.collapsed .card-body {
+  max-height: 0;
+  padding-bottom: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* ── STAT GRID ── */
 .stat-grid {
   display: grid;
@@ -397,3 +441,75 @@ input:focus, select:focus, textarea:focus {
 }
 
 @media (max-width: 500px) { .form-row { grid-template-columns: 1fr; } }
+
+/* ── MODE TOGGLE (upload / chemin serveur) ── */
+.mode-toggle {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.mode-toggle .mode-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  margin-bottom: 0;
+}
+
+.mode-option input[type="radio"] {
+  width: auto;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+/* ── FILE INPUT ── */
+input[type="file"] {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+input[type="file"]:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(79,142,247,.2);
+}
+
+input[type="file"]::-webkit-file-upload-button {
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  margin-right: 10px;
+  transition: var(--transition);
+}
+
+input[type="file"]::-webkit-file-upload-button:hover {
+  background: var(--bg3);
+}
+
+/* ── UPLOAD PROGRESS ── */
+.upload-progress-wrap {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.upload-progress-wrap progress {
+  flex: 1;
+}

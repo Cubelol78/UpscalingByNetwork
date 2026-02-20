@@ -65,9 +65,10 @@ class ServerCLI:
 
         # Démarrer la web UI avant le serveur upscaling
         try:
+            WebHost = self.Database.GetParameter("web_host", "0.0.0.0")
             WebPort = self.Database.GetParameterInt("web_port", NetworkConfig.SERVER_WEB_PORT)
             self.WebInterface = ServerWebInterface(self.Database)
-            self.WebInterface.Start(Host="0.0.0.0", Port=WebPort)
+            self.WebInterface.Start(Host=WebHost, Port=WebPort)
             click.echo(f"✓ Web UI démarrée → http://localhost:{WebPort}")
         except Exception as WebErr:
             click.echo(f"⚠ Web UI non disponible: {WebErr}")

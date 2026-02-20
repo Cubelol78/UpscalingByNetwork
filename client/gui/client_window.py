@@ -79,10 +79,12 @@ class ClientWindow(QMainWindow):
 
         # Interface web (démarrée au lancement)
         try:
+            WebHost = Config.get("web_host", "127.0.0.1")
+            WebPort = int(Config.get("web_port", NetworkConfig.CLIENT_WEB_PORT))
             self.WebInterface = ClientWebInterface()
             self.WebInterface.SetClient(self.Client)
-            self.WebInterface.Start(Host="127.0.0.1", Port=NetworkConfig.CLIENT_WEB_PORT)
-            self.Logger.info(f"Web UI client démarrée sur http://localhost:{NetworkConfig.CLIENT_WEB_PORT}")
+            self.WebInterface.Start(Host=WebHost, Port=WebPort)
+            self.Logger.info(f"Web UI client démarrée sur http://{WebHost}:{WebPort}")
         except Exception as WebErr:
             self.Logger.warning(f"Impossible de démarrer la Web UI client: {WebErr}")
             self.WebInterface = None

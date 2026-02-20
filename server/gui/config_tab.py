@@ -11,13 +11,15 @@ Comportements:
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QGroupBox, QFormLayout,
-    QSpinBox, QFileDialog, QMessageBox, QComboBox
+    QLineEdit, QPushButton, QFormLayout,
+    QSpinBox, QFileDialog, QMessageBox, QComboBox,
+    QScrollArea
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
 
 from shared.gui.theme_manager import ThemeManager
+from shared.gui.collapsible_panel import CollapsiblePanel
 
 
 class ConfigTab(QWidget):
@@ -68,12 +70,23 @@ class ConfigTab(QWidget):
         self.ThemeAutoSaveTimer.setSingleShot(True)
         self.ThemeAutoSaveTimer.timeout.connect(self.AutoSaveTheme)
 
+        # Timer pour debounce de l'auto-save de la Web UI
+        self.WebUiAutoSaveTimer = QTimer()
+        self.WebUiAutoSaveTimer.setSingleShot(True)
+        self.WebUiAutoSaveTimer.timeout.connect(self.AutoSaveWebUI)
+
         self.SetupUI()
         self.LoadConfiguration()
 
     def SetupUI(self):
         """Configure l'interface utilisateur"""
-        Layout = QVBoxLayout(self)
+        MainLayout = QVBoxLayout(self)
+        MainLayout.setContentsMargins(0, 0, 0, 0)
+
+        # Widget conteneur scrollable
+        ScrollContent = QWidget()
+        ContentLayout = QVBoxLayout(ScrollContent)
+        ContentLayout.setContentsMargins(16, 16, 16, 16)
 
         # En-tête avec titre et indicateur de sauvegarde
         HeaderLayout = QHBoxLayout()
@@ -92,28 +105,42 @@ class ConfigTab(QWidget):
         self.SavedIndicator.setProperty("class", "hint-success")
         HeaderLayout.addWidget(self.SavedIndicator)
 
-        Layout.addLayout(HeaderLayout)
+        ContentLayout.addLayout(HeaderLayout)
 
-        # Groupe Apparence (thème)
-        AppearanceGroup = self.CreateAppearanceGroup()
-        Layout.addWidget(AppearanceGroup)
+        # Panneau Apparence (thème) — replié par défaut
+        AppearancePanel = self.CreateAppearancePanel()
+        ContentLayout.addWidget(AppearancePanel)
 
-        # Groupe adresse réseau (IP/Port) - orange, appliqué via bouton
-        NetworkAddressGroup = self.CreateNetworkAddressGroup()
-        Layout.addWidget(NetworkAddressGroup)
+        # Panneau adresse réseau (IP/Port) — déplié
+        NetworkAddressPanel = self.CreateNetworkAddressPanel()
+        ContentLayout.addWidget(NetworkAddressPanel)
 
-        # Groupe paramètres dynamiques (mot de passe, batch_size, work_dir) - vert
-        DynamicGroup = self.CreateDynamicGroup()
-        Layout.addWidget(DynamicGroup)
+        # Panneau paramètres dynamiques — déplié
+        DynamicPanel = self.CreateDynamicPanel()
+        ContentLayout.addWidget(DynamicPanel)
 
-        Layout.addStretch()
+        # Panneau Interface Web — replié par défaut
+        WebUiPanel = self.CreateWebUiPanel()
+        ContentLayout.addWidget(WebUiPanel)
 
-    def CreateNetworkAddressGroup(self) -> QGroupBox:
-        """Crée le groupe d'adresse réseau (IP/Ports) - appliqué via bouton"""
-        Group = QGroupBox("Adresse reseau (cliquer Appliquer pour changer)")
-        Group.setObjectName("NetworkGroup")  # Permet de cibler avec CSS si nécessaire
+        ContentLayout.addStretch()
 
-        MainLayout = QVBoxLayout()
+        # Zone de scroll
+        ScrollArea = QScrollArea()
+        ScrollArea.setWidget(ScrollContent)
+        ScrollArea.setWidgetResizable(True)
+        ScrollArea.setFrameShape(QScrollArea.NoFrame)
+
+        MainLayout.addWidget(ScrollArea)
+
+    def CreateNetworkAddressPanel(self) -> CollapsiblePanel:
+        """Crée le panneau d'adresse réseau (IP/Ports) - appliqué via bouton"""
+        Panel = CollapsiblePanel("Adresse reseau (cliquer Appliquer pour changer)", Expanded=True)
+
+        ContentWidget = QWidget()
+        MainLayout = QVBoxLayout(ContentWidget)
+        MainLayout.setContentsMargins(0, 0, 0, 0)
+
         FormLayout = QFormLayout()
 
         # IPv4
@@ -167,17 +194,17 @@ class ConfigTab(QWidget):
 
         self.ApplyNetworkButton = QPushButton("Appliquer les changements reseau")
         self.ApplyNetworkButton.setObjectName("ApplyNetworkButton")
-        self.ApplyNetworkButton.setProperty("class", "warning")  # Style warning (orange)
+        self.ApplyNetworkButton.setProperty("class", "warning")
         self.ApplyNetworkButton.clicked.connect(self.ApplyNetworkChanges)
         ButtonLayout.addWidget(self.ApplyNetworkButton)
 
         MainLayout.addLayout(ButtonLayout)
-        Group.setLayout(MainLayout)
-        return Group
+        Panel.AddWidget(ContentWidget)
+        return Panel
 
-    def CreateAppearanceGroup(self) -> QGroupBox:
-        """Crée le groupe Apparence (thème)"""
-        Group = QGroupBox("Apparence")
+    def CreateAppearancePanel(self) -> CollapsiblePanel:
+        """Crée le panneau Apparence (thème) — replié par défaut"""
+        Panel = CollapsiblePanel("Apparence", Expanded=False)
 
         FormLayout = QFormLayout()
 
@@ -197,8 +224,10 @@ class ConfigTab(QWidget):
 
         FormLayout.addRow("Theme:", ThemeLayout)
 
-        Group.setLayout(FormLayout)
-        return Group
+        FormWidget = QWidget()
+        FormWidget.setLayout(FormLayout)
+        Panel.AddWidget(FormWidget)
+        return Panel
 
     def OnThemeChanged(self, Index: int):
         """Appelé quand le thème change - applique immédiatement et déclenche l'auto-save"""
@@ -233,10 +262,9 @@ class ConfigTab(QWidget):
         except Exception as e:
             self.ParentWindow.Logger.error(f"Erreur lors de l'auto-save du theme: {e}")
 
-    def CreateDynamicGroup(self) -> QGroupBox:
-        """Crée le groupe des paramètres dynamiques (appliqués immédiatement)"""
-        Group = QGroupBox("Parametres dynamiques (appliques immediatement)")
-        Group.setObjectName("DynamicGroup")
+    def CreateDynamicPanel(self) -> CollapsiblePanel:
+        """Crée le panneau des paramètres dynamiques (appliqués immédiatement)"""
+        Panel = CollapsiblePanel("Parametres dynamiques (appliques immediatement)", Expanded=True)
 
         FormLayout = QFormLayout()
 
@@ -323,8 +351,75 @@ class ConfigTab(QWidget):
 
         FormLayout.addRow("Repertoire de travail:", WorkDirLayout)
 
-        Group.setLayout(FormLayout)
-        return Group
+        FormWidget = QWidget()
+        FormWidget.setLayout(FormLayout)
+        Panel.AddWidget(FormWidget)
+        return Panel
+
+    def CreateWebUiPanel(self) -> CollapsiblePanel:
+        """Crée le panneau Interface Web (hôte/port, auto-save, redémarrage requis)"""
+        Panel = CollapsiblePanel("Interface Web (redemarrage requis)", Expanded=False)
+
+        FormLayout = QFormLayout()
+
+        # Adresse d'écoute
+        WebHostLayout = QHBoxLayout()
+        self.WebHostInput = QLineEdit()
+        self.WebHostInput.setPlaceholderText("0.0.0.0 (toutes interfaces)")
+        self.WebHostInput.textChanged.connect(self.OnWebUIChanged)
+        WebHostLayout.addWidget(self.WebHostInput)
+
+        WebHostNote = QLabel("(sauvegarde automatique)")
+        WebHostNote.setProperty("class", "hint")
+        WebHostLayout.addWidget(WebHostNote)
+        WebHostLayout.addStretch()
+
+        FormLayout.addRow("Adresse d'ecoute:", WebHostLayout)
+
+        # Port
+        WebPortLayout = QHBoxLayout()
+        self.WebPortInput = QSpinBox()
+        self.WebPortInput.setMinimum(1024)
+        self.WebPortInput.setMaximum(65535)
+        self.WebPortInput.setValue(8780)
+        self.WebPortInput.valueChanged.connect(self.OnWebUIChanged)
+        WebPortLayout.addWidget(self.WebPortInput)
+
+        WebPortNote = QLabel("(necessite redemarrage du logiciel)")
+        WebPortNote.setProperty("class", "hint-warning")
+        WebPortLayout.addWidget(WebPortNote)
+        WebPortLayout.addStretch()
+
+        FormLayout.addRow("Port:", WebPortLayout)
+
+        FormWidget = QWidget()
+        FormWidget.setLayout(FormLayout)
+        Panel.AddWidget(FormWidget)
+        return Panel
+
+    def OnWebUIChanged(self):
+        """Appelé quand l'hôte ou le port de la Web UI change"""
+        if self.IsLoading:
+            return
+        self.WebUiAutoSaveTimer.stop()
+        self.WebUiAutoSaveTimer.start(self.AUTOSAVE_DELAY_MS)
+
+    def AutoSaveWebUI(self):
+        """Sauvegarde automatique des paramètres de la Web UI"""
+        try:
+            Database = self.ParentWindow.GetDatabase()
+            NewHost = self.WebHostInput.text().strip() or "0.0.0.0"
+            NewPort = self.WebPortInput.value()
+
+            if Database:
+                Database.SetParameter("web_host", NewHost, "Adresse d'écoute de l'interface web")
+                Database.SetParameter("web_port", str(NewPort), "Port de l'interface web")
+
+            self.ShowSavedIndicator()
+            self.ParentWindow.Logger.info(f"Web UI config mis a jour: {NewHost}:{NewPort} (redemarrage requis)")
+
+        except Exception as e:
+            self.ParentWindow.Logger.error(f"Erreur lors de l'auto-save Web UI: {e}")
 
     def BrowseWorkDirectory(self):
         """Ouvre le dialogue de sélection du répertoire de travail"""
@@ -360,6 +455,10 @@ class ConfigTab(QWidget):
                 self.CompressionLevelInput.setValue(Config.get('compression_level', 5))
                 self.MaxConcurrentBatchesInput.setValue(Config.get('max_concurrent_batches', 3))
 
+                # Charger les paramètres de la Web UI
+                self.WebHostInput.setText(Database.GetParameter("web_host", "0.0.0.0"))
+                self.WebPortInput.setValue(Database.GetParameterInt("web_port", 8780))
+
                 # Charger le thème
                 ThemeValue = Database.GetParameter('theme', ThemeManager.THEME_AUTO)
                 ThemeIndex = self.ThemeComboBox.findData(ThemeValue)
@@ -378,6 +477,8 @@ class ConfigTab(QWidget):
                 self.BatchSizeInput.setValue(100)
                 self.CompressionLevelInput.setValue(5)
                 self.MaxConcurrentBatchesInput.setValue(3)
+                self.WebHostInput.setText("0.0.0.0")
+                self.WebPortInput.setValue(8780)
                 self.ThemeComboBox.setCurrentIndex(0)  # Auto par défaut
 
         except Exception as e:
@@ -725,6 +826,7 @@ class ConfigTab(QWidget):
         self.WorkDirAutoSaveTimer.stop()
         self.CompressionLevelAutoSaveTimer.stop()
         self.MaxConcurrentBatchesAutoSaveTimer.stop()
+        self.WebUiAutoSaveTimer.stop()
 
         # Force l'exécution des auto-saves
         self.AutoSaveBatchSize()
@@ -732,6 +834,7 @@ class ConfigTab(QWidget):
         self.AutoSaveWorkDirectory()
         self.AutoSaveCompressionLevel()
         self.AutoSaveMaxConcurrentBatches()
+        self.AutoSaveWebUI()
 
         self.ParentWindow.Logger.info("Configuration sauvegardee (force)")
 

@@ -57,9 +57,15 @@ class ServerWindow(QMainWindow):
 
         # Interface web (démarrée au lancement, avant le serveur upscaling)
         try:
+            WebHost = self.Database.GetParameter("web_host", "0.0.0.0")
             WebPort = self.Database.GetParameterInt("web_port", NetworkConfig.SERVER_WEB_PORT)
             self.WebInterface = ServerWebInterface(self.Database)
-            self.WebInterface.Start(Host="0.0.0.0", Port=WebPort)
+            # Callbacks thread-safe via QTimer.singleShot (exécutés dans le thread Qt)
+            self.WebInterface.SetControlCallbacks(
+                OnStart=lambda: QTimer.singleShot(0, self.StartServer),
+                OnStop=lambda: QTimer.singleShot(0, self.StopServer)
+            )
+            self.WebInterface.Start(Host=WebHost, Port=WebPort)
             self.Logger.info(f"Web UI démarrée sur http://localhost:{WebPort}")
         except Exception as WebErr:
             self.Logger.warning(f"Impossible de démarrer la Web UI: {WebErr}")

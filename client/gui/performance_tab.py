@@ -80,6 +80,11 @@ class PerformanceTab(QWidget):
         self.ThemeAutoSaveTimer.setSingleShot(True)
         self.ThemeAutoSaveTimer.timeout.connect(self.AutoSaveTheme)
 
+        # Timer pour debounce de l'auto-save de la Web UI
+        self.WebUiAutoSaveTimer = QTimer()
+        self.WebUiAutoSaveTimer.setSingleShot(True)
+        self.WebUiAutoSaveTimer.timeout.connect(self.AutoSaveWebUI)
+
         # Stockage des checkboxes GPU
         self.GpuCheckboxes: List[QCheckBox] = []
 
@@ -140,6 +145,10 @@ class PerformanceTab(QWidget):
         # Panneau Stockage RAM (Full RAM Mode) - replie par defaut
         self.RamStoragePanel = self.CreateRamStoragePanel()
         ContentLayout.addWidget(self.RamStoragePanel)
+
+        # Panneau Interface Web - replie par defaut
+        self.WebUiPanel = self.CreateWebUiPanel()
+        ContentLayout.addWidget(self.WebUiPanel)
 
         # Barre d'actions (toujours visible)
         ActionBar = self.CreateActionBar()
@@ -921,6 +930,78 @@ class PerformanceTab(QWidget):
         if Directory:
             self.RamDiskPathInput.setText(Directory)
 
+    def CreateWebUiPanel(self) -> CollapsiblePanel:
+        """Cree le panneau Interface Web (hote/port, redemarrage requis)"""
+        Panel = CollapsiblePanel("Interface Web (redemarrage requis)", Expanded=False)
+
+        FormLayout = QFormLayout()
+
+        # Adresse d'ecoute
+        WebHostWidget = QWidget()
+        WebHostLayout = QHBoxLayout(WebHostWidget)
+        WebHostLayout.setContentsMargins(0, 0, 0, 0)
+
+        self.WebHostInput = QLineEdit()
+        self.WebHostInput.setPlaceholderText("127.0.0.1 (local uniquement)")
+        self.WebHostInput.textChanged.connect(self.OnWebUIChanged)
+        WebHostLayout.addWidget(self.WebHostInput)
+
+        WebHostNote = QLabel("(sauvegarde automatique)")
+        WebHostNote.setProperty("class", "hint")
+        WebHostLayout.addWidget(WebHostNote)
+        WebHostLayout.addStretch()
+
+        FormLayout.addRow("Adresse d'ecoute:", WebHostWidget)
+
+        # Port
+        WebPortWidget = QWidget()
+        WebPortLayout = QHBoxLayout(WebPortWidget)
+        WebPortLayout.setContentsMargins(0, 0, 0, 0)
+
+        self.WebPortSpinBox = QSpinBox()
+        self.WebPortSpinBox.setRange(1024, 65535)
+        self.WebPortSpinBox.setValue(8781)
+        self.WebPortSpinBox.valueChanged.connect(self.OnWebUIChanged)
+        WebPortLayout.addWidget(self.WebPortSpinBox)
+
+        WebPortNote = QLabel("(necessite redemarrage du logiciel)")
+        WebPortNote.setProperty("class", "hint-warning")
+        WebPortLayout.addWidget(WebPortNote)
+        WebPortLayout.addStretch()
+
+        FormLayout.addRow("Port:", WebPortWidget)
+
+        FormWidget = QWidget()
+        FormWidget.setLayout(FormLayout)
+        Panel.AddWidget(FormWidget)
+
+        return Panel
+
+    def OnWebUIChanged(self):
+        """Appele quand l'hote ou le port de la Web UI change"""
+        if self.IsLoading:
+            return
+        self.WebUiAutoSaveTimer.stop()
+        self.WebUiAutoSaveTimer.start(self.AUTOSAVE_DELAY_MS)
+
+    def AutoSaveWebUI(self):
+        """Sauvegarde automatique des parametres de la Web UI"""
+        try:
+            Config = self.ConfigManager.Load()
+            Config["web_host"] = self.WebHostInput.text().strip() or "127.0.0.1"
+            Config["web_port"] = self.WebPortSpinBox.value()
+            self.ConfigManager.Save(Config)
+            self.ShowSavedIndicator()
+
+            if hasattr(self.ParentWindow, 'Logger'):
+                self.ParentWindow.Logger.info(
+                    f"Web UI client config mise a jour: "
+                    f"{Config['web_host']}:{Config['web_port']} (redemarrage requis)"
+                )
+        except Exception as e:
+            if hasattr(self.ParentWindow, 'Logger'):
+                self.ParentWindow.Logger.error(f"Erreur auto-save Web UI: {e}")
+
     def CreateActionBar(self) -> QWidget:
         """Cree la barre d'actions"""
         ActionWidget = QWidget()
@@ -1387,6 +1468,12 @@ class PerformanceTab(QWidget):
                     AutoRemove = Config.get("ram_disk_auto_remove", True)
                     self.AutoRemoveCheckBox.setChecked(AutoRemove)
 
+            # Interface Web
+            WebHost = Config.get("web_host", "127.0.0.1")
+            WebPort = Config.get("web_port", 8781)
+            self.WebHostInput.setText(WebHost)
+            self.WebPortSpinBox.setValue(int(WebPort))
+
             # Met a jour l'affichage de l'espace disque
             self.UpdateDiskSpaceDisplay()
 
@@ -1513,7 +1600,10 @@ class PerformanceTab(QWidget):
             # Parametres RAM disk
             "ram_mode": self.RamModeCombo.currentData(),
             "ram_disk_path": self.RamDiskPathInput.text().strip(),
-            "ram_disk_min_size_mb": self.RamMinSpaceSpinBox.value()
+            "ram_disk_min_size_mb": self.RamMinSpaceSpinBox.value(),
+            # Interface web client
+            "web_host": self.WebHostInput.text().strip() or "127.0.0.1",
+            "web_port": self.WebPortSpinBox.value()
         }
 
         # Parametres Windows (si disponibles)

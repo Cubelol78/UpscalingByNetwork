@@ -34,6 +34,9 @@ DEFAULT_PARAMETERS = {
     "webhook_enabled": ("false", "Activer les webhooks Discord"),
     "webhook_url": ("", "URL du webhook Discord"),
     "webhook_events": ("", "Configuration JSON des événements webhook"),
+    # Interface web
+    "web_host": ("0.0.0.0", "Adresse d'écoute de l'interface web"),
+    "web_port": ("8780", "Port de l'interface web"),
 }
 
 

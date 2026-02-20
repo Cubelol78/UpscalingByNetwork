@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 from typing import Optional, List
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Request, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -79,6 +79,10 @@ class ServerWebInterface:
         self._Token = str(uuid.uuid4())
         self._Lock = threading.Lock()
 
+        # Callbacks démarrage/arrêt du serveur upscaling (optionnels, fournis par ServerWindow)
+        self._OnStart = None
+        self._OnStop = None
+
         # Thread/boucle dédiés
         self._Thread = None
         self._Loop = None
@@ -92,6 +96,15 @@ class ServerWebInterface:
         self._App = FastAPI(title="Upscaling Server Web UI", docs_url=None, redoc_url=None)
         self._SetupMiddleware()
         self._SetupRoutes()
+
+    def SetControlCallbacks(self, OnStart=None, OnStop=None):
+        """
+        Enregistre les callbacks pour démarrer/arrêter le serveur d'upscaling.
+        Doit être appelé depuis ServerWindow après la création de WebInterface.
+        Les callbacks seront invoqués depuis le thread web → doivent être thread-safe.
+        """
+        self._OnStart = OnStart
+        self._OnStop = OnStop
 
     def SetServerComponents(self, Server, JobManager, Distributor, ServerLoop=None):
         """
@@ -313,6 +326,28 @@ class ServerWebInterface:
             Videos = self.Database.GetAllVideos(Limit=100)
             return {"jobs": [self._VideoToDict(V) for V in Videos]}
 
+        @App.post("/api/server/start")
+        async def StartUpscalingServer(request: Request):
+            self._RequireAuth(request)
+            with self._Lock:
+                if self.Server is not None:
+                    raise HTTPException(status_code=409, detail="Serveur déjà démarré")
+            if not self._OnStart:
+                raise HTTPException(status_code=501, detail="Démarrage non disponible depuis la Web UI")
+            self._OnStart()
+            return {"status": "starting"}
+
+        @App.post("/api/server/stop")
+        async def StopUpscalingServer(request: Request):
+            self._RequireAuth(request)
+            with self._Lock:
+                if self.Server is None:
+                    raise HTTPException(status_code=409, detail="Serveur déjà arrêté")
+            if not self._OnStop:
+                raise HTTPException(status_code=501, detail="Arrêt non disponible depuis la Web UI")
+            self._OnStop()
+            return {"status": "stopping"}
+
         @App.post("/api/jobs")
         async def CreateJob(Body: JobCreateRequest, request: Request):
             self._RequireAuth(request)
@@ -324,19 +359,51 @@ class ServerWebInterface:
             if not os.path.isfile(Body.path):
                 raise HTTPException(status_code=400, detail=f"Fichier introuvable: {Body.path}")
 
-            VideoId = await self._RunInServerLoop(
-                JobMgr.AddJob(
-                    VideoPath=Body.path,
-                    UpscaleFactor=Body.upscale_factor,
-                    Engine=Body.engine,
-                    Model=Body.model,
-                    TtaMode=Body.tta_mode,
-                    DenoiseLevel=Body.denoise_level
-                )
+            VideoId = JobMgr.AddVideo(
+                VideoPath=Body.path,
+                UpscaleFactor=Body.upscale_factor,
+                Engine=Body.engine,
+                Model=Body.model,
+                TtaMode=Body.tta_mode,
+                DenoiseLevel=Body.denoise_level
             )
             if not VideoId:
                 raise HTTPException(status_code=500, detail="Impossible d'ajouter la vidéo")
             return {"success": True, "video_id": VideoId}
+
+        @App.post("/api/upload")
+        async def UploadVideo(request: Request, file: UploadFile = File(...)):
+            self._RequireAuth(request)
+            with self._Lock:
+                if not self.JobManager:
+                    raise HTTPException(status_code=503, detail="Serveur non démarré")
+            WorkDir = self.Database.GetParameter("work_directory", "./work")
+            InputDir = os.path.join(WorkDir, "input")
+            os.makedirs(InputDir, exist_ok=True)
+            # Nom de fichier sécurisé + gestion des collisions
+            BaseName = os.path.basename(file.filename or "upload.mp4").replace("..", "_")
+            SavePath = os.path.join(InputDir, BaseName)
+            if os.path.exists(SavePath):
+                Name, Ext = os.path.splitext(BaseName)
+                Counter = 1
+                while os.path.exists(SavePath):
+                    SavePath = os.path.join(InputDir, f"{Name}_{Counter}{Ext}")
+                    Counter += 1
+            # Écriture streamée par chunks de 1 Mo
+            try:
+                with open(SavePath, "wb") as F:
+                    while True:
+                        Chunk = await file.read(1024 * 1024)
+                        if not Chunk:
+                            break
+                        F.write(Chunk)
+            except Exception as E:
+                if os.path.exists(SavePath):
+                    os.remove(SavePath)
+                raise HTTPException(status_code=500, detail=f"Erreur lors de l'écriture du fichier: {E}")
+            AbsPath = os.path.abspath(SavePath)
+            self.Logger.info(f"Fichier uploadé: {os.path.basename(SavePath)}")
+            return {"path": AbsPath, "filename": os.path.basename(SavePath)}
 
         @App.delete("/api/jobs/{VideoId}")
         async def DeleteJob(VideoId: str, request: Request):
@@ -346,7 +413,7 @@ class ServerWebInterface:
                     raise HTTPException(status_code=503, detail="Serveur non démarré")
                 JobMgr = self.JobManager
 
-            Success = await self._RunInServerLoop(JobMgr.CancelJob(VideoId))
+            Success = JobMgr.CancelVideo(VideoId)
             if not Success:
                 # Essayer juste la suppression en DB
                 self.Database.DeleteVideo(VideoId)
@@ -364,6 +431,9 @@ class ServerWebInterface:
             Config["webhook_enabled"] = self.Database.GetParameter("webhook_enabled", "false") == "true"
             Config["webhook_url"] = self.Database.GetParameter("webhook_url", "")
             Config["webhook_events"] = self.Database.GetParameter("webhook_events", "")
+            # Ajouter paramètres Web UI
+            Config["web_host"] = self.Database.GetParameter("web_host", "0.0.0.0")
+            Config["web_port"] = self.Database.GetParameterInt("web_port", NetworkConfig.SERVER_WEB_PORT)
             return Config
 
         @App.put("/api/config")
