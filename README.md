@@ -23,8 +23,11 @@ Système distribué d'upscaling vidéo utilisant Real-ESRGAN pour traiter des vi
 - ✅ Support encodage AV1 (optionnel)
 - ✅ Interface CLI interactive
 - ✅ **Interface graphique (GUI) PyQt5**
+- ✅ **Interface Web (FastAPI + Vanilla JS) - Port 8780**
 - ✅ Base de données SQLite pour tracking
 - ✅ Gestion des timeouts et retry automatique
+- ✅ WebSocket temps réel pour monitoring
+- ✅ Upload vidéo via web UI
 
 ### Client
 - ✅ Connexion sécurisée au serveur
@@ -32,8 +35,11 @@ Système distribué d'upscaling vidéo utilisant Real-ESRGAN pour traiter des vi
 - ✅ Gestion des serveurs favoris
 - ✅ Interface CLI simple
 - ✅ **Interface graphique (GUI) PyQt5**
+- ✅ **Interface Web (FastAPI + Vanilla JS) - Port 8781**
 - ✅ Heartbeat automatique
 - ✅ Nettoyage automatique des fichiers temporaires
+- ✅ WebSocket temps réel pour monitoring
+- ✅ Configuration de performance web
 
 ### Sécurité
 - 🔒 Handshake Diffie-Hellman (2048 bits)
@@ -114,7 +120,33 @@ python3 main.py --cli
 
 ## 🚀 Utilisation
 
-### Mode GUI (Interface graphique) - Recommandé
+### Mode Web UI (Interface web) - Nouveau! 🎨
+
+**Serveur Web:**
+- Adresse: `http://localhost:8780`
+- Interface moderne avec design Glassmorphism
+- Dashboard temps réel via WebSocket
+- Gestion complète des jobs, clients, configuration
+- Upload vidéo direct
+- Authentication par mot de passe (optionnel)
+
+**Client Web:**
+- Adresse: `http://localhost:8781`
+- Monitoring temps réel des batches
+- Gestion des serveurs sauvegardés
+- Configuration de performance
+- Logs streaming
+
+**Accès direct:**
+```bash
+# Les interfaces web démarrent automatiquement avec le serveur/client
+# Serveur: http://localhost:8780
+# Client: http://localhost:8781
+```
+
+---
+
+### Mode GUI (Interface graphique PyQt5)
 
 **Démarrer le serveur avec GUI:**
 ```bash
@@ -293,8 +325,16 @@ UpscalingByNetwork/
 │   ├── utils/
 │   │   ├── ffmpeg_handler.py
 │   │   └── realesrgan_handler.py
-│   └── cli/
-│       └── server_cli.py    # Interface CLI
+│   ├── gui/
+│   │   └── server_window.py # Interface PyQt5
+│   ├── cli/
+│   │   └── server_cli.py    # Interface CLI
+│   └── web/                 # Interface Web (NOUVEAU)
+│       ├── server_web.py    # FastAPI backend (port 8780)
+│       └── static/
+│           ├── index.html   # UI HTML5 glassmorphism
+│           ├── style.css    # Design moderne
+│           └── app.js       # Logic vanilla JS + WebSocket
 │
 ├── client/                   # Client
 │   ├── core/
@@ -303,8 +343,16 @@ UpscalingByNetwork/
 │   │   └── processor.py     # Traitement local
 │   ├── utils/
 │   │   └── realesrgan_handler.py
-│   └── cli/
-│       └── client_cli.py    # Interface CLI
+│   ├── gui/
+│   │   └── client_window.py # Interface PyQt5
+│   ├── cli/
+│   │   └── client_cli.py    # Interface CLI
+│   └── web/                 # Interface Web (NOUVEAU)
+│       ├── client_web.py    # FastAPI backend (port 8781)
+│       └── static/
+│           ├── index.html   # UI HTML5 glassmorphism
+│           ├── style.css    # Design moderne
+│           └── app.js       # Logic vanilla JS + WebSocket
 │
 └── realesrgan-ncnn-vulkan-*/  # Exécutables Real-ESRGAN
     ├── models/               # Modèles AI
@@ -319,6 +367,51 @@ UpscalingByNetwork/
 - **[DEVELOPMENT_SUMMARY.md](DEVELOPMENT_SUMMARY.md)** - Résumé du développement
 - **[CLAUDE.md](CLAUDE.md)** - Spécifications détaillées du projet
 - **Logs** - Consultez `logs/server.log` et `logs/client.log`
+
+## 🎨 Interface Web (Nouveau!)
+
+Les interfaces web offrent une alternative moderne aux CLI et GUI:
+
+### Caractéristiques
+- **Design Glassmorphism** - Interface moderne avec backdrop-filter blur, gradients et glow effects
+- **Temps réel** - WebSocket pour monitoring en direct (rafraîchissement 1s)
+- **Responsive** - Compatible mobile et desktop
+- **Sans dépendances externes** - HTML5 vanilla JS, CSS pur, FastAPI backend
+- **Dark/Light mode** - Adaptation automatique aux préférences système
+
+### Serveur Web (Port 8780)
+- Dashboard avec statistiques (clients, vidéos, batches)
+- Liste des clients connectés avec statut détaillé
+- Gestion des jobs (création, annulation, suppression)
+- Configuration serveur (réseau, sécurité, traitement)
+- Upload vidéo direct avec progress bar
+- Webhooks Discord intégrés
+- Authentication par mot de passe (optionnel)
+
+### Client Web (Port 8781)
+- État de connexion au serveur
+- Monitoring temps réel des batches en cours
+- Logs streaming (50 derniers logs)
+- Gestion des serveurs sauvegardés
+- Configuration de performance (tile size, threads)
+- Webhooks Discord intégrés
+
+### Architecture Web
+```
+Frontend (Vanilla JS):
+├── index.html      (370 lignes) - Markup HTML5
+├── style.css       (500 lignes) - Glassmorphism design
+└── app.js          (560 lignes) - WebSocket + API fetch + rendu DOM
+
+Backend (FastAPI):
+├── server_web.py   (665 lignes) - Routes REST + WebSocket
+└── client_web.py   (400 lignes) - Routes REST + WebSocket
+```
+
+### SVG Icons
+- Remplacement de tous les emojis par SVG inline
+- Style Feather/Lucide (stroke-based)
+- Héritent la couleur du texte (`currentColor`)
 
 ## 🔒 Sécurité
 
@@ -412,13 +505,15 @@ ls -la realesrgan-ncnn-vulkan-20220424-windows/realesrgan-ncnn-vulkan.exe
 
 ## 🎯 Roadmap
 
-- [ ] GUI (Tkinter/PyQt)
+- [x] GUI (PyQt5) ✅
+- [x] Interface Web temps réel ✅
 - [ ] Support multi-vidéos simultanées
 - [ ] Compression réseau optimisée
 - [ ] Mode cluster (multi-serveurs)
-- [ ] Dashboard web temps réel
 - [ ] Support Docker
-- [ ] API REST
+- [ ] API REST avancée
+- [ ] Authentification multi-utilisateur
+- [ ] Téléchargement vidéo final depuis web UI
 
 ## 📝 License
 

@@ -4,6 +4,12 @@
 
 'use strict';
 
+// ── SVG ICONS (inline) ───────────────────────────────────────
+const _svgDot = '<svg class="icon" width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg>';
+const _svgDotBig = '<svg class="icon" width="10" height="10" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg>';
+const _svgCheck = '<svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+const _svgCross = '<svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+
 let _ws = null;
 let _wsReconnectTimeout = null;
 let _perfSaveTimeout = null;
@@ -75,17 +81,19 @@ function renderConnectionTab(status) {
   // Badge header
   const badge = document.getElementById('conn-badge');
   badge.className = connected ? 'connected' : (st === 'connecting' ? 'connecting' : 'disconnected');
-  badge.textContent = connected ? `● ${status.server_address || 'Connecté'}` : (st === 'connecting' ? '● Connexion...' : '● Déconnecté');
+  badge.innerHTML = connected
+    ? `${_svgDot} ${escHtml(status.server_address || 'Connecté')}`
+    : (st === 'connecting' ? `${_svgDot} Connexion...` : `${_svgDot} Déconnecté`);
 
   // Big status
   const big = document.getElementById('conn-status-big');
   const addr = document.getElementById('conn-server-addr');
   if (connected) {
-    big.textContent = '● Connecté';
+    big.innerHTML = `${_svgDotBig} Connecté`;
     big.style.color = 'var(--success)';
     addr.textContent = `${status.server_address || ''}:${status.control_port || ''}`;
   } else {
-    big.textContent = st === 'connecting' ? '● Connexion en cours...' : '● Déconnecté';
+    big.innerHTML = st === 'connecting' ? `${_svgDotBig} Connexion en cours...` : `${_svgDotBig} Déconnecté`;
     big.style.color = st === 'connecting' ? 'var(--warning)' : 'var(--danger)';
     addr.textContent = '';
   }
@@ -334,11 +342,14 @@ async function testWebhook() {
   if (res && res.ok) {
     const d = await res.json();
     el.style.color = d.success ? 'var(--success)' : 'var(--danger)';
-    el.textContent = d.success ? '✓ Webhook envoyé' : `✗ ${d.error || 'Erreur'}`;
+    el.innerHTML = d.success
+      ? `${_svgCheck} Webhook envoyé`
+      : `${_svgCross} ${escHtml(d.error || 'Erreur')}`;
   } else {
-    el.style.color = 'var(--danger)'; el.textContent = '✗ Erreur réseau';
+    el.style.color = 'var(--danger)';
+    el.innerHTML = `${_svgCross} Erreur réseau`;
   }
-  setTimeout(() => { el.textContent = ''; }, 4000);
+  setTimeout(() => { el.innerHTML = ''; }, 4000);
 }
 
 // ── TAB NAVIGATION ────────────────────────────────────────────
@@ -370,9 +381,12 @@ function getVal(id)       { const el = document.getElementById(id); return el ? 
 
 function showToast(msg, error = false) {
   const t = document.createElement('div');
-  t.style.cssText = `position:fixed;bottom:24px;right:24px;padding:10px 18px;border-radius:6px;
-    background:${error ? 'var(--danger)' : 'var(--success)'};color:#fff;font-size:13px;
-    font-weight:600;z-index:9999;box-shadow:var(--shadow);`;
+  t.style.cssText = `position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:var(--radius-sm);
+    background:${error ? 'rgba(224,82,82,0.85)' : 'rgba(76,175,120,0.85)'};
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    color:#fff;font-size:13px;font-weight:600;z-index:9999;
+    box-shadow:0 8px 32px rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.1);
+    animation:fadeSlideIn .3s ease;`;
   t.textContent = msg;
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 3000);

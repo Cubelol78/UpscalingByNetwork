@@ -10,21 +10,21 @@
 
 <!-- ── HEADER ── -->
 <header>
-  <h1>🖥️ Upscaling Client</h1>
-  <span id="conn-badge" class="disconnected">● Déconnecté</span>
+  <h1><svg class="icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> Upscaling Client</h1>
+  <span id="conn-badge" class="disconnected"><svg class="icon" width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg> D&eacute;connect&eacute;</span>
   <div id="ws-status">
     <div class="ws-dot" id="ws-dot"></div>
-    <span id="ws-label">Déconnecté</span>
+    <span id="ws-label">D&eacute;connect&eacute;</span>
   </div>
 </header>
 
 <!-- ── TABS BAR ── -->
 <nav class="tabs-bar">
-  <button class="tab-btn active" onclick="switchTab('connection', this)">🔌 Connexion</button>
-  <button class="tab-btn" onclick="switchTab('monitoring', this)">📈 Monitoring</button>
-  <button class="tab-btn" onclick="switchTab('servers', this)">🗄️ Serveurs</button>
-  <button class="tab-btn" onclick="switchTab('performance', this)">⚡ Performance</button>
-  <button class="tab-btn" onclick="switchTab('webhooks', this)">🔔 Webhooks</button>
+  <button class="tab-btn active" onclick="switchTab('connection', this)"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a6 6 0 0 1-12 0V8z"/></svg> Connexion</button>
+  <button class="tab-btn" onclick="switchTab('monitoring', this)"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg> Monitoring</button>
+  <button class="tab-btn" onclick="switchTab('servers', this)"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg> Serveurs</button>
+  <button class="tab-btn" onclick="switchTab('performance', this)"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Performance</button>
+  <button class="tab-btn" onclick="switchTab('webhooks', this)"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg> Webhooks</button>
 </nav>
 
 <!-- ════════════════════════════════════════════
@@ -32,23 +32,23 @@
 ════════════════════════════════════════════ -->
 <div id="tab-connection" class="tab-panel active">
   <div class="card">
-    <div class="card-title">État de la connexion</div>
+    <div class="card-title">&Eacute;tat de la connexion</div>
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
-      <span id="conn-status-big" style="font-size:18px;font-weight:700">● Déconnecté</span>
+      <span id="conn-status-big" style="font-size:18px;font-weight:700;display:inline-flex;align-items:center;gap:8px"><svg class="icon" width="10" height="10" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg> D&eacute;connect&eacute;</span>
       <span id="conn-server-addr" style="color:var(--text2);font-size:13px"></span>
     </div>
     <button class="btn btn-danger" id="btn-disconnect" onclick="doDisconnect()" style="display:none">
-      ⏹ Déconnecter
+      <svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="4" y="4" width="16" height="16" rx="2"/></svg> D&eacute;connecter
     </button>
   </div>
 
   <div id="connect-form-card" class="card">
-    <div class="card-title">Se connecter à un serveur</div>
+    <div class="card-title">Se connecter &agrave; un serveur</div>
 
     <div class="form-group">
-      <label>Serveur sauvegardé (optionnel)</label>
+      <label>Serveur sauvegard&eacute; (optionnel)</label>
       <select id="saved-server-select" onchange="loadSavedServer()">
-        <option value="">— Choisir un serveur sauvegardé —</option>
+        <option value="">&mdash; Choisir un serveur sauvegard&eacute; &mdash;</option>
       </select>
     </div>
 
@@ -68,7 +68,7 @@
     </div>
     <div id="conn-error" style="color:var(--danger);font-size:13px;margin-bottom:12px;display:none;"></div>
     <div style="display:flex;gap:8px;align-items:center">
-      <button class="btn btn-primary" onclick="doConnect()">▶ Connecter</button>
+      <button class="btn btn-primary" onclick="doConnect()"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg> Connecter</button>
       <div class="form-group" style="margin:0;display:flex;align-items:center;gap:8px">
         <label class="checkbox-group" style="color:var(--text2);font-size:12px">
           <input type="checkbox" id="conn-save">
@@ -86,15 +86,15 @@
   <div class="stat-grid">
     <div class="stat-card">
       <div class="stat-value" id="stat-batches-ok">0</div>
-      <div class="stat-label">Batches traités</div>
+      <div class="stat-label">Batches trait&eacute;s</div>
     </div>
     <div class="stat-card">
       <div class="stat-value" id="stat-batches-fail">0</div>
-      <div class="stat-label">Batches échoués</div>
+      <div class="stat-label">Batches &eacute;chou&eacute;s</div>
     </div>
     <div class="stat-card">
       <div class="stat-value" id="stat-images">0</div>
-      <div class="stat-label">Images traitées</div>
+      <div class="stat-label">Images trait&eacute;es</div>
     </div>
     <div class="stat-card">
       <div class="stat-value" id="stat-queue">0</div>
@@ -105,7 +105,7 @@
   <div class="card">
     <div class="card-title">Batch en cours</div>
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-      <span id="current-status-badge" class="badge badge-disconnected">Déconnecté</span>
+      <span id="current-status-badge" class="badge badge-disconnected">D&eacute;connect&eacute;</span>
       <span id="current-batch-id" style="font-family:monospace;font-size:12px;color:var(--text2)"></span>
     </div>
     <progress id="batch-progress" value="0" max="100"></progress>
@@ -115,7 +115,7 @@
   </div>
 
   <div class="card">
-    <div class="card-title">Logs récents</div>
+    <div class="card-title">Logs r&eacute;cents</div>
     <div class="log-container" id="log-container">
       <div class="log-entry" style="color:var(--text2)">En attente de connexion...</div>
     </div>
@@ -143,7 +143,7 @@
           </tr>
         </thead>
         <tbody id="servers-tbody">
-          <tr><td colspan="5" class="no-data">Aucun serveur sauvegardé</td></tr>
+          <tr><td colspan="5" class="no-data">Aucun serveur sauvegard&eacute;</td></tr>
         </tbody>
       </table>
     </div>
@@ -174,13 +174,13 @@
         <input type="number" id="cfg-save-threads" min="1" max="16" oninput="schedulePerfSave()">
       </div>
     </div>
-    <span class="save-indicator" id="perf-save-indicator">✓ Sauvegardé</span>
+    <span class="save-indicator" id="perf-save-indicator"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Sauvegard&eacute;</span>
   </div>
 
   <div class="card">
     <div class="card-title">Mode de stockage temporaire</div>
     <div class="form-group">
-      <label>Répertoire de travail</label>
+      <label>R&eacute;pertoire de travail</label>
       <input type="text" id="cfg-work-dir" placeholder="./work" oninput="schedulePerfSave()">
     </div>
   </div>
@@ -203,7 +203,7 @@
       <input type="url" id="wh-url" placeholder="https://discord.com/api/webhooks/..." oninput="scheduleWebhookSave()">
     </div>
     <div style="margin-top:16px">
-      <button class="btn btn-secondary" onclick="testWebhook()">🔔 Tester</button>
+      <button class="btn btn-secondary" onclick="testWebhook()"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg> Tester</button>
       <span id="wh-test-result" style="margin-left:12px;font-size:13px;"></span>
     </div>
   </div>
@@ -212,7 +212,7 @@
 <!-- ── MODAL: AJOUTER SERVEUR ── -->
 <div id="add-server-modal" style="display:none" class="modal-backdrop">
   <div class="modal">
-    <h3>🗄️ Ajouter un serveur</h3>
+    <h3><svg class="icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg> Ajouter un serveur</h3>
     <div class="form-group">
       <label>Nom du serveur</label>
       <input type="text" id="srv-name" placeholder="Mon serveur">

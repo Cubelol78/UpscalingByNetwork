@@ -413,10 +413,10 @@ class ServerWebInterface:
                     raise HTTPException(status_code=503, detail="Serveur non démarré")
                 JobMgr = self.JobManager
 
-            Success = JobMgr.CancelVideo(VideoId)
-            if not Success:
-                # Essayer juste la suppression en DB
-                self.Database.DeleteVideo(VideoId)
+            # Annule le traitement si la vidéo est active (queued/processing)
+            JobMgr.CancelVideo(VideoId)
+            # Supprime toujours l'entrée de la DB (CancelVideo ne supprime pas)
+            self.Database.DeleteVideo(VideoId)
             return {"success": True}
 
         # ----------------------------------------------------------------

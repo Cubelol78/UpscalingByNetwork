@@ -11,7 +11,7 @@
 <!-- ── LOGIN OVERLAY ── -->
 <div id="login-overlay">
   <div class="login-card">
-    <h2>🔐 Connexion</h2>
+    <h2><svg class="icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> Connexion</h2>
     <div class="form-group">
       <label for="login-password">Mot de passe du serveur</label>
       <input type="password" id="login-password" placeholder="Mot de passe..." autocomplete="current-password">
@@ -23,22 +23,22 @@
 
 <!-- ── HEADER ── -->
 <header>
-  <h1>⚙️ Upscaling Server</h1>
-  <span id="server-status-badge" class="stopped">● Arrêté</span>
-  <button id="server-power-btn" class="btn btn-primary btn-sm" onclick="toggleServerPower()" style="margin-left:4px">▶ Démarrer</button>
+  <h1><svg class="icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> Upscaling Server</h1>
+  <span id="server-status-badge" class="stopped"><svg class="icon" width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg> Arret&eacute;</span>
+  <button id="server-power-btn" class="btn btn-primary btn-sm" onclick="toggleServerPower()" style="margin-left:4px"><svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg> D&eacute;marrer</button>
   <div id="ws-status">
     <div class="ws-dot" id="ws-dot"></div>
-    <span id="ws-label">Déconnecté</span>
+    <span id="ws-label">D&eacute;connect&eacute;</span>
   </div>
 </header>
 
 <!-- ── TABS BAR ── -->
 <nav class="tabs-bar">
-  <button class="tab-btn active" onclick="switchTab('dashboard', this)">📊 Dashboard</button>
-  <button class="tab-btn" onclick="switchTab('clients', this)">💻 Clients</button>
-  <button class="tab-btn" onclick="switchTab('jobs', this)">🎬 Jobs</button>
-  <button class="tab-btn" onclick="switchTab('config', this)">⚙️ Configuration</button>
-  <button class="tab-btn" onclick="switchTab('webhooks', this)">🔔 Webhooks</button>
+  <button class="tab-btn active" onclick="switchTab('dashboard', this)"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg> Dashboard</button>
+  <button class="tab-btn" onclick="switchTab('clients', this)"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> Clients</button>
+  <button class="tab-btn" onclick="switchTab('jobs', this)"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/><line x1="17" y1="17" x2="22" y2="17"/></svg> Jobs</button>
+  <button class="tab-btn" onclick="switchTab('config', this)"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> Configuration</button>
+  <button class="tab-btn" onclick="switchTab('webhooks', this)"><svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg> Webhooks</button>
 </nav>
 
 <!-- ════════════════════════════════════════════
@@ -52,7 +52,7 @@
     </div>
     <div class="stat-card">
       <div class="stat-value" id="stat-queued">0</div>
-      <div class="stat-label">Vidéos en queue</div>
+      <div class="stat-label">Vid&eacute;os en queue</div>
     </div>
     <div class="stat-card">
       <div class="stat-value" id="stat-processing">0</div>
@@ -64,18 +64,18 @@
     </div>
     <div class="stat-card">
       <div class="stat-value" id="stat-batches-done">0</div>
-      <div class="stat-label">Batches complétés</div>
+      <div class="stat-label">Batches compl&eacute;t&eacute;s</div>
     </div>
     <div class="stat-card">
-      <div class="stat-value" id="stat-uptime">—</div>
+      <div class="stat-value" id="stat-uptime">&mdash;</div>
       <div class="stat-label">Uptime serveur</div>
     </div>
   </div>
 
   <div class="card">
-    <div class="card-title">Activité récente</div>
+    <div class="card-title">Activit&eacute; r&eacute;cente</div>
     <ul class="activity-list" id="activity-list">
-      <li><span style="color:var(--text2)">Aucune activité récente</span></li>
+      <li><span style="color:var(--text2)">Aucune activit&eacute; r&eacute;cente</span></li>
     </ul>
   </div>
 </div>
@@ -99,7 +99,7 @@
           </tr>
         </thead>
         <tbody id="clients-tbody">
-          <tr><td colspan="7" class="no-data">Aucun client connecté</td></tr>
+          <tr><td colspan="7" class="no-data">Aucun client connect&eacute;</td></tr>
         </tbody>
       </table>
     </div>
@@ -111,7 +111,7 @@
 ════════════════════════════════════════════ -->
 <div id="tab-jobs" class="tab-panel">
   <div class="toolbar">
-    <button class="btn btn-primary" onclick="showAddJobModal()">+ Ajouter une vidéo</button>
+    <button class="btn btn-primary" onclick="showAddJobModal()">+ Ajouter une vid&eacute;o</button>
   </div>
 
   <div class="card">
@@ -125,7 +125,7 @@
             <th>Progression</th>
             <th>Batches</th>
             <th>Facteur</th>
-            <th>Modèle</th>
+            <th>Mod&egrave;le</th>
             <th>TTA</th>
             <th>Action</th>
           </tr>
@@ -145,8 +145,8 @@
 
   <div class="card collapsible" id="cfg-card-network">
     <div class="card-header" onclick="toggleSection('cfg-card-network')">
-      <div class="card-title">Réseau</div>
-      <span class="card-arrow">▼</span>
+      <div class="card-title">R&eacute;seau</div>
+      <span class="card-arrow"><svg class="icon icon-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
     </div>
     <div class="card-body">
       <div class="form-row">
@@ -159,11 +159,11 @@
           <input type="text" id="cfg-ipv6" placeholder="::" oninput="scheduleConfigSave()">
         </div>
         <div class="form-group">
-          <label>Port contrôle</label>
+          <label>Port contr&ocirc;le</label>
           <input type="number" id="cfg-port" min="1024" max="65535" oninput="scheduleConfigSave()">
         </div>
         <div class="form-group">
-          <label>Port données</label>
+          <label>Port donn&eacute;es</label>
           <input type="number" id="cfg-data-port" min="1024" max="65535" oninput="scheduleConfigSave()">
         </div>
       </div>
@@ -172,12 +172,12 @@
 
   <div class="card collapsible" id="cfg-card-security">
     <div class="card-header" onclick="toggleSection('cfg-card-security')">
-      <div class="card-title">Sécurité</div>
-      <span class="card-arrow">▼</span>
+      <div class="card-title">S&eacute;curit&eacute;</div>
+      <span class="card-arrow"><svg class="icon icon-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
     </div>
     <div class="card-body">
       <div class="form-group">
-        <label>Mot de passe serveur (vide = désactivé)</label>
+        <label>Mot de passe serveur (vide = d&eacute;sactiv&eacute;)</label>
         <input type="password" id="cfg-password" placeholder="Mot de passe..." oninput="scheduleConfigSave()">
       </div>
     </div>
@@ -186,7 +186,7 @@
   <div class="card collapsible" id="cfg-card-processing">
     <div class="card-header" onclick="toggleSection('cfg-card-processing')">
       <div class="card-title">Traitement</div>
-      <span class="card-arrow">▼</span>
+      <span class="card-arrow"><svg class="icon icon-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
     </div>
     <div class="card-body">
       <div class="form-row">
@@ -195,7 +195,7 @@
           <input type="number" id="cfg-batch-size" min="10" max="1000" oninput="scheduleConfigSave()">
         </div>
         <div class="form-group">
-          <label>Batches simultanés max</label>
+          <label>Batches simultan&eacute;s max</label>
           <input type="number" id="cfg-max-batches" min="1" max="999" oninput="scheduleConfigSave()">
         </div>
         <div class="form-group">
@@ -208,12 +208,12 @@
 
   <div class="card collapsible" id="cfg-card-workdir">
     <div class="card-header" onclick="toggleSection('cfg-card-workdir')">
-      <div class="card-title">Répertoire de travail</div>
-      <span class="card-arrow">▼</span>
+      <div class="card-title">R&eacute;pertoire de travail</div>
+      <span class="card-arrow"><svg class="icon icon-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
     </div>
     <div class="card-body">
       <div class="form-group">
-        <label>Chemin (redémarrage requis)</label>
+        <label>Chemin (red&eacute;marrage requis)</label>
         <input type="text" id="cfg-work-dir" placeholder="./work" oninput="scheduleConfigSave()">
       </div>
     </div>
@@ -223,14 +223,14 @@
     <div class="card-header" onclick="toggleSection('cfg-card-webui')">
       <div class="card-title">
         Interface Web
-        <span style="color:var(--warning);font-size:11px;font-weight:normal;margin-left:8px;text-transform:none;letter-spacing:0">redémarrage requis</span>
+        <span style="color:var(--warning);font-size:11px;font-weight:normal;margin-left:8px;text-transform:none;letter-spacing:0">red&eacute;marrage requis</span>
       </div>
-      <span class="card-arrow">▼</span>
+      <span class="card-arrow"><svg class="icon icon-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
     </div>
     <div class="card-body">
       <div class="form-row">
         <div class="form-group">
-          <label>Adresse d'écoute</label>
+          <label>Adresse d'&eacute;coute</label>
           <input type="text" id="cfg-web-host" placeholder="0.0.0.0" oninput="scheduleConfigSave()">
         </div>
         <div class="form-group">
@@ -241,7 +241,7 @@
     </div>
   </div>
 
-  <span class="save-indicator" id="save-indicator">✓ Sauvegardé</span>
+  <span class="save-indicator" id="save-indicator"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Sauvegard&eacute;</span>
 </div>
 
 <!-- ════════════════════════════════════════════
@@ -261,7 +261,7 @@
       <input type="url" id="wh-url" placeholder="https://discord.com/api/webhooks/..." oninput="scheduleWebhookSave()">
     </div>
     <div style="margin-top:16px">
-      <button class="btn btn-secondary" onclick="testWebhook()">🔔 Tester le webhook</button>
+      <button class="btn btn-secondary" onclick="testWebhook()"><svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg> Tester le webhook</button>
       <span id="wh-test-result" style="margin-left:12px;font-size:13px;"></span>
     </div>
   </div>
@@ -272,7 +272,7 @@
 ════════════════════════════════════════════ -->
 <div id="add-job-modal" style="display:none" class="modal-backdrop">
   <div class="modal">
-    <h3>🎬 Ajouter une vidéo</h3>
+    <h3><svg class="icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/><line x1="17" y1="17" x2="22" y2="17"/></svg> Ajouter une vid&eacute;o</h3>
 
     <!-- Mode toggle -->
     <div class="form-group">
@@ -280,18 +280,18 @@
       <div class="mode-toggle">
         <label class="mode-option">
           <input type="radio" name="job-mode" value="upload" checked>
-          ⬆️ Upload depuis mon PC
+          <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg> Upload depuis mon PC
         </label>
         <label class="mode-option">
           <input type="radio" name="job-mode" value="path">
-          📂 Chemin serveur
+          <svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> Chemin serveur
         </label>
       </div>
     </div>
 
     <!-- Section upload -->
     <div class="form-group" id="job-upload-section">
-      <label>Fichier vidéo</label>
+      <label>Fichier vid&eacute;o</label>
       <input type="file" id="job-file" accept="video/*">
       <div class="upload-progress-wrap" id="job-upload-progress" style="display:none">
         <progress id="job-progress-bar" value="0" max="100"></progress>
@@ -301,7 +301,7 @@
 
     <!-- Section chemin serveur -->
     <div class="form-group" id="job-path-section" style="display:none">
-      <label>Chemin du fichier vidéo (sur le serveur)</label>
+      <label>Chemin du fichier vid&eacute;o (sur le serveur)</label>
       <input type="text" id="job-path" placeholder="/chemin/vers/video.mp4">
     </div>
 
@@ -323,18 +323,18 @@
       </div>
     </div>
     <div class="form-group">
-      <label>Modèle</label>
+      <label>Mod&egrave;le</label>
       <select id="job-model">
-        <option value="realesr-animevideov3">realesr-animevideov3 (recommandé)</option>
+        <option value="realesr-animevideov3">realesr-animevideov3 (recommand&eacute;)</option>
         <option value="realesrgan-x4plus-anime">realesrgan-x4plus-anime</option>
         <option value="realesrgan-x4plus">realesrgan-x4plus</option>
       </select>
     </div>
     <div class="form-group" id="job-denoise-group" style="display:none">
-      <label>Niveau de débruitage (Real-CUGAN)</label>
+      <label>Niveau de d&eacute;bruitage (Real-CUGAN)</label>
       <select id="job-denoise">
         <option value="-1">-1 (conservatif)</option>
-        <option value="0">0 (désactivé)</option>
+        <option value="0">0 (d&eacute;sactiv&eacute;)</option>
         <option value="1">1</option>
         <option value="2">2</option>
         <option value="3">3</option>
@@ -343,7 +343,7 @@
     <div class="form-group">
       <label class="checkbox-group">
         <input type="checkbox" id="job-tta">
-        Mode TTA (meilleure qualité, plus lent)
+        Mode TTA (meilleure qualit&eacute;, plus lent)
       </label>
     </div>
     <div id="job-error" style="color:var(--danger);font-size:13px;margin-bottom:8px;display:none;"></div>

@@ -134,6 +134,13 @@ function updateWsDot(connected) {
   else           { dot.className = 'ws-dot';            lbl.textContent = 'Déconnecté'; }
 }
 
+// ── SVG ICONS (inline) ───────────────────────────────────────
+const _svgDot = '<svg class="icon" width="8" height="8" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg>';
+const _svgPlay = '<svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
+const _svgStop = '<svg class="icon" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>';
+const _svgCheck = '<svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+const _svgCross = '<svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+
 // ── RENDER STATE (depuis WebSocket) ──────────────────────────
 async function toggleServerPower() {
   const btn = document.getElementById('server-power-btn');
@@ -153,12 +160,12 @@ function renderState(state) {
   const btn   = document.getElementById('server-power-btn');
   if (state.server_running) {
     badge.className = 'running';
-    badge.textContent = `● En cours (${state.uptime_str || ''})`;
-    if (btn) { btn.textContent = '⏹ Arrêter'; btn.className = 'btn btn-danger btn-sm'; btn.dataset.running = '1'; }
+    badge.innerHTML = `${_svgDot} En cours (${escHtml(state.uptime_str || '')})`;
+    if (btn) { btn.innerHTML = `${_svgStop} Arrêter`; btn.className = 'btn btn-danger btn-sm'; btn.dataset.running = '1'; }
   } else {
     badge.className = 'stopped';
-    badge.textContent = '● Arrêté';
-    if (btn) { btn.textContent = '▶ Démarrer'; btn.className = 'btn btn-primary btn-sm'; btn.dataset.running = '0'; }
+    badge.innerHTML = `${_svgDot} Arrêté`;
+    if (btn) { btn.innerHTML = `${_svgPlay} Démarrer`; btn.className = 'btn btn-primary btn-sm'; btn.dataset.running = '0'; }
   }
 
   // Dashboard
@@ -243,7 +250,7 @@ function renderJobs(jobs) {
       <td>${j.completed_batches}/${j.total_batches}</td>
       <td>x${j.upscale_factor}</td>
       <td style="font-size:12px;max-width:120px;overflow:hidden;text-overflow:ellipsis" title="${escHtml(j.model)}">${escHtml(j.model)}</td>
-      <td>${j.tta_mode ? '✓' : '—'}</td>
+      <td>${j.tta_mode ? _svgCheck : '—'}</td>
       <td>
         <button class="btn btn-danger btn-sm" onclick="deleteJob('${escHtml(j.video_id)}')"
           ${j.status === 'completed' || j.status === 'failed' ? '' : ''}>
@@ -498,12 +505,14 @@ async function testWebhook() {
   if (res && res.ok) {
     const data = await res.json();
     resultEl.style.color = data.success ? 'var(--success)' : 'var(--danger)';
-    resultEl.textContent = data.success ? '✓ Webhook envoyé' : `✗ ${data.error || 'Erreur'}`;
+    resultEl.innerHTML = data.success
+      ? `${_svgCheck} Webhook envoyé`
+      : `${_svgCross} ${escHtml(data.error || 'Erreur')}`;
   } else {
     resultEl.style.color = 'var(--danger)';
-    resultEl.textContent = '✗ Erreur réseau';
+    resultEl.innerHTML = `${_svgCross} Erreur réseau`;
   }
-  setTimeout(() => { resultEl.textContent = ''; }, 4000);
+  setTimeout(() => { resultEl.innerHTML = ''; }, 4000);
 }
 
 // ── TAB NAVIGATION ────────────────────────────────────────────
@@ -557,11 +566,13 @@ function setVal(id, val)  { const el = document.getElementById(id); if (el) el.v
 function getVal(id)       { const el = document.getElementById(id); return el ? el.value : ''; }
 
 function showToast(msg, error = false) {
-  // Simple toast notification
   const t = document.createElement('div');
-  t.style.cssText = `position:fixed;bottom:24px;right:24px;padding:10px 18px;border-radius:6px;
-    background:${error ? 'var(--danger)' : 'var(--success)'};color:#fff;font-size:13px;
-    font-weight:600;z-index:9999;box-shadow:var(--shadow);animation:fadeIn .3s;`;
+  t.style.cssText = `position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:var(--radius-sm);
+    background:${error ? 'rgba(224,82,82,0.85)' : 'rgba(76,175,120,0.85)'};
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    color:#fff;font-size:13px;font-weight:600;z-index:9999;
+    box-shadow:0 8px 32px rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.1);
+    animation:fadeSlideIn .3s ease;`;
   t.textContent = msg;
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 3000);
