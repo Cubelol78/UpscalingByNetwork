@@ -193,14 +193,27 @@ function renderServersTab(servers) {
 
 // ── CONNEXION ─────────────────────────────────────────────────
 function loadSavedServer() {
-  if (!_lastState) return;
   const name = document.getElementById('saved-server-select').value;
-  if (!name) return;
+  const saveGroup = document.getElementById('conn-save-group');
+  const saveCheckbox = document.getElementById('conn-save');
+
+  if (!name) {
+    // Saisie manuelle — afficher la checkbox
+    if (saveGroup) saveGroup.style.display = 'flex';
+    if (saveCheckbox) { saveCheckbox.disabled = false; saveCheckbox.checked = false; }
+    return;
+  }
+
+  if (!_lastState) return;
   const srv = (_lastState.servers || {})[name];
   if (!srv) return;
   setVal('conn-host', srv.host || '');
   setVal('conn-port', srv.port || 8765);
   setVal('conn-password', srv.password || '');
+
+  // Masquer la checkbox — ce serveur est déjà sauvegardé
+  if (saveGroup) saveGroup.style.display = 'none';
+  if (saveCheckbox) saveCheckbox.checked = false;
 }
 
 async function doConnect() {
@@ -220,8 +233,8 @@ async function doConnect() {
   const res = await apiFetch('/api/connect', { method: 'POST', body: JSON.stringify(body) });
 
   if (res && res.ok) {
-    // Sauvegarder si demandé
-    if (document.getElementById('conn-save').checked && host) {
+    // Sauvegarder si demandé et pas déjà sauvegardé
+    if (document.getElementById('conn-save').checked && host && !_isServerAlreadySaved(host, port)) {
       const name = `${host}:${port}`;
       await apiFetch('/api/servers', {
         method: 'POST',
@@ -250,6 +263,14 @@ async function connectToSaved(name) {
   const res = await apiFetch('/api/connect', { method: 'POST', body: JSON.stringify(body) });
   if (res && res.ok) showToast('Connexion en cours...');
   else showToast('Erreur de connexion', true);
+}
+
+function _isServerAlreadySaved(host, port) {
+  if (!_lastState || !_lastState.servers) return false;
+  for (const [name, srv] of Object.entries(_lastState.servers)) {
+    if (srv.host === host && srv.port === port) return true;
+  }
+  return false;
 }
 
 // ── GESTION SERVEURS ──────────────────────────────────────────

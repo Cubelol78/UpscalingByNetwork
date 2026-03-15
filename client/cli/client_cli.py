@@ -22,7 +22,7 @@ from shared.utils.constants import ClientStatus, CompressionConfig, NetworkConfi
 class ClientCLI:
     """Interface CLI du client"""
 
-    def __init__(self):
+    def __init__(self, DirectHost=None, DirectPort=None, DirectPassword=""):
         """Initialise l'interface CLI"""
         self.Client = None
         self.ServerManager = SavedServersManager()
@@ -30,6 +30,9 @@ class ClientCLI:
         self.Running = False
         self.MonitoringTask = None
         self.WebInterface = None
+        self.DirectHost = DirectHost
+        self.DirectPort = DirectPort or 8765
+        self.DirectPassword = DirectPassword or ""
 
     async def Start(self):
         """Démarre l'interface CLI"""
@@ -50,7 +53,11 @@ class ClientCLI:
             click.echo(f"⚠ Web UI non disponible: {WebErr}")
             self.WebInterface = None
 
-        await self.MainMenu()
+        if self.DirectHost:
+            click.echo(f"\nConnexion directe à {self.DirectHost}:{self.DirectPort}...")
+            await self.ConnectDirect()
+        else:
+            await self.MainMenu()
 
     async def MainMenu(self):
         """Menu principal"""
@@ -111,10 +118,22 @@ class ClientCLI:
             else:
                 # Autre serveur
                 Host, Port, Password = self._PromptServerDetails()
+                # Proposer la sauvegarde si pas déjà enregistré
+                if self.ServerManager.FindServerByHostPort(Host, Port) is None:
+                    if click.confirm("Sauvegarder ce serveur pour une connexion ultérieure?", default=False):
+                        Name = click.prompt("Nom du serveur", default=f"{Host}:{Port}")
+                        self.ServerManager.AddServer(Name, Host, Port, Password)
+                        click.echo(f"Serveur '{Name}' sauvegardé")
         else:
             # Pas de serveurs sauvegardés
             click.echo("\nAucun serveur sauvegardé")
             Host, Port, Password = self._PromptServerDetails()
+            # Proposer la sauvegarde si pas déjà enregistré
+            if self.ServerManager.FindServerByHostPort(Host, Port) is None:
+                if click.confirm("Sauvegarder ce serveur pour une connexion ultérieure?", default=False):
+                    Name = click.prompt("Nom du serveur", default=f"{Host}:{Port}")
+                    self.ServerManager.AddServer(Name, Host, Port, Password)
+                    click.echo(f"Serveur '{Name}' sauvegardé")
 
         # Crée le client
         self.Client = UpscalingClient()
@@ -149,6 +168,42 @@ class ClientCLI:
                 await self.Client.Stop()
 
             # Déconnecter la web UI
+            if self.WebInterface:
+                self.WebInterface.ClearClient()
+
+    async def ConnectDirect(self):
+        """Connexion directe au serveur avec les paramètres passés en argument"""
+        Host = self.DirectHost
+        Port = self.DirectPort
+        Password = self.DirectPassword
+
+        self.Client = UpscalingClient()
+
+        if self.WebInterface:
+            self.WebInterface.SetClient(self.Client)
+
+        try:
+            self.Running = True
+            self.MonitoringTask = asyncio.create_task(self._MonitorStatus())
+
+            await self.Client.Start(Host, Port, Password)
+
+        except KeyboardInterrupt:
+            click.echo("\n\n✗ Interruption utilisateur")
+        except Exception as e:
+            click.echo(f"\n✗ Erreur: {e}")
+        finally:
+            self.Running = False
+            if self.MonitoringTask:
+                self.MonitoringTask.cancel()
+                try:
+                    await self.MonitoringTask
+                except asyncio.CancelledError:
+                    pass
+
+            if self.Client:
+                await self.Client.Stop()
+
             if self.WebInterface:
                 self.WebInterface.ClearClient()
 
@@ -512,9 +567,9 @@ class ClientCLI:
 # FONCTION PRINCIPALE
 # ============================================================================
 
-def Main():
+def Main(Host=None, Port=None, Password=""):
     """Fonction principale CLI"""
-    Cli = ClientCLI()
+    Cli = ClientCLI(DirectHost=Host, DirectPort=Port, DirectPassword=Password)
 
     try:
         asyncio.run(Cli.Start())

@@ -146,25 +146,30 @@ class ConnectionTab(QWidget):
                 self.ConnectButton.setEnabled(False)
                 self.DisconnectButton.setEnabled(True)
 
-                # Demander si on veut sauvegarder le serveur
-                Reply = QMessageBox.question(
-                    self,
-                    'Sauvegarder le serveur?',
-                    'Voulez-vous sauvegarder ce serveur pour une connexion ultérieure?',
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No
-                )
+                # Vérifier si ce serveur est déjà sauvegardé
+                ConnectionManager = self.ParentWindow.GetConnectionManager()
+                ExistingName = ConnectionManager.SavedServers.FindServerByHostPort(Host, Port)
 
-                if Reply == QMessageBox.Yes:
-                    from PyQt5.QtWidgets import QInputDialog
-                    ServerName, Ok = QInputDialog.getText(
+                if ExistingName is None:
+                    # Le serveur n'est pas sauvegardé — demander
+                    Reply = QMessageBox.question(
                         self,
-                        'Nom du serveur',
-                        'Entrez un nom pour ce serveur:'
+                        'Sauvegarder le serveur?',
+                        'Voulez-vous sauvegarder ce serveur pour une connexion ultérieure?',
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No
                     )
 
-                    if Ok and ServerName:
-                        self.SaveServer(ServerName, Host, Port, Password)
+                    if Reply == QMessageBox.Yes:
+                        from PyQt5.QtWidgets import QInputDialog
+                        ServerName, Ok = QInputDialog.getText(
+                            self,
+                            'Nom du serveur',
+                            'Entrez un nom pour ce serveur:'
+                        )
+
+                        if Ok and ServerName:
+                            self.SaveServer(ServerName, Host, Port, Password)
 
         except Exception as e:
             self.ParentWindow.Logger.error(f"Erreur lors de la connexion: {e}")
