@@ -402,6 +402,10 @@ class ClientWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Gère la fermeture de la fenêtre"""
+        # Arrêter le timer immédiatement pour éviter les accès aux composants en cours d'arrêt
+        if hasattr(self, 'RefreshTimer') and self.RefreshTimer:
+            self.RefreshTimer.stop()
+
         if self.IsRunning:
             Reply = QMessageBox.question(
                 self,
@@ -415,12 +419,25 @@ class ClientWindow(QMainWindow):
                 self.DisconnectFromServer()
                 if self.WebInterface:
                     self.WebInterface.Stop()
+                # Arrêter le thread de détection matériel si encore actif
+                if hasattr(self, 'HardwareDetectionThread') and self.HardwareDetectionThread:
+                    if self.HardwareDetectionThread.isRunning():
+                        self.HardwareDetectionThread.quit()
+                        self.HardwareDetectionThread.wait(2000)
                 event.accept()
             else:
+                # Reprendre le timer si l'utilisateur annule la fermeture
+                if hasattr(self, 'RefreshTimer') and self.RefreshTimer:
+                    self.RefreshTimer.start()
                 event.ignore()
         else:
             if self.WebInterface:
                 self.WebInterface.Stop()
+            # Arrêter le thread de détection matériel si encore actif
+            if hasattr(self, 'HardwareDetectionThread') and self.HardwareDetectionThread:
+                if self.HardwareDetectionThread.isRunning():
+                    self.HardwareDetectionThread.quit()
+                    self.HardwareDetectionThread.wait(2000)
             event.accept()
 
 

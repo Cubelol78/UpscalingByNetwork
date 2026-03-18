@@ -296,11 +296,11 @@ class UpscalingClient:
             self.GpuLock = asyncio.Lock()
 
             # Initialise la queue d'envoi prioritaire (heartbeats > status)
-            self.OutgoingQueue = asyncio.PriorityQueue()
+            self.OutgoingQueue = asyncio.PriorityQueue(maxsize=500)
             self.OutgoingTask = asyncio.create_task(self._OutgoingMessageLoop())
 
             # Initialise la queue de résultats et démarre le sender en arrière-plan
-            self.ResultQueue = asyncio.Queue()
+            self.ResultQueue = asyncio.Queue(maxsize=500)
             self.SenderTask = asyncio.create_task(self._SenderLoop())
 
             # Démarre la réception des batches sur le canal Data

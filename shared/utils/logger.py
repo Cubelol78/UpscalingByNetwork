@@ -61,7 +61,7 @@ class MemoryLogHandler(logging.Handler):
             Message = self.format(Record)
             # Ajoute au buffer (automatiquement supprime le plus ancien si plein)
             self.LogBuffer.append({
-                'time': datetime.fromtimestamp(Record.created),
+                'time': datetime.fromtimestamp(Record.created).strftime('%H:%M:%S'),
                 'level': Record.levelname,
                 'message': Record.getMessage(),
                 'formatted': Message

@@ -126,7 +126,14 @@ class ServerCLI:
             )
 
         # Menu interactif
-        await self.InteractiveMenu()
+        try:
+            await self.InteractiveMenu()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            # Arrêt dans la même boucle asyncio
+            if self.Running:
+                await self.StopServer()
 
     async def StopServer(self):
         """Arrête le serveur"""
@@ -398,8 +405,6 @@ def Main():
         asyncio.run(Cli.StartServer())
     except KeyboardInterrupt:
         click.echo("\n\n✗ Interruption utilisateur")
-        if Cli.Running:
-            asyncio.run(Cli.StopServer())
     except Exception as e:
         click.echo(f"\n✗ Erreur: {e}")
         import traceback

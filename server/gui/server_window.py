@@ -349,6 +349,10 @@ class ServerWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Gère la fermeture de la fenêtre"""
+        # Arrêter le timer immédiatement pour éviter les accès aux composants en cours d'arrêt
+        if hasattr(self, 'RefreshTimer') and self.RefreshTimer:
+            self.RefreshTimer.stop()
+
         if self.IsRunning:
             Reply = QMessageBox.question(
                 self,
@@ -364,6 +368,9 @@ class ServerWindow(QMainWindow):
                     self.WebInterface.Stop()
                 event.accept()
             else:
+                # Reprendre le timer si l'utilisateur annule la fermeture
+                if hasattr(self, 'RefreshTimer') and self.RefreshTimer:
+                    self.RefreshTimer.start()
                 event.ignore()
         else:
             if self.WebInterface:

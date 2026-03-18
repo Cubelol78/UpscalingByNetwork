@@ -798,11 +798,11 @@ class BatchDistributor:
                         # Convertit en PNG si nécessaire (FFmpeg compatibility)
                         if ReceivedFormat != "png":
                             try:
-                                Buffer = io.BytesIO(ImageBytes)
-                                with Image.open(Buffer) as Img:
-                                    OutputBuffer = io.BytesIO()
-                                    Img.save(OutputBuffer, format='PNG')
-                                    ImageBytes = OutputBuffer.getvalue()
+                                with io.BytesIO(ImageBytes) as Buffer:
+                                    with Image.open(Buffer) as Img:
+                                        with io.BytesIO() as OutputBuffer:
+                                            Img.save(OutputBuffer, format='PNG')
+                                            ImageBytes = OutputBuffer.getvalue()
                             except Exception as conv_err:
                                 raise ValueError(
                                     f"Échec conversion {ReceivedFormat}->PNG frame {FrameNumber}: {conv_err}"
@@ -1011,11 +1011,11 @@ class BatchDistributor:
                         # Convertit en PNG si nécessaire (FFmpeg compatibility)
                         if ReceivedFormat != "png":
                             try:
-                                Buffer = io.BytesIO(ImageBytes)
-                                with Image.open(Buffer) as Img:
-                                    OutputBuffer = io.BytesIO()
-                                    Img.save(OutputBuffer, format='PNG')
-                                    ImageBytes = OutputBuffer.getvalue()
+                                with io.BytesIO(ImageBytes) as Buffer:
+                                    with Image.open(Buffer) as Img:
+                                        with io.BytesIO() as OutputBuffer:
+                                            Img.save(OutputBuffer, format='PNG')
+                                            ImageBytes = OutputBuffer.getvalue()
                             except Exception as ConvErr:
                                 raise ValueError(
                                     f"Échec conversion {ReceivedFormat}->PNG frame {FrameNumber}: {ConvErr}"

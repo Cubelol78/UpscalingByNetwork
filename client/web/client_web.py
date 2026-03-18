@@ -70,7 +70,10 @@ class ClientWebInterface:
         try:
             from client.core.connection import SavedServersManager
             self.ServerManager = SavedServersManager()
-        except Exception:
+            Servers = self.ServerManager.GetAllServers()
+            self.Logger.info(f"ServerManager initialisé: {len(Servers)} serveur(s) chargé(s)")
+        except Exception as E:
+            self.Logger.error(f"Impossible d'initialiser le gestionnaire de serveurs: {E}", exc_info=True)
             self.ServerManager = None
 
         # Gestionnaire de config performances
@@ -371,7 +374,7 @@ class ClientWebInterface:
             except WebSocketDisconnect:
                 pass
             except Exception as e:
-                self.Logger.debug(f"Erreur WebSocket client: {e}")
+                self.Logger.error(f"Erreur WebSocket client: {e}", exc_info=True)
 
     # ========================================================================
     # ÉTAT COMPLET

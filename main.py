@@ -388,13 +388,16 @@ def LaunchServer(CliMode, AutoAccept=False):
             sys.exit(1)
 
 
-def LaunchClient(CliMode, AutoAccept=False):
+def LaunchClient(CliMode, AutoAccept=False, Host=None, Port=None, Password=""):
     """
     Lance le client
 
     Args:
         CliMode: True pour mode CLI
         AutoAccept: Auto-accepte la configuration du pare-feu
+        Host: Adresse du serveur pour connexion directe (optionnel)
+        Port: Port du serveur pour connexion directe (optionnel)
+        Password: Mot de passe du serveur (optionnel)
     """
     print("\n" + "="*60)
     print("Lancement du client d'upscaling")
@@ -406,7 +409,7 @@ def LaunchClient(CliMode, AutoAccept=False):
     if CliMode:
         try:
             from client.cli.client_cli import Main as ClientCliMain
-            ClientCliMain()
+            ClientCliMain(Host=Host, Port=Port, Password=Password)
         except ImportError as e:
             print(f"✗ Erreur: Module client CLI non trouvé: {e}")
             print("Assurez-vous que toutes les dépendances sont installées")
@@ -434,14 +437,16 @@ def Main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Exemples d'utilisation:
-  python main.py                    Lancement interactif (GUI par défaut)
-  python main.py --cli              Lancement interactif en mode CLI
-  python main.py --server           Lancement direct du serveur (GUI)
-  python main.py --server --cli     Lancement direct du serveur (CLI)
-  python main.py --client           Lancement direct du client (GUI)
-  python main.py --client --cli     Lancement direct du client (CLI)
-  python main.py --server --yes     Serveur avec auto-acceptation (venv, pare-feu)
-  python main.py --client -y        Client avec auto-acceptation (raccourci)
+  python main.py                                    Lancement interactif (GUI par défaut)
+  python main.py --cli                              Lancement interactif en mode CLI
+  python main.py --server                           Lancement direct du serveur (GUI)
+  python main.py --server --cli                     Lancement direct du serveur (CLI)
+  python main.py --client                           Lancement direct du client (GUI)
+  python main.py --client --cli                     Lancement direct du client (CLI)
+  python main.py --client --cli --host 192.168.1.1  Connexion directe sans menu
+  python main.py --client --cli --host 192.168.1.1 --port 8765 --password monpass
+  python main.py --server --yes                     Serveur avec auto-acceptation (venv, pare-feu)
+  python main.py --client -y                        Client avec auto-acceptation (raccourci)
 
 Environnement virtuel:
   python main.py --recreate-venv    Recrée l'environnement virtuel
@@ -461,6 +466,26 @@ Environnement virtuel:
         "--client",
         action="store_true",
         help="Lance directement le client sans demander"
+    )
+
+    # Groupe d'arguments connexion directe client
+    ClientGroup = Parser.add_argument_group("Connexion directe client (avec --client --cli)")
+    ClientGroup.add_argument(
+        "--host", "--ip",
+        dest="host",
+        default=None,
+        help="Adresse IP ou hostname du serveur (connexion directe sans menu)"
+    )
+    ClientGroup.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Port du serveur (défaut: 8765)"
+    )
+    ClientGroup.add_argument(
+        "--password",
+        default="",
+        help="Mot de passe du serveur (optionnel)"
     )
 
     # Groupe d'arguments pour auto-acceptation (multiples variantes)
@@ -561,7 +586,7 @@ Environnement virtuel:
     if Mode == "server":
         LaunchServer(Args.cli, Args.auto_accept)
     elif Mode == "client":
-        LaunchClient(Args.cli, Args.auto_accept)
+        LaunchClient(Args.cli, Args.auto_accept, Args.host, Args.port, Args.password)
     else:
         print(f"✗ Mode inconnu: {Mode}")
         sys.exit(1)

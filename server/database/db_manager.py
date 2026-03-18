@@ -100,9 +100,8 @@ class DatabaseManager:
 
     def _CreateTables(self):
         """Crée les tables si elles n'existent pas"""
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
-
             # Crée les tables
             Cursor.execute(SQL_CREATE_PARAMETERS_TABLE)
             Cursor.execute(SQL_CREATE_VIDEOS_TABLE)
@@ -122,12 +121,13 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la création des tables: {e}")
             raise
+        finally:
+            Cursor.close()
 
     def _MigrateTables(self):
         """Migre les tables existantes pour ajouter les nouvelles colonnes"""
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
-
             # Vérifie les colonnes existantes dans la table videos
             Cursor.execute("PRAGMA table_info(videos)")
             ExistingColumns = {Row[1] for Row in Cursor.fetchall()}
@@ -150,6 +150,8 @@ class DatabaseManager:
 
         except Exception as e:
             self.Logger.error(f"Erreur lors de la migration des tables: {e}")
+        finally:
+            Cursor.close()
 
     def Close(self):
         """Ferme la connexion à la base de données"""
@@ -173,8 +175,8 @@ class DatabaseManager:
         Returns:
             True si succès
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
             Cursor.execute(
                 """
                 INSERT OR REPLACE INTO parameters (key, value, description, updated_at)
@@ -188,6 +190,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la définition du paramètre {Key}: {e}")
             return False
+        finally:
+            Cursor.close()
 
     def GetParameter(self, Key: str, Default: Optional[str] = None) -> Optional[str]:
         """
@@ -200,8 +204,8 @@ class DatabaseManager:
         Returns:
             Valeur du paramètre ou Default
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
             Result = Cursor.execute(
                 "SELECT value FROM parameters WHERE key = ?",
                 (Key,)
@@ -212,6 +216,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la récupération du paramètre {Key}: {e}")
             return Default
+        finally:
+            Cursor.close()
 
     def GetAllParameters(self) -> List[Parameter]:
         """
@@ -220,8 +226,8 @@ class DatabaseManager:
         Returns:
             Liste des paramètres
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
             Rows = Cursor.execute("SELECT * FROM parameters").fetchall()
 
             Parameters = []
@@ -238,6 +244,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la récupération des paramètres: {e}")
             return []
+        finally:
+            Cursor.close()
 
     def GetParameterInt(self, Key: str, Default: int = 0) -> int:
         """
@@ -362,8 +370,8 @@ class DatabaseManager:
         Returns:
             True si succès
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
             Cursor.execute(
                 """
                 INSERT INTO videos (
@@ -390,6 +398,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de l'ajout de la vidéo: {e}")
             return False
+        finally:
+            Cursor.close()
 
     def GetVideo(self, VideoId: str) -> Optional[Video]:
         """
@@ -401,8 +411,8 @@ class DatabaseManager:
         Returns:
             Objet Video ou None
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
             Row = Cursor.execute(
                 "SELECT * FROM videos WHERE video_id = ?",
                 (VideoId,)
@@ -416,6 +426,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la récupération de la vidéo {VideoId}: {e}")
             return None
+        finally:
+            Cursor.close()
 
     def UpdateVideo(self, Video: Video) -> bool:
         """
@@ -427,8 +439,8 @@ class DatabaseManager:
         Returns:
             True si succès
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
             Cursor.execute(
                 """
                 UPDATE videos SET
@@ -451,6 +463,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la mise à jour de la vidéo: {e}")
             return False
+        finally:
+            Cursor.close()
 
     def DeleteVideo(self, VideoId: str) -> bool:
         """
@@ -462,9 +476,8 @@ class DatabaseManager:
         Returns:
             True si succès
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
-
             # Supprime d'abord tous les batches associés (contrainte de clé étrangère)
             Cursor.execute("DELETE FROM batches WHERE video_id = ?", (VideoId,))
 
@@ -478,6 +491,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la suppression de la vidéo {VideoId}: {e}")
             return False
+        finally:
+            Cursor.close()
 
     def GetQueuedVideos(self) -> List[Video]:
         """
@@ -486,8 +501,8 @@ class DatabaseManager:
         Returns:
             Liste des vidéos en attente
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
             Rows = Cursor.execute(
                 "SELECT * FROM videos WHERE status = ? ORDER BY created_at ASC",
                 (JobStatus.QUEUED,)
@@ -498,6 +513,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la récupération des vidéos en attente: {e}")
             return []
+        finally:
+            Cursor.close()
 
     def GetCurrentVideo(self) -> Optional[Video]:
         """
@@ -506,8 +523,8 @@ class DatabaseManager:
         Returns:
             Vidéo en cours ou None
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
             Row = Cursor.execute(
                 """
                 SELECT * FROM videos
@@ -526,6 +543,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la récupération de la vidéo courante: {e}")
             return None
+        finally:
+            Cursor.close()
 
     def GetAllVideos(self, Limit: int = None) -> List[Video]:
         """
@@ -537,8 +556,8 @@ class DatabaseManager:
         Returns:
             Liste des vidéos
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
             if Limit:
                 Rows = Cursor.execute(
                     "SELECT * FROM videos ORDER BY created_at DESC LIMIT ?",
@@ -554,6 +573,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la récupération des vidéos: {e}")
             return []
+        finally:
+            Cursor.close()
 
     # ========================================================================
     # BATCHES
@@ -569,8 +590,8 @@ class DatabaseManager:
         Returns:
             True si succès
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
             Cursor.execute(
                 """
                 INSERT INTO batches (
@@ -593,6 +614,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de l'ajout du batch: {e}")
             return False
+        finally:
+            Cursor.close()
 
     def GetBatch(self, BatchId: str) -> Optional[Batch]:
         """
@@ -604,8 +627,8 @@ class DatabaseManager:
         Returns:
             Objet Batch ou None
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
             Row = Cursor.execute(
                 "SELECT * FROM batches WHERE batch_id = ?",
                 (BatchId,)
@@ -619,6 +642,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la récupération du batch {BatchId}: {e}")
             return None
+        finally:
+            Cursor.close()
 
     def UpdateBatch(self, Batch: Batch) -> bool:
         """
@@ -630,8 +655,8 @@ class DatabaseManager:
         Returns:
             True si succès
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
             Cursor.execute(
                 """
                 UPDATE batches SET
@@ -651,6 +676,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la mise à jour du batch: {e}")
             return False
+        finally:
+            Cursor.close()
 
     def UpdateBatchConditional(self, BatchId: str, NewStatus: str, ExpectedStatus: str,
                                 AssignedClientId: Optional[str] = None,
@@ -682,9 +709,8 @@ class DatabaseManager:
             >>> if not success:
             ...     # Batch déjà assigné par un autre processus
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
-
             # UPDATE conditionnel : WHERE batch_id = ? AND status = expected_status
             Cursor.execute(
                 """
@@ -719,6 +745,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur UpdateBatchConditional pour batch {BatchId}: {e}")
             return False
+        finally:
+            Cursor.close()
 
     def GetPendingBatches(self, VideoId: str) -> List[Batch]:
         """
@@ -730,8 +758,8 @@ class DatabaseManager:
         Returns:
             Liste des batches en attente
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
             Rows = Cursor.execute(
                 """
                 SELECT * FROM batches
@@ -746,6 +774,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la récupération des batches en attente: {e}")
             return []
+        finally:
+            Cursor.close()
 
     def DeleteBatch(self, BatchId: str) -> bool:
         """
@@ -757,8 +787,8 @@ class DatabaseManager:
         Returns:
             True si succès
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
             Cursor.execute(
                 "DELETE FROM batches WHERE batch_id = ?",
                 (BatchId,)
@@ -770,6 +800,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la suppression du batch {BatchId}: {e}")
             return False
+        finally:
+            Cursor.close()
 
     def GetBatchesByVideo(self, VideoId: str) -> List[Batch]:
         """
@@ -781,8 +813,8 @@ class DatabaseManager:
         Returns:
             Liste des batches
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
             Rows = Cursor.execute(
                 "SELECT * FROM batches WHERE video_id = ? ORDER BY start_frame ASC",
                 (VideoId,)
@@ -793,6 +825,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la récupération des batches: {e}")
             return []
+        finally:
+            Cursor.close()
 
     # ========================================================================
     # HISTORIQUE CLIENTS
@@ -808,8 +842,8 @@ class DatabaseManager:
         Returns:
             True si succès
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
             Cursor.execute(
                 """
                 INSERT INTO clients_history (
@@ -832,6 +866,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de l'ajout de l'historique client: {e}")
             return False
+        finally:
+            Cursor.close()
 
     def UpdateClientHistory(self, ClientHistory: ClientHistory) -> bool:
         """
@@ -843,8 +879,8 @@ class DatabaseManager:
         Returns:
             True si succès
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
             Cursor.execute(
                 """
                 UPDATE clients_history SET
@@ -865,6 +901,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la mise à jour de l'historique client: {e}")
             return False
+        finally:
+            Cursor.close()
 
     def GetClientHistory(self, ClientId: str) -> Optional[ClientHistory]:
         """
@@ -876,8 +914,8 @@ class DatabaseManager:
         Returns:
             Objet ClientHistory ou None
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
             Row = Cursor.execute(
                 "SELECT * FROM clients_history WHERE client_id = ?",
                 (ClientId,)
@@ -891,6 +929,8 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la récupération de l'historique client: {e}")
             return None
+        finally:
+            Cursor.close()
 
     # ========================================================================
     # STATISTIQUES
@@ -903,9 +943,8 @@ class DatabaseManager:
         Returns:
             Dictionnaire de statistiques
         """
+        Cursor = self.Connection.cursor()
         try:
-            Cursor = self.Connection.cursor()
-
             # Nombre total de vidéos
             TotalVideos = Cursor.execute("SELECT COUNT(*) as count FROM videos").fetchone()["count"]
 
@@ -942,3 +981,5 @@ class DatabaseManager:
         except Exception as e:
             self.Logger.error(f"Erreur lors de la récupération des statistiques: {e}")
             return {}
+        finally:
+            Cursor.close()
