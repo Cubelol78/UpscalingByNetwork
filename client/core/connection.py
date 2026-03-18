@@ -108,6 +108,7 @@ class SavedServersWrapper:
         """Supprime un serveur"""
         self._GetManager().RemoveServer(Name)
 
+<<<<<<< HEAD
     def GetAllServers(self) -> dict:
         """Retourne tous les serveurs sauvegardés"""
         return self._GetManager().GetAllServers()
@@ -116,6 +117,8 @@ class SavedServersWrapper:
         """Ajoute ou met à jour un serveur"""
         self._GetManager().AddServer(Name, Host, Port, Password)
 
+=======
+>>>>>>> bcbf65957180c1c1286ebd3fba74c219b2532ad8
     def FindServerByHostPort(self, Host: str, Port: int) -> Optional[str]:
         """Cherche un serveur par host et port"""
         return self._GetManager().FindServerByHostPort(Host, Port)
